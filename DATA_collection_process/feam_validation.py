@@ -8,16 +8,19 @@ import math
 
 
 ###############################################################################
-# 1. Read System Name
+# Helper: convert numpy types to Python native types
+###############################################################################
+def convert(value):
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+###############################################################################
+# 1. Extract System Name
 ###############################################################################
 def extract_system_name(path, sheet_index=1):
-    """
-    System name is usually stored like:
-    Row: "System:" in column 0
-    Value in column 2 = "[A01] Charged 5k"
-    """
     df = pd.read_excel(path, sheet_name=sheet_index, header=None, nrows=20, engine="openpyxl")
-
     for r in range(len(df)):
         col0 = str(df.iloc[r, 0]).replace("：", ":").strip().lower()
         if "system" in col0:
@@ -25,23 +28,21 @@ def extract_system_name(path, sheet_index=1):
                 val2 = df.iloc[r, 2]
                 if not (isinstance(val2, float) and math.isnan(val2)):
                     return str(val2).strip()
-
             # fallback
             raw = str(df.iloc[r, 0])
             if ":" in raw:
                 return raw.split(":", 1)[1].strip()
-
     return ""
 
 
 ###############################################################################
-# 2. Extract Structure Block: System Element + Function (Sequential Order)
+# 2. Extract structure blocks (system element + function)
 ###############################################################################
 def extract_structure_blocks(path, sheet_index=1):
     df = pd.read_excel(path, sheet_name=sheet_index, header=None, engine="openpyxl")
 
     blocks = []
-    current_system_element = None
+    current_element = None
 
     for r in range(len(df)):
         col0 = str(df.iloc[r, 0]).strip().lower()
@@ -51,15 +52,17 @@ def extract_structure_blocks(path, sheet_index=1):
             if not (isinstance(v2, float) and math.isnan(v2)):
                 col2 = str(v2).strip()
 
+        # Detect System Element
         if "system element" in col0:
-            current_system_element = col2
+            current_element = col2
 
+        # Detect Function
         elif "function" in col0:
-            func_full = col2  # e.g. "[S01F01] EMC filter"
-            if func_full:
+            if col2:
+                func_full = col2
                 func_key = func_full.split()[0]  # "[S01F01]"
                 blocks.append({
-                    "system_element": current_system_element,
+                    "system_element": current_element,
                     "function": func_full,
                     "function_key": func_key
                 })
@@ -68,7 +71,7 @@ def extract_structure_blocks(path, sheet_index=1):
 
 
 ###############################################################################
-# 3. Load DFMEA Table (header row = 6)
+# 3. Load DFMEA Table
 ###############################################################################
 def load_dfmea_table(path, sheet_index=1):
     df = pd.read_excel(path, sheet_name=sheet_index, header=6, engine="openpyxl")
@@ -87,102 +90,118 @@ def load_dfmea_table(path, sheet_index=1):
     needed = ["failure_effect", "severity", "failure_mode", "failure_cause"]
     df = df[[c for c in needed if c in df.columns]]
 
-    # ❗ 关键修复：删除 fake rows（没有 cause 的行不作为有效 FMEA 条目）
+    # Filter out garbage rows (no cause = not a valid DFMEA entry)
     df = df[df["failure_cause"].notna()]
     df = df[df["failure_cause"].astype(str).str.strip() != ""]
 
-    # ❗ 额外修复：将 Severity "-" 去掉（这些是 merged cell 下的垃圾行）
+    # Remove fake rows created by merged cells (severity = "-")
     df = df[df["severity"].astype(str).str.strip() != "-"]
 
     return df
 
 
 ###############################################################################
-# 4. Split DFMEA by Function Name (key)
-#    → key = first token of function name, e.g. "[S01F02]"
+# 4. Split DFMEA rows by function (using function prefix key)
 ###############################################################################
 def split_dfmea_by_function(dfmea, structure_blocks):
     df_blocks = []
-
     for block in structure_blocks:
-        key = block["function_key"]  # e.g. "[S01F02]"
+        key = block["function_key"]
         mask = dfmea["failure_mode"].astype(str).str.startswith(key)
         df_blocks.append(dfmea[mask].copy())
-
     return df_blocks
 
 
 ###############################################################################
-# 5. Build Effect-centered JSON
+# 5. Build FINAL nested hierarchical schema
 ###############################################################################
-def convert_numpy(value):
-    """Convert numpy types (int64, float64, etc.) to Python built-ins."""
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
+def build_hierarchical_schema(system_name, structure_blocks, df_blocks):
+    """
+    Final structure:
+    {
+      "system_name": "...",
+      "elements": [
+        {
+          "system_element": "...",
+          "functions": [
+            {
+              "function": "...",
+              "failures": [
+                {
+                  "failure_effect": "...",
+                  "severity": ...,
+                  "failure_mode": "...",
+                  "failure_cause": "..."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+    """
 
+    final = {"system_name": system_name, "elements": []}
 
-def build_json(system_name, structure_blocks, df_blocks):
-    results = []
+    # Build unique element groups
+    element_dict = {}
 
     for sb, df_block in zip(structure_blocks, df_blocks):
 
-        if df_block.empty:
-            continue
+        element = sb["system_element"]
+        function = sb["function"]
 
-        se = sb["system_element"]
-        func = sb["function"]
+        if element not in element_dict:
+            element_dict[element] = {"system_element": element, "functions": []}
 
-        # 每一行是一个独立的 Effect-Mode-Cause 关系，不合并！
+        function_node = {"function": function, "failures": []}
+
+        # Each DFMEA row = one failure record (1 effect → 1 mode → 1 cause)
         for _, row in df_block.iterrows():
-
-            effect = str(row["failure_effect"])
-            severity = row["severity"] if not isinstance(row["severity"], float) else int(row["severity"])
-            mode = str(row["failure_mode"])
-            cause = str(row["failure_cause"])
-
-            item = {
-                "system_name": system_name,
-                "system_element": se,
-                "function": func,
-                "failure_effect": effect,
-                "severity": severity,
-                "failure_mode": mode,
-                "cause": cause
+            failure = {
+                "failure_effect": str(row["failure_effect"]),
+                "severity": convert(row["severity"]),
+                "failure_mode": str(row["failure_mode"]),
+                "failure_cause": str(row["failure_cause"])
             }
+            function_node["failures"].append(failure)
 
-            results.append(item)
+        element_dict[element]["functions"].append(function_node)
 
-    return results
+    # Move into final structure
+    final["elements"] = list(element_dict.values())
+
+    return final
 
 
 ###############################################################################
-# 6. Main Function
+# 6. MAIN FUNCTION
 ###############################################################################
 def dfmea_to_json(path, output_json, sheet_index=1):
-    print("=== STEP 1: Extract System Name ===")
+
+    print("\n=== STEP 1: Reading System Name ===")
     system_name = extract_system_name(path, sheet_index)
     print("System Name:", system_name)
 
-    print("\n=== STEP 2: Extract Structure Blocks ===")
+    print("\n=== STEP 2: Reading Structure Blocks ===")
     structure_blocks = extract_structure_blocks(path, sheet_index)
-    print("Found Structure Blocks:", len(structure_blocks))
+    print("Structure Blocks:", len(structure_blocks))
 
-    print("\n=== STEP 3: Load DFMEA Table ===")
+    print("\n=== STEP 3: Reading DFMEA Table ===")
     dfmea = load_dfmea_table(path, sheet_index)
     print("DFMEA Rows:", len(dfmea))
 
-    print("\n=== STEP 4: Split DFMEA by Function Name (block order) ===")
+    print("\n=== STEP 4: Splitting DFMEA by Function ===")
     df_blocks = split_dfmea_by_function(dfmea, structure_blocks)
 
-    print("\n=== STEP 5: Build JSON ===")
-    json_data = build_json(system_name, structure_blocks, df_blocks)
-    print("JSON Objects Generated:", len(json_data))
+    print("\n=== STEP 5: Building Hierarchical Schema ===")
+    final_json = build_hierarchical_schema(system_name, structure_blocks, df_blocks)
 
+    # Write file
     with open(output_json, "w", encoding="utf-8") as f:
-        json.dump(json_data, f, ensure_ascii=False, indent=2)
+        json.dump(final_json, f, ensure_ascii=False, indent=2)
 
-    print("\n🎉 DONE — JSON saved to:", output_json)
+    print("\n🎉 DONE! JSON saved to:", output_json)
 
 
 
