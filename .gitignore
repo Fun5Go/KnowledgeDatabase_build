@@ -1,0 +1,8 @@
+# Ignore this specific folder
+env_database/
+
+# Ignore any folder whose name starts with "env"
+env*/
+
+# Env files (API keys, secrets)
+.env

@@ -1,0 +1,21 @@
+# Core LLM & embeddings
+openai
+tiktoken
+
+# RAG orchestration
+langchain
+langchain-community
+langchain-openai
+
+# Vector database
+chromadb
+
+# Document loaders / parsing
+pandas          # for Excel
+python-docx     # for .docx parsing
+docx2txt        # for alternative Word loader
+pypdf           # for PDFs
+
+# (Optional but useful)
+unstructured    # better parsing for messy PDFs/Docs
+python-dotenv   # for loading API keys from .env
