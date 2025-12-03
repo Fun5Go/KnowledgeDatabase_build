@@ -115,63 +115,104 @@ def split_dfmea_by_function(dfmea, structure_blocks):
 ###############################################################################
 # 5. Build FINAL nested hierarchical schema
 ###############################################################################
-def build_hierarchical_schema(system_name, structure_blocks, df_blocks):
-    """
-    Final structure:
-    {
-      "system_name": "...",
-      "elements": [
-        {
-          "system_element": "...",
-          "functions": [
-            {
-              "function": "...",
-              "failures": [
-                {
-                  "failure_effect": "...",
-                  "severity": ...,
-                  "failure_mode": "...",
-                  "failure_cause": "..."
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-    """
+# def build_hierarchical_schema(system_name, structure_blocks, df_blocks):
+#     """
+#     Final structure:
+#     {
+#       "system_name": "...",
+#       "elements": [
+#         {
+#           "system_element": "...",
+#           "functions": [
+#             {
+#               "function": "...",
+#               "failures": [
+#                 {
+#                   "failure_effect": "...",
+#                   "severity": ...,
+#                   "failure_mode": "...",
+#                   "failure_cause": "..."
+#                 }
+#               ]
+#             }
+#           ]
+#         }
+#       ]
+#     }
+#     """
 
-    final = {"system_name": system_name, "elements": []}
+#     final = {"system_name": system_name, "elements": []}
 
-    # Build unique element groups
-    element_dict = {}
+#     # Build unique element groups
+#     element_dict = {}
+
+#     for sb, df_block in zip(structure_blocks, df_blocks):
+
+#         element = sb["system_element"]
+#         function = sb["function"]
+
+#         if element not in element_dict:
+#             element_dict[element] = {"system_element": element, "functions": []}
+
+#         function_node = {"function": function, "failures": []}
+
+#         # Each DFMEA row = one failure record (1 effect → 1 mode → 1 cause)
+#         for _, row in df_block.iterrows():
+#             failure = {
+#                 "failure_effect": str(row["failure_effect"]),
+#                 "severity": convert(row["severity"]),
+#                 "failure_mode": str(row["failure_mode"]),
+#                 "failure_cause": str(row["failure_cause"])
+#             }
+#             function_node["failures"].append(failure)
+
+#         element_dict[element]["functions"].append(function_node)
+
+#     # Move into final structure
+#     final["elements"] = list(element_dict.values())
+
+#     return final
+
+###############################################################################
+# 5.B Build FINAL nested flatten schema for human and machine readability
+###############################################################################
+def build_flat_failures_with_text(system_name, structure_blocks, df_blocks):
+    records = []
 
     for sb, df_block in zip(structure_blocks, df_blocks):
-
         element = sb["system_element"]
         function = sb["function"]
 
-        if element not in element_dict:
-            element_dict[element] = {"system_element": element, "functions": []}
-
-        function_node = {"function": function, "failures": []}
-
-        # Each DFMEA row = one failure record (1 effect → 1 mode → 1 cause)
         for _, row in df_block.iterrows():
-            failure = {
-                "failure_effect": str(row["failure_effect"]),
-                "severity": convert(row["severity"]),
-                "failure_mode": str(row["failure_mode"]),
-                "failure_cause": str(row["failure_cause"])
+            failure_effect = str(row["failure_effect"])
+            severity = convert(row["severity"])
+            failure_mode = str(row["failure_mode"])
+            failure_cause = str(row["failure_cause"])
+
+            text = (
+                f"System: {system_name}; "
+                f"Element: {element}; "
+                f"Function: {function}; "
+                f"Failure mode: {failure_mode}; "
+                f"Cause: {failure_cause}; "
+                f"Effect: {failure_effect}; "
+                f"Severity: {severity}."
+            )
+
+            record = {
+                "system_name": system_name,
+                "system_element": element,
+                "function": function,
+                "failure_effect": failure_effect,
+                "severity": severity,
+                "failure_mode": failure_mode,
+                "failure_cause": failure_cause,
+                "text": text,   # Preparation for semantic search
             }
-            function_node["failures"].append(failure)
+            records.append(record)
 
-        element_dict[element]["functions"].append(function_node)
+    return records
 
-    # Move into final structure
-    final["elements"] = list(element_dict.values())
-
-    return final
 
 
 ###############################################################################
@@ -195,13 +236,13 @@ def dfmea_to_json(path, output_json, sheet_index=1):
     df_blocks = split_dfmea_by_function(dfmea, structure_blocks)
 
     print("\n=== STEP 5: Building Hierarchical Schema ===")
-    final_json = build_hierarchical_schema(system_name, structure_blocks, df_blocks)
+    final_json = build_flat_failures_with_text(system_name, structure_blocks, df_blocks)
 
     # Write file
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(final_json, f, ensure_ascii=False, indent=2)
 
-    print("\n🎉 DONE! JSON saved to:", output_json)
+    print("\n JSON saved to:", output_json)
 
 
 
@@ -210,6 +251,6 @@ def dfmea_to_json(path, output_json, sheet_index=1):
 ###############################################################################
 if __name__ == "__main__":
     file_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\FMEA6367240034R02.xlsm"  # your FMEA file
-    output_json = r"dfmea_effect_2.json"
+    output_json = r"dfmea_effect_flat.json"
 
     dfmea_to_json(file_path, output_json)
