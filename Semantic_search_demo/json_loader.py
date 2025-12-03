@@ -1,4 +1,6 @@
 from langchain_community.document_loaders import JSONLoader
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 import getpass
 import os
 from dotenv import load_dotenv
@@ -17,20 +19,46 @@ def load_json(file_path:str):
             file_path= file_path,
             jq_schema= ".[]",
             content_key="text",
-            text_content=False
+            text_content=True
         )
     else:
         raise ValueError("Unsupported file type. Use JSON.")
     
     docs =  loader.load()
-    print(f"[INFO] Loaded from {file_path}")
+    print(f"[INFO] Loaded {len(docs)} FMEA entries from {file_path}")
     return docs
+
+def create_embeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"):
+    embeddings = HuggingFaceEmbeddings(
+        model_name=model_name,
+        model_kwargs={"device": "cpu"}  # change to cuda if GPU
+    )
+    print("[INFO] Embeddings model initialized.")
+    return embeddings
+
+def vector_store(embeddings, docs, persist_dir="../../../DATA/chroma_langchain_fmea_db"):
+    """Initialize Chroma vector store."""
+    vector_store = Chroma(
+        collection_name="fmea_example_collection",
+        embedding_function=embeddings,
+        persist_directory=persist_dir
+    )
+    print("[INFO] Vector store initialized.")
+    return vector_store
+
+def add_failureblock_to_vector_store(vector_store, docs):
+    """Add document chunks to the vector store."""
+    ids = vector_store.add_texts(docs)
+    print(f"[INFO] Added {len(ids)} chunks to the vector store.")
+    return ids
 
 def main():
     file_path = "../dfmea_effect_flat.json"
     docs = load_json(file_path)
     print(docs[1])
     print(docs[1].metadata)
+
+
 
 if __name__ == "__main__":
     main()

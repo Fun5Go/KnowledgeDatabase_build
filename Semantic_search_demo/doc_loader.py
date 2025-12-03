@@ -27,7 +27,7 @@ def load_document(file_path: str):
 #### ---------------------------------------------
 #### 2. Split text into chunks
 #### ---------------------------------------------
-def split_documents(docs, chunk_size=2000, overlap=200):
+def split_documents(docs, chunk_size=1000, overlap=100):
     """Split loaded documents into chunks."""
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
@@ -109,7 +109,7 @@ def main():
     add_chunks_to_vector_store(vector_store, chunks)
 
     # Step 6: Query
-    query = "Please provide the definition of the problem"
+    query = "Please define the problem and symptoms?"
     results = query_vector_store(vector_store, query)
 
     # Print the best result

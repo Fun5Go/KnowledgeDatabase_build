@@ -139,6 +139,8 @@ def split_dfmea_by_function(dfmea, structure_blocks):
 #         }
 #       ]
 #     }
+#   {link} to documents, other products ,etc.
+#   {category} to classify the product type
 #     """
 
 #     final = {"system_name": system_name, "elements": []}
