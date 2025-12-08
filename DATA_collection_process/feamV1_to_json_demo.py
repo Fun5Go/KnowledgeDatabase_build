@@ -1,7 +1,7 @@
 import pandas as pd
 import json
 import numpy as np
-
+import os
 import pandas as pd
 import json
 import math
@@ -112,6 +112,97 @@ def split_dfmea_by_function(dfmea, structure_blocks):
     return df_blocks
 
 
+
+###############################################################################
+# 5.B Build FINAL nested flatten schema for human and machine readability
+###############################################################################
+def build_flat_failures_with_text(system_name, structure_blocks, df_blocks,file_name):
+    records = []
+
+    for sb, df_block in zip(structure_blocks, df_blocks):
+        element = sb["system_element"]
+        function = sb["function"]
+
+        for _, row in df_block.iterrows():
+            failure_effect = str(row["failure_effect"])
+            severity = convert(row["severity"])
+            failure_mode = str(row["failure_mode"])
+            failure_cause = str(row["failure_cause"])
+
+            text = (                        # Next step, add words to connect each field to a complete and structured sentence
+                f"System: {system_name}; "
+                f"Element: {element}; "
+                f"Function: {function}; "
+                f"Failure mode: {failure_mode}; "
+                f"Cause: {failure_cause}; "
+                f"Effect: {failure_effect}; "
+                f"Severity: {severity}."
+            )
+
+            record = {
+                "system_name": system_name,
+                "system_element": element,
+                "function": function,
+                "failure_effect": failure_effect,
+                "severity": severity,
+                "failure_mode": failure_mode,
+                "failure_cause": failure_cause,
+                "text": text,   # Preparation for semantic search
+                "file_name": file_name 
+                # Title
+            }
+            records.append(record)
+
+    return records
+
+
+
+###############################################################################
+# 6. MAIN FUNCTION
+###############################################################################
+def dfmea_to_json(path, output_json, sheet_index=1):
+
+    print("\n=== STEP 0: Extract file name ===")
+    file_name = os.path.splitext(os.path.basename(path))[0]
+
+    print("\n=== STEP 1: Reading System Name ===")
+    system_name = extract_system_name(path, sheet_index)
+    print("System Name:", system_name)
+
+    print("\n=== STEP 2: Reading Structure Blocks ===")
+    structure_blocks = extract_structure_blocks(path, sheet_index)
+    print("Structure Blocks:", len(structure_blocks))
+
+    print("\n=== STEP 3: Reading DFMEA Table ===")
+    dfmea = load_dfmea_table(path, sheet_index)
+    print("DFMEA Rows:", len(dfmea))
+
+    print("\n=== STEP 4: Splitting DFMEA by Function ===")
+    df_blocks = split_dfmea_by_function(dfmea, structure_blocks)
+
+    print("\n=== STEP 5: Building Hierarchical Schema ===")
+    final_json = build_flat_failures_with_text(system_name, structure_blocks, df_blocks,file_name)
+
+    # Write file
+    with open(output_json, "w", encoding="utf-8") as f:
+        json.dump(final_json, f, ensure_ascii=False, indent=2)
+
+    print("\n JSON saved to:", output_json)
+
+
+
+###############################################################################
+# 7. Run example
+###############################################################################
+if __name__ == "__main__":
+    file_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\FMEA6367240034R02.xlsm"  # your FMEA file
+    output_json = r"dfmea_effect_flat.json"
+
+    dfmea_to_json(file_path, output_json)
+
+
+
+
 ###############################################################################
 # 5. Build FINAL nested hierarchical schema
 ###############################################################################
@@ -174,85 +265,3 @@ def split_dfmea_by_function(dfmea, structure_blocks):
 #     final["elements"] = list(element_dict.values())
 
 #     return final
-
-###############################################################################
-# 5.B Build FINAL nested flatten schema for human and machine readability
-###############################################################################
-def build_flat_failures_with_text(system_name, structure_blocks, df_blocks):
-    records = []
-
-    for sb, df_block in zip(structure_blocks, df_blocks):
-        element = sb["system_element"]
-        function = sb["function"]
-
-        for _, row in df_block.iterrows():
-            failure_effect = str(row["failure_effect"])
-            severity = convert(row["severity"])
-            failure_mode = str(row["failure_mode"])
-            failure_cause = str(row["failure_cause"])
-
-            text = (
-                f"System: {system_name}; "
-                f"Element: {element}; "
-                f"Function: {function}; "
-                f"Failure mode: {failure_mode}; "
-                f"Cause: {failure_cause}; "
-                f"Effect: {failure_effect}; "
-                f"Severity: {severity}."
-            )
-
-            record = {
-                "system_name": system_name,
-                "system_element": element,
-                "function": function,
-                "failure_effect": failure_effect,
-                "severity": severity,
-                "failure_mode": failure_mode,
-                "failure_cause": failure_cause,
-                "text": text,   # Preparation for semantic search
-            }
-            records.append(record)
-
-    return records
-
-
-
-###############################################################################
-# 6. MAIN FUNCTION
-###############################################################################
-def dfmea_to_json(path, output_json, sheet_index=1):
-
-    print("\n=== STEP 1: Reading System Name ===")
-    system_name = extract_system_name(path, sheet_index)
-    print("System Name:", system_name)
-
-    print("\n=== STEP 2: Reading Structure Blocks ===")
-    structure_blocks = extract_structure_blocks(path, sheet_index)
-    print("Structure Blocks:", len(structure_blocks))
-
-    print("\n=== STEP 3: Reading DFMEA Table ===")
-    dfmea = load_dfmea_table(path, sheet_index)
-    print("DFMEA Rows:", len(dfmea))
-
-    print("\n=== STEP 4: Splitting DFMEA by Function ===")
-    df_blocks = split_dfmea_by_function(dfmea, structure_blocks)
-
-    print("\n=== STEP 5: Building Hierarchical Schema ===")
-    final_json = build_flat_failures_with_text(system_name, structure_blocks, df_blocks)
-
-    # Write file
-    with open(output_json, "w", encoding="utf-8") as f:
-        json.dump(final_json, f, ensure_ascii=False, indent=2)
-
-    print("\n JSON saved to:", output_json)
-
-
-
-###############################################################################
-# 7. Run example
-###############################################################################
-if __name__ == "__main__":
-    file_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\FMEA6367240034R02.xlsm"  # your FMEA file
-    output_json = r"dfmea_effect_flat.json"
-
-    dfmea_to_json(file_path, output_json)

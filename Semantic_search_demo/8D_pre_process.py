@@ -181,7 +181,7 @@ def build_8d_json(doc_path):
 
 
 if __name__ == "__main__":
-    doc_path =r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\8D6557080300R02.docx"  # <--- change this
+    doc_path =r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\8D6264240043R03.docx"  # <--- change this
     schema = build_8d_json(doc_path)
 
     with open("8d_output.json", "w", encoding="utf-8") as f:
