@@ -182,8 +182,8 @@ def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file
                 "failure_effect": failure_effect,
                 "severity": severity,
                 "failure_mode": failure_mode,
-                "failure_cause": failure_cause_clean,  # cleaned
-                "discipline": discipline,              # NEW FIELD
+                "failure_cause": failure_cause_clean, 
+                "cause_discipline": discipline,              
                 "text": text,
                 "file_name": file_name
             }
