@@ -5,6 +5,7 @@ import os
 import pandas as pd
 import json
 import math
+import re
 
 
 ###############################################################################
@@ -15,6 +16,27 @@ def convert(value):
         return value.item()
     return value
 
+# Trim the prefix [A01]
+def strip_prefix(text):
+    """
+    Removes a prefix like: [A01F01], [S01 - HW], [S03], etc.
+    Returns the remaining text.
+    """
+    return re.sub(r"^\[[^\]]+\]\s*", "", text).strip()
+
+# Extract the discipline type from the cause [HW/ESW/MCH/Other]
+def extract_discipline(cause_raw):
+    """
+    Example:
+    "[S01 - HW] Encoder circuit crosstalk" 
+      → discipline="HW", cause="Encoder circuit crosstalk"
+    """
+    m = re.match(r"^\[[^\]-]*-\s*([A-Za-z]+)\]\s*(.*)", cause_raw)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    else:
+        # No discipline found → return None + stripped text
+        return None, strip_prefix(cause_raw)
 
 ###############################################################################
 # 1. Extract System Name
@@ -116,41 +138,56 @@ def split_dfmea_by_function(dfmea, structure_blocks):
 ###############################################################################
 # 5.B Build FINAL nested flatten schema for human and machine readability
 ###############################################################################
-def build_flat_failures_with_text(system_name, structure_blocks, df_blocks,file_name):
+def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file_name):
     records = []
 
     for sb, df_block in zip(structure_blocks, df_blocks):
         element = sb["system_element"]
         function = sb["function"]
 
-        for _, row in df_block.iterrows():
-            failure_effect = str(row["failure_effect"])
-            severity = convert(row["severity"])
-            failure_mode = str(row["failure_mode"])
-            failure_cause = str(row["failure_cause"])
+        # Remove bracket prefix from element/function
+        element_clean = strip_prefix(element)
+        function_clean = strip_prefix(function)
 
-            text = (                        # Next step, add words to connect each field to a complete and structured sentence
+        for _, row in df_block.iterrows():
+
+            # Strip prefixes
+            failure_effect_raw = str(row["failure_effect"])
+            failure_effect = strip_prefix(failure_effect_raw)
+
+            failure_mode_raw = str(row["failure_mode"])
+            failure_mode = strip_prefix(failure_mode_raw)
+
+            # Extract discipline + cause
+            failure_cause_raw = str(row["failure_cause"])
+            discipline, failure_cause_clean = extract_discipline(failure_cause_raw)
+
+            severity = convert(row["severity"])
+
+            text = (
                 f"System: {system_name}; "
-                f"Element: {element}; "
-                f"Function: {function}; "
+                f"Element: {element_clean}; "
+                f"Function: {function_clean}; "
                 f"Failure mode: {failure_mode}; "
-                f"Cause: {failure_cause}; "
+                f"Cause: {failure_cause_clean}; "
+                f"Discipline: {discipline}; "
                 f"Effect: {failure_effect}; "
                 f"Severity: {severity}."
             )
 
             record = {
                 "system_name": system_name,
-                "system_element": element,
-                "function": function,
+                "system_element": element_clean,
+                "function": function_clean,
                 "failure_effect": failure_effect,
                 "severity": severity,
                 "failure_mode": failure_mode,
-                "failure_cause": failure_cause,
-                "text": text,   # Preparation for semantic search
-                "file_name": file_name 
-                # Title
+                "failure_cause": failure_cause_clean,  # cleaned
+                "discipline": discipline,              # NEW FIELD
+                "text": text,
+                "file_name": file_name
             }
+
             records.append(record)
 
     return records
@@ -166,7 +203,8 @@ def dfmea_to_json(path, output_json, sheet_index=1):
     file_name = os.path.splitext(os.path.basename(path))[0]
 
     print("\n=== STEP 1: Reading System Name ===")
-    system_name = extract_system_name(path, sheet_index)
+    system_name_raw = extract_system_name(path, sheet_index)
+    system_name = strip_prefix(system_name_raw)
     print("System Name:", system_name)
 
     print("\n=== STEP 2: Reading Structure Blocks ===")
@@ -195,8 +233,8 @@ def dfmea_to_json(path, output_json, sheet_index=1):
 # 7. Run example
 ###############################################################################
 if __name__ == "__main__":
-    file_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\FMEA6367240034R02.xlsm"  # your FMEA file
-    output_json = r"dfmea_effect_flat.json"
+    file_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\DFMEA6782200234R01.xlsm"  # your FMEA file
+    output_json = r"dfmea_effect_flat_3.json"
 
     dfmea_to_json(file_path, output_json)
 
