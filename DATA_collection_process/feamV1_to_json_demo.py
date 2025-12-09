@@ -233,10 +233,34 @@ def dfmea_to_json(path, output_json, sheet_index=1):
 # 7. Run example
 ###############################################################################
 if __name__ == "__main__":
-    file_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\DFMEA6782200234R01.xlsm"  # your FMEA file
-    output_json = r"dfmea_effect_flat_3.json"
+    # Input folder containing FMEA .xlsm files
+    input_folder = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA"
 
-    dfmea_to_json(file_path, output_json)
+    # Output folder for JSON files
+    output_folder = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_test"
+
+    # Create output folder if not exists
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Loop through all .xlsm files
+    for file in os.listdir(input_folder):
+        if file.lower().endswith(".xlsm"):
+            full_path = os.path.join(input_folder, file)
+
+            # Output JSON will use the same base filename
+            base_name = os.path.splitext(file)[0]
+            output_json = os.path.join(output_folder, base_name + ".json")
+
+            print("\n===============================================")
+            print(" Processing file:", file)
+            print("===============================================\n")
+
+            try:
+                dfmea_to_json(full_path, output_json)
+                print(" --> Completed:", output_json)
+            except Exception as e:
+                print(" *** ERROR processing file:", file)
+                print("     Reason:", e)
 
 
 

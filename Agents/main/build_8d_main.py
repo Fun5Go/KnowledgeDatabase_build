@@ -12,5 +12,5 @@ def run(doc_path):
 
 
 if __name__ == "__main__":
-    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\8D6264240043R03.docx"
+    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\8D6966170110R02.docx"
     run(path)

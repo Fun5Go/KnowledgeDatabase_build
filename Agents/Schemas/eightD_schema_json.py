@@ -8,8 +8,7 @@ class DisciplineType(str, Enum):
     MCH = "MCH"
     OTHER = "Other"
 
-class FailureItem(BaseModel): 
-    failure_id:      str          
+class FailureItem(BaseModel):        
     system_element: Optional[str]
     failure_effect: Optional[str]
     failure_mode: Optional[str]
@@ -17,7 +16,6 @@ class FailureItem(BaseModel):
 
 
 class RootCauseItem(BaseModel): 
-    failure_id:str
     discipline_type: Optional[DisciplineType] = None        
     root_cause: Optional[str]
     impacted_element: Optional[str]

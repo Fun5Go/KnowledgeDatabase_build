@@ -5,12 +5,30 @@ from Agents.main.llm import llm
 from docx import Document
 from typing import Optional, List, Literal
 
+# @tool
+# def extract_d2(section_text: str):
+#     """Extract structured D2 information."""
+#     prompt = D2_prompt.format(content=section_text)
+#     resp = llm.invoke(prompt)
+#     return safe_json(resp.content)
 @tool
 def extract_d2(section_text: str):
     """Extract structured D2 information."""
-    prompt = D2_prompt.format(content=section_text)
-    resp = llm.invoke(prompt)
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an expert reliability and systems engineer. Always output STRICT JSON."
+        },
+        {
+            "role": "user",
+            "content": D2_prompt.format(content=section_text)
+        }
+    ]
+
+    resp = llm.invoke(messages)
     return safe_json(resp.content)
+
 
 @tool
 def extract_d4(data: dict):
@@ -21,17 +39,25 @@ def extract_d4(data: dict):
     d2_info = data.get("d2_info", {}) or {}
 
     d2_context = build_d2_context(d2_info)
-    print("flatten D2 context:", d2_context,"\n")
+    # print("flatten D2 context:", d2_context,"\n")
 
 
     # Insert BOTH content and d2_context in the prompt
-    prompt = D4_prompt.format(
-        content=section_text,
-        d2_context=d2_context
-    )
-
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an expert root cause analysis engineer. Extract structured D4 information from the following 8D report text and the former section D2: Define problems and Symptoms.."
+        },
+        {
+            "role": "user",
+            "content":D4_prompt.format(
+            content=section_text,
+            d2_context=d2_context
+            )
+        }
+    ]
     # Call LLM
-    resp = llm.invoke(prompt)
+    resp = llm.invoke(messages)
 
     # resp.content may not exist depending on client
     text = resp.content if hasattr(resp, "content") else resp

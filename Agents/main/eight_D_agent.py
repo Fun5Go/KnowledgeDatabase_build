@@ -1,6 +1,7 @@
 
 from langchain.agents import create_agent
 from Agents.tools.section_extractor import extract_d2, extract_d4,parse_8d_doc
+from Agents.tools.doc_parser import extract_product
 # from tools.doc_parser import parse_8d_doc
 from Agents.main.llm import llm
 from Agents.Schemas.eightD_schema_json import EightDCase, EightDSections, D2Section, D4Section, FailureItem
@@ -23,6 +24,8 @@ def build_eight_d_agent():
 def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
     # 1) Parse document sections using the parse_8d_doc tool
+    product_name = extract_product(doc_path)
+    print("Product name:", product_name)
     parsed = parse_8d_doc.invoke({"doc_path": doc_path})
     sections = parsed["sections"]
 
@@ -64,7 +67,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     # 4) Build top-level EightDCase object
     case = EightDCase(
         d8_id=d8_id,
-        product_name=None,   # add extract_product() later if needed
+        product_name=product_name,   # add extract_product() later if needed
         sections=EightDSections(D2=d2_section, D4=d4_section)
     )
 
