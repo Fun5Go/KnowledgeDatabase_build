@@ -11,32 +11,22 @@ class DisciplineType(str, Enum):
 class FailureItem(BaseModel):        
     system_element: Optional[str]
     failure_effect: Optional[str]
-    failure_mode: Optional[str]
-    raw_context: str                    # Original text chunk for this failure
-
-
-class RootCauseItem(BaseModel): 
+    failure_mode: Optional[str]                  
     discipline_type: Optional[DisciplineType] = None        
     root_cause: Optional[str]
-    impacted_element: Optional[str]
-    # lead_to: FailureItem
-    raw_context: str                    # Original D4 text snippet
+    infer_context: str                    
 
 
 class D2Section(BaseModel):
-    system_name: Optional[str]
-    problem_symptoms: Optional[str]
-    failures: List[FailureItem]         # <-- multiple failures
     raw_context: str                    # whole D2 section text
 
 
 class D4Section(BaseModel):
-    root_causes: List[RootCauseItem]    # <-- multiple root causes
     raw_context: str                    # whole D4 section text
 
-class SolutionItem(BaseModel):
-    failure_id:str
-    solution: Optional[str]
+class D3Section(BaseModel):
+    raw_context: str                    # whole D4 section text
+
 
 class D5Section(BaseModel):
     # solutions: List[SolutionItem]    # <-- multiple solutions]
@@ -47,13 +37,14 @@ class D6Section(BaseModel):
 
 class EightDSections(BaseModel):
     D2: Optional[D2Section]
-    # D3: 
+    D3: Optional[D3Section]
     D4: Optional[D4Section]
-    D5: Optional[D5Section] = None
+    D5: Optional[D5Section] 
     D6: Optional[D6Section]
 
 
 class EightDCase(BaseModel):
     d8_id: str
     product_name: Optional[str] = None
+    failures: List[FailureItem]
     sections: EightDSections

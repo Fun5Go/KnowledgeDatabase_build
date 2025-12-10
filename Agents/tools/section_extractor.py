@@ -1,6 +1,7 @@
 from langchain.tools import tool
 from Agents.Prompts.eightD_extract_prompt import D2_prompt, D4_prompt
 from Agents.tools.doc_parser import safe_json
+from Agents.Prompts.eightD_prompt_integrate import Prompt
 from Agents.main.llm import llm
 from docx import Document
 from typing import Optional, List, Literal
@@ -63,6 +64,29 @@ def extract_d4(data: dict):
     text = resp.content if hasattr(resp, "content") else resp
 
     return safe_json(text)
+
+@tool
+def extract_failure_d234(data: dict) -> dict:
+    """Analyze D2, D3, D4 sections to extract failures """
+    d2_text = data.get("d2_raw")
+    d3_text = data.get("d3_raw")
+    d4_text = data.get("d4_raw")
+    messages = [
+        {
+            "role": "system",
+            "content": "You are an expert root cause analysis engineer. Extract structured D2, D3, D4 information from the following 8D report text."
+        },
+        {
+            "role": "user",
+            "content":Prompt.format(
+            d2_text =d2_text,
+            d3_text=d3_text,
+            d4_text = d4_text
+            )
+        }
+    ]
+    resp = llm.invoke(messages)
+    return safe_json(resp.content)
 
 @tool
 def parse_8d_doc(doc_path: str) -> dict:

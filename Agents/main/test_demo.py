@@ -2,7 +2,7 @@ from Agents.main.llm import llm
 import json
 import re
 from Agents.Prompts.eightD_extract_prompt import D2_prompt
-from Agents.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc
+from Agents.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234
 
 # ==========Test LLM (Pass)==========
 # resp = llm.invoke("Say hello, just one short sentence.")
@@ -24,47 +24,71 @@ from Agents.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc
 
 # ==========D4 Extractor (Pass)==========
 # ----------- Sample Text from 8D6264240043R03 -----------
-result_d2 = {
-  "system_name": "GENESIS Frequency Converter (FC) EMC/ESD Immunity",
-  "problem_symptoms": "Device shuts down during ESD testing on RJ45 Ethernet port; motor stops or fails to restart; unwanted toggling of button/DI3 input; watchdog reset and freeze of CITF microcontroller; status LED turns red.",
-  "failures": [
-    {
-      "system_element": "RJ45 Ethernet port shield",
-      "failure_mode": "Susceptibility to ESD contact discharge",
-      "failure_effect": "Device shuts down, resulting in either a complete shutdown of the frequency converter or stopping the motor without restarting",
-      "raw_context": "When applying +/- 4kV contact discharges on shield of RJ45 Ethernet port the device shut down. Exact behavior of the frequency converter during this ‘shut down’ is not exactly known, this can be interpreted as a complete shutdown of the FC or only stopping the motor without restarting it."
-    },
-    {
-      "system_element": "Button/DI3 input",
-      "failure_mode": "Unintended toggling due to ESD",
-      "failure_effect": "Motor stops or starts running unexpectedly",
-      "raw_context": "Unwanted toggling of the button/DI3 input causing the motor to stop or start running."
-    },
-    {
-      "system_element": "CITF microcontroller",
-      "failure_mode": "Watchdog reset and failure to restart (controller freeze)",
-      "failure_effect": "Controller freezes and status LED turns red; device does not recover operation",
-      "raw_context": "Watchdog reset of the CITF microcontroller with the controller failing to restart; controller freezes and status LED turns red."
-    }
-  ],
-  "raw_context": "Original D2 text"}
-sample_d4_text = """
-"Button toggle\nThe toggling of the button is due to interference on the BUTTON/DI3 interface in the microcontroller causing the pin to toggle.\nIn hardware there is a RC filter in place, the capacitor (100nF) is placed near the microcontroller, the resistor (2.2KOHm) is however not placed near the microcontroller which can make the filter less efficient. There is currently no software filtering in place.\nCITF microcontroller freeze / red LED\nThe controller runs from the external flash in a memory mapped mode, an interruption of the commutation between the controller and flash will cause the controller to freeze.\nIn previous CITF design an issue with the external application flash during an ESD event is observed. In a new design iteration of the CITF electronics, (PN: 6264-2200-6503 / 6264-2201-7902) the routing of the flash signals is significantly improved, as shown below (left before revision, right after revision.\nPinout of microcontroller changed to group flash signal pins.\nHigh speed signal (clock and data) routed on single plane without vias.\nLength signal traces significantly shorted.\nThe debug interface is monitored during the CITF microcontroller freeze / red LED event. """
-# It is observed a watchdog caused the controller to reset, due to a firmware image CRC error the application failed to start resulting in a red status LED. This indicates the failure is flash related.\nWhen running the CITF in bootloader, it was not possible to reproduce the event. Using a function which continuously performs a CRC check over the flash while running the CITF in bootloader results in CRC errors when an ESD pulse is applied.\nTo exclude peripherals to be the cause of the failure the following tests are performed:\nEthernet PHY in RESET during ESD event Issue is still observed\nMicrocontroller RESET signal trace cut to prevent coupling Issue is still observed.\nMotor not running Issue is still observed\nImproved decoupling of supply microcontroller Issue is still observed"
-# """
+# result_d2 = {
+#   "system_name": "GENESIS Frequency Converter (FC) EMC/ESD Immunity",
+#   "problem_symptoms": "Device shuts down during ESD testing on RJ45 Ethernet port; motor stops or fails to restart; unwanted toggling of button/DI3 input; watchdog reset and freeze of CITF microcontroller; status LED turns red.",
+#   "failures": [
+#     {
+#       "system_element": "RJ45 Ethernet port shield",
+#       "failure_mode": "Susceptibility to ESD contact discharge",
+#       "failure_effect": "Device shuts down, resulting in either a complete shutdown of the frequency converter or stopping the motor without restarting",
+#       "raw_context": "When applying +/- 4kV contact discharges on shield of RJ45 Ethernet port the device shut down. Exact behavior of the frequency converter during this ‘shut down’ is not exactly known, this can be interpreted as a complete shutdown of the FC or only stopping the motor without restarting it."
+#     },
+#     {
+#       "system_element": "Button/DI3 input",
+#       "failure_mode": "Unintended toggling due to ESD",
+#       "failure_effect": "Motor stops or starts running unexpectedly",
+#       "raw_context": "Unwanted toggling of the button/DI3 input causing the motor to stop or start running."
+#     },
+#     {
+#       "system_element": "CITF microcontroller",
+#       "failure_mode": "Watchdog reset and failure to restart (controller freeze)",
+#       "failure_effect": "Controller freezes and status LED turns red; device does not recover operation",
+#       "raw_context": "Watchdog reset of the CITF microcontroller with the controller failing to restart; controller freezes and status LED turns red."
+#     }
+#   ],
+#   "raw_context": "Original D2 text"}
+# sample_d4_text = """
+# "Button toggle\nThe toggling of the button is due to interference on the BUTTON/DI3 interface in the microcontroller causing the pin to toggle.\nIn hardware there is a RC filter in place, the capacitor (100nF) is placed near the microcontroller, the resistor (2.2KOHm) is however not placed near the microcontroller which can make the filter less efficient. There is currently no software filtering in place.\nCITF microcontroller freeze / red LED\nThe controller runs from the external flash in a memory mapped mode, an interruption of the commutation between the controller and flash will cause the controller to freeze.\nIn previous CITF design an issue with the external application flash during an ESD event is observed. In a new design iteration of the CITF electronics, (PN: 6264-2200-6503 / 6264-2201-7902) the routing of the flash signals is significantly improved, as shown below (left before revision, right after revision.\nPinout of microcontroller changed to group flash signal pins.\nHigh speed signal (clock and data) routed on single plane without vias.\nLength signal traces significantly shorted.\nThe debug interface is monitored during the CITF microcontroller freeze / red LED event. """
+# # It is observed a watchdog caused the controller to reset, due to a firmware image CRC error the application failed to start resulting in a red status LED. This indicates the failure is flash related.\nWhen running the CITF in bootloader, it was not possible to reproduce the event. Using a function which continuously performs a CRC check over the flash while running the CITF in bootloader results in CRC errors when an ESD pulse is applied.\nTo exclude peripherals to be the cause of the failure the following tests are performed:\nEthernet PHY in RESET during ESD event Issue is still observed\nMicrocontroller RESET signal trace cut to prevent coupling Issue is still observed.\nMotor not running Issue is still observed\nImproved decoupling of supply microcontroller Issue is still observed"
+# # """
 
-result_d4 = extract_d4.invoke({
-    "data": {
-        "section_text": sample_d4_text,
-        "d2_info": result_d2
-    }
-})
+# result_d4 = extract_d4.invoke({
+#     "data": {
+#         "section_text": sample_d4_text,
+#         "d2_info": result_d2
+#     }
+# })
 
 # print("=== D4 Extraction Result ===")
 # print(result_d4)
 
-# # ==========8D Parser ()==========
+# # ==========8D Parser (Pss)==========
 # doc_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\8D6264240043R03.docx"
 # parsed_doc = parse_8d_doc.invoke({"doc_path": doc_path})
 # sections = parsed_doc["sections"]
 # print(sections)
+
+
+## D234 Version test ()
+d2_sample = """
+this is d2 sample text
+"""
+d3_sample = """
+this is d3 sample text
+"""
+
+d4_sample = """
+this is d4 sample text
+"""
+
+result = extract_failure_d234.invoke({
+            "data": {
+                "d2_raw": d2_sample,
+                "d3_raw": d3_sample,
+                "d4_raw": d4_sample
+
+        }
+    })
+
+print (result)
