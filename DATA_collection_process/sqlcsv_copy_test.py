@@ -73,7 +73,7 @@ with open(input_file, newline='', encoding="utf-8-sig") as f:
         name_upper = file_name.upper()
         cat_upper  = category.upper()
         path_upper = file_path.upper()
-        # skip rows where file name starts with "PFMEA"
+        # skip rows where file name including ProcessFMEA 
         # Exclude if name contains "PROCESS" anywhere
         if "PROCESS" in name_upper:
             continue

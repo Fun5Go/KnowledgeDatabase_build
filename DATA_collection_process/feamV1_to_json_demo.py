@@ -37,6 +37,17 @@ def extract_discipline(cause_raw):
     else:
         # No discipline found → return None + stripped text
         return None, strip_prefix(cause_raw)
+    
+def to_scalar(x):
+    """Convert Pandas Series, numpy types, or weird objects into scalars."""
+    if isinstance(x, pd.Series):
+        # Take the first non-null value
+        return to_scalar(x.iloc[0])
+    if isinstance(x, np.generic):
+        return x.item()
+    if isinstance(x, float) and math.isnan(x):
+        return ""
+    return x
 
 ###############################################################################
 # 1. Extract System Name
@@ -102,14 +113,38 @@ def load_dfmea_table(path, sheet_index=1):
     df = df.ffill()
 
     col_map = {
+        # Failure information
         "Potential Effect(s) of Failure\n(Activity)": "failure_effect",
         "Severity": "severity",
         "Potential Failure Mode\n(Process step)": "failure_mode",
-        "Potential Cause(s) of Failure\n(per discipline)": "failure_cause"
+        "Potential Cause(s) of Failure\n(per discipline)": "failure_cause",
+
+        # Current controls
+        "Controls prevention": "controls_prevention",  
+        "Ref. FS": "ref_fs",                           
+        "Ref. TS": "ref_ts",                          
+
+        "Occurrence": "occurrence",                    
+
+        "Current Detection": "current_detection",      
+        "Ref. FAT": "ref_fat",                         
+        "Ref. QD": "ref_qd",                           
+
+        "Detection": "detection",                     
+        "RPN": "rpn",                               
+
+        "Recommended Actions": "recommended_action"    
     }
     df = df.rename(columns=col_map)
 
-    needed = ["failure_effect", "severity", "failure_mode", "failure_cause"]
+    needed = [
+        "failure_effect", "failure_mode", "failure_cause",
+        "controls_prevention", "ref_fs", "ref_ts",
+        "occurrence",
+        "current_detection", "ref_fat", "ref_qd",
+        "severity","occurrence", "detection", "rpn",
+        "recommended_action"
+    ]
     df = df[[c for c in needed if c in df.columns]]
 
     # Filter out garbage rows (no cause = not a valid DFMEA entry)
@@ -145,45 +180,68 @@ def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file
         element = sb["system_element"]
         function = sb["function"]
 
-        # Remove bracket prefix from element/function
         element_clean = strip_prefix(element)
         function_clean = strip_prefix(function)
 
         for _, row in df_block.iterrows():
 
-            # Strip prefixes
-            failure_effect_raw = str(row["failure_effect"])
-            failure_effect = strip_prefix(failure_effect_raw)
+            failure_effect = strip_prefix(str(row["failure_effect"]))
+            failure_mode = strip_prefix(str(row["failure_mode"]))
 
-            failure_mode_raw = str(row["failure_mode"])
-            failure_mode = strip_prefix(failure_mode_raw)
+            # Cause + discipline
+            discipline, failure_cause_clean = extract_discipline(str(row["failure_cause"]))
 
-            # Extract discipline + cause
-            failure_cause_raw = str(row["failure_cause"])
-            discipline, failure_cause_clean = extract_discipline(failure_cause_raw)
+            severity = to_scalar(row["severity"])
+            occurrence = to_scalar(row.get("occurrence", ""))
+            detection = to_scalar(row.get("detection", ""))
+            rpn = to_scalar(row.get("rpn", ""))
 
-            severity = convert(row["severity"])
+            controls_prevention = str(to_scalar(row.get("controls_prevention", ""))).strip()
+            ref_fs = str(to_scalar(row.get("ref_fs", ""))).strip()
+            ref_ts = str(to_scalar(row.get("ref_ts", ""))).strip()
+
+            current_detection = str(to_scalar(row.get("current_detection", ""))).strip()
+            ref_fat = str(to_scalar(row.get("ref_fat", ""))).strip()
+            ref_qd = str(to_scalar(row.get("ref_qd", ""))).strip()
+
+            recommended_action = str(to_scalar(row.get("recommended_action", ""))).strip()
+
 
             text = (
-                f"System: {system_name}; "
-                f"Element: {element_clean}; "
-                f"Function: {function_clean}; "
-                f"Failure mode: {failure_mode}; "
-                f"Cause: {failure_cause_clean}; "
-                f"Discipline: {discipline}; "
-                f"Effect: {failure_effect}; "
-                f"Severity: {severity}."
+                f"System: {system_name}; Element: {element_clean}; Function: {function_clean}; "
+                f"Failure mode: {failure_mode}; Cause: {failure_cause_clean}; Discipline: {discipline}; "
+                f"Effect: {failure_effect}; Severity: {severity}; Occurrence: {occurrence}; Detection: {detection}; "
+                f"RPN: {rpn}; Controls prevention: {controls_prevention}; "
+                f"Current detection: {current_detection}; Recommended action: {recommended_action}."
             )
 
             record = {
                 "system_name": system_name,
                 "system_element": element_clean,
                 "function": function_clean,
+
                 "failure_effect": failure_effect,
                 "severity": severity,
                 "failure_mode": failure_mode,
-                "failure_cause": failure_cause_clean, 
-                "cause_discipline": discipline,              
+                "failure_cause": failure_cause_clean,
+                "cause_discipline": discipline,
+
+                # NEW FIELDS
+                "controls_prevention": controls_prevention,
+                "ref_fs": ref_fs,
+                "ref_ts": ref_ts,
+
+                "occurrence": occurrence,
+
+                "current_detection": current_detection,
+                "ref_fat": ref_fat,
+                "ref_qd": ref_qd,
+
+                "detection": detection,
+                "rpn": rpn,
+
+                "recommended_action": recommended_action,
+
                 "text": text,
                 "file_name": file_name
             }
@@ -233,6 +291,10 @@ def dfmea_to_json(path, output_json, sheet_index=1):
 # 7. Run example
 ###############################################################################
 if __name__ == "__main__":
+    # ## Single file example
+    # fmea_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\FMEA6367240034R02.xlsm"
+    # output_name = "FMEA_with_Solutions.json"
+    # dfmea_to_json(fmea_path, output_name)
     # Input folder containing FMEA .xlsm files
     input_folder = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA"
 
@@ -261,6 +323,8 @@ if __name__ == "__main__":
             except Exception as e:
                 print(" *** ERROR processing file:", file)
                 print("     Reason:", e)
+
+
 
 
 
