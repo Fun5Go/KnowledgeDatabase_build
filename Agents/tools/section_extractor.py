@@ -2,16 +2,19 @@ from langchain.tools import tool
 from Agents.Prompts.eightD_extract_prompt import D2_prompt, D4_prompt
 from Agents.tools.doc_parser import safe_json
 from Agents.Prompts.eightD_prompt_integrate import Prompt
-from Agents.main.llm import llm
+from Agents.main.llm import get_llm_backend
 from docx import Document
 from typing import Optional, List, Literal
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
 
-# @tool
-# def extract_d2(section_text: str):
-#     """Extract structured D2 information."""
-#     prompt = D2_prompt.format(content=section_text)
-#     resp = llm.invoke(prompt)
-#     return safe_json(resp.content)
+extractor_system = "You are an expert reliability and systems engineer. Always output STRICT JSON."
+
+extractor_prompt = ChatPromptTemplate.from_messages([
+    ("system", extractor_system),
+    ("user", Prompt),  
+])
+
 @tool
 def extract_d2(section_text: str):
     """Extract structured D2 information."""
@@ -68,25 +71,32 @@ def extract_d4(data: dict):
 @tool
 def extract_failure_d234(data: dict) -> dict:
     """Analyze D2, D3, D4 sections to extract failures """
-    d2_text = data.get("d2_raw")
-    d3_text = data.get("d3_raw")
-    d4_text = data.get("d4_raw")
-    messages = [
-        {
-            "role": "system",
-            "content": "You are an expert root cause analysis engineer. Extract structured D2, D3, D4 information from the following 8D report text."
-        },
-        {
-            "role": "user",
-            "content":Prompt.format(
-            d2_text =d2_text,
-            d3_text=d3_text,
-            d4_text = d4_text
-            )
-        }
-    ]
-    resp = llm.invoke(messages)
-    return safe_json(resp.content)
+    d2_text = data.get("d2_raw", "")
+    d3_text = data.get("d3_raw", "")
+    d4_text = data.get("d4_raw", "")
+    llm = get_llm_backend(json_mode=True)
+    # messages = [
+    #     {
+    #         "role": "system",
+    #         "content": "You are an expert root cause analysis engineer. Extract structured D2, D3, D4 information from the following 8D report text."
+    #     },
+    #     {
+    #         "role": "user",
+    #         "content":Prompt.format(
+    #         d2_text =d2_text,
+    #         d3_text=d3_text,
+    #         d4_text = d4_text
+    #         )
+    #     }
+    # ]
+    prompt = extractor_prompt.invoke({
+            "d2": d2_text,
+            "d3": d3_text,
+            "d4": d4_text
+    })
+    resp = llm.invoke(prompt.to_messages())
+    parser = JsonOutputParser()
+    return parser.parse(resp.content)
 
 @tool
 def parse_8d_doc(doc_path: str) -> dict:

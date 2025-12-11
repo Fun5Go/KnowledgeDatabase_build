@@ -13,7 +13,38 @@ load_dotenv()
 # )
 
 
-llm = ChatOllama(
-    model="llama3.1:8b",   # or "llama3", "mistral", “qwen2.5-coder”
-    temperature=0,
-)
+# llm = ChatOllama(
+#     model="llama3.1:8b",   # or "llama3", "mistral", “qwen2.5-coder”
+#     temperature=0,
+# )
+
+def get_llm_backend(
+    model: str | None = None,
+    temperature: float = 0,
+    json_mode: bool = False
+):
+    """
+    Returns an LLM instance based on selected backend.
+    Backend controlled by environment: LLM_BACKEND=openai|azure|local
+    """
+    backend = os.getenv("LLM_BACKEND", "openai")   # "local", "azure", etc.
+
+    if backend == "local":
+        # Local LLM (e.g. Llama 3.1)
+        return ChatOllama(
+            model=model or os.getenv("LLM_MODEL", "llama3.1:8b"),
+            temperature=temperature,
+        )
+
+    # OpenAI/Azure via LiteLLM gateway
+    model_kwargs = {}
+    if json_mode:
+        model_kwargs["response_format"] = {"type": "json_object"}
+
+    return ChatOpenAI(
+        model=model or os.getenv("LLM_MODEL", "azure/gpt-4.1"),
+        temperature=temperature,
+        openai_api_base=os.getenv("OPENAI_API_BASE", "http://litellm.ame.local/v1"),
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        model_kwargs=model_kwargs,
+    )

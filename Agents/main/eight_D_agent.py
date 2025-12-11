@@ -3,7 +3,7 @@ from langchain.agents import create_agent
 from Agents.tools.section_extractor import extract_d2, extract_d4,parse_8d_doc, extract_failure_d234
 from Agents.tools.doc_parser import extract_product
 # from tools.doc_parser import parse_8d_doc
-from Agents.main.llm import llm
+# from Agents.main.llm import llm
 from Agents.Schemas.eightD_schema_json_v2 import EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureItem
 import os, re
 
@@ -95,33 +95,35 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
             d6_section = D6Section(raw_context=d6_raw)
 
     print("Identifying failures from D2 to D4 section")
-    # failure_list = extract_failure_d234.invoke({
-    #         "data": {
-    #             "d2_raw": d2_raw,
-    #             "d3_raw": d3_raw,
-    #             "d4_raw": d4_raw
+    failure_list = extract_failure_d234.invoke({
+            "data": {
+                "d2_raw": d2_raw,
+                "d3_raw": d3_raw,
+                "d4_raw": d4_raw
 
-    #     }
-    # })
-    failure_list = {
-  "system_name": "Electronic Subassembly",
-  "failures": [
-    {
-      "system_element": "Component X",
-      "failure_mode": "Short Circuit",
-      "failure_effect": "System Failure",
-      "discipline_type": "HW",
-      "root_cause": "D2: this is d2 sample text",
-      "infer_context": "D3: this is d3 sample text"
-    }
-  ]
-    }
+        }
+    })
+#     failure_list = {
+#   "system_name": "Electronic Subassembly",
+#   "failures": [
+#     {
+#       "system_element": "Component X",
+#       "failure_mode": "Short Circuit",
+#       "failure_effect": "System Failure",
+#       "discipline_type": "HW",
+#       "root_cause": "D2: this is d2 sample text",
+#       "infer_context": "D3: this is d3 sample text"
+#     }
+#   ]
+#     }
     raw_failures = failure_list.get("failures", [])
+    system_name = failure_list.get("system_name")
     failures = [FailureItem(**f) for f in raw_failures]
     # 4) Build top-level EightDCase object
     case = EightDCase(
         d8_id=d8_id,
         product_name=product_name,   # add extract_product() later if needed
+        system_name=system_name,
         failures= failures,
         sections=EightDSections(D2=d2_section, D4=d4_section, D5=d5_section, D6=d6_section, D3=d3_section, )
     )

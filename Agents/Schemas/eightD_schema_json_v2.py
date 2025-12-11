@@ -46,5 +46,6 @@ class EightDSections(BaseModel):
 class EightDCase(BaseModel):
     d8_id: str
     product_name: Optional[str] = None
+    system_name: Optional[str] = None
     failures: List[FailureItem]
     sections: EightDSections
