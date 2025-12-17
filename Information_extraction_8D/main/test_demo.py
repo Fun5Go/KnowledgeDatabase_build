@@ -1,8 +1,8 @@
-from Agents.main.llm import llm
+from Information_extraction_8D.main.llm import llm
 import json
 import re
-from Agents.Prompts.eightD_extract_prompt import D2_prompt
-from Agents.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234
+from Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt
+from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234
 
 # ==========Test LLM (Pass)==========
 # resp = llm.invoke("Say hello, just one short sentence.")

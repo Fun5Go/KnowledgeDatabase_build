@@ -19,6 +19,7 @@ load_dotenv()
 # )
 
 def get_llm_backend(
+    backend: str = "openai",
     model: str | None = None,
     temperature: float = 0,
     json_mode: bool = False

@@ -1,10 +1,10 @@
 
 from langchain.agents import create_agent
-from Agents.tools.section_extractor import extract_d2, extract_d4,parse_8d_doc, extract_failure_d234
-from Agents.tools.doc_parser import extract_product
+from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4,parse_8d_doc, extract_failure_d234
+from Information_extraction_8D.tools.doc_parser import extract_product
 # from tools.doc_parser import parse_8d_doc
 # from Agents.main.llm import llm
-from Agents.Schemas.eightD_schema_json_v2 import EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureItem
+from Information_extraction_8D.Schemas.eightD_schema_json_v2 import EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureItem
 import os, re
 
 def build_eight_d_agent():

@@ -1,5 +1,5 @@
 import json
-from Agents.main.eight_D_agent import build_8d_case_from_docx
+from Information_extraction_8D.main.eight_D_agent import build_8d_case_from_docx
 
 def run(doc_path):
     result = build_8d_case_from_docx(doc_path)

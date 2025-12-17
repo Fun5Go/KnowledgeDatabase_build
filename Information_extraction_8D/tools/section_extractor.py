@@ -1,19 +1,15 @@
 from langchain.tools import tool
-from Agents.Prompts.eightD_extract_prompt import D2_prompt, D4_prompt
-from Agents.tools.doc_parser import safe_json
-from Agents.Prompts.eightD_prompt_integrate import Prompt
-from Agents.main.llm import get_llm_backend
+from Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt, D4_prompt
+from Information_extraction_8D.tools.doc_parser import safe_json
+from Information_extraction_8D.Prompts.eightD_prompt_integrate import Prompt
+from Information_extraction_8D.Prompts.eightD_prompt_iteration import iter_prompt_1, iter_prompt_2
+from Information_extraction_8D.main.llm import get_llm_backend
 from docx import Document
 from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
-extractor_system = "You are an expert reliability and systems engineer. Always output STRICT JSON."
 
-extractor_prompt = ChatPromptTemplate.from_messages([
-    ("system", extractor_system),
-    ("user", Prompt),  
-])
 
 @tool
 def extract_d2(section_text: str):
@@ -44,8 +40,6 @@ def extract_d4(data: dict):
 
     d2_context = build_d2_context(d2_info)
     # print("flatten D2 context:", d2_context,"\n")
-
-
     # Insert BOTH content and d2_context in the prompt
     messages = [
         {
@@ -74,21 +68,18 @@ def extract_failure_d234(data: dict) -> dict:
     d2_text = data.get("d2_raw", "")
     d3_text = data.get("d3_raw", "")
     d4_text = data.get("d4_raw", "")
-    llm = get_llm_backend(json_mode=True)
-    # messages = [
-    #     {
-    #         "role": "system",
-    #         "content": "You are an expert root cause analysis engineer. Extract structured D2, D3, D4 information from the following 8D report text."
-    #     },
-    #     {
-    #         "role": "user",
-    #         "content":Prompt.format(
-    #         d2_text =d2_text,
-    #         d3_text=d3_text,
-    #         d4_text = d4_text
-    #         )
-    #     }
-    # ]
+    llm = get_llm_backend(
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True,
+        temperature=0,
+    )
+    extractor_system = "You are an expert reliability and systems engineer. Always output STRICT JSON."
+
+    extractor_prompt = ChatPromptTemplate.from_messages([
+        ("system", extractor_system),
+        ("user", Prompt),  
+    ])
     prompt = extractor_prompt.invoke({
             "d2": d2_text,
             "d3": d3_text,
@@ -97,6 +88,61 @@ def extract_failure_d234(data: dict) -> dict:
     resp = llm.invoke(prompt.to_messages())
     parser = JsonOutputParser()
     return parser.parse(resp.content)
+
+@tool
+def extract_iteration_1(data: dict) -> dict:
+    """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
+    d2_text = data.get("d2_raw", "")
+    d3_text = data.get("d3_raw", "")
+    d4_text = data.get("d4_raw", "")
+    llm = get_llm_backend(
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True,
+        temperature=0,
+    )
+    iteration_system_1 = "You are an expert reliability and systems engineer. Please select the sentences from D2, D3, D4 that containing most valueable information."
+
+    iteration_prompt_1 = ChatPromptTemplate.from_messages([
+        ("system", iteration_system_1),
+        ("user", iter_prompt_1),  
+    ])
+    prompt = iteration_prompt_1.invoke({
+            "d2": d2_text,
+            "d3": d3_text,
+            "d4": d4_text
+    })
+    resp = llm.invoke(prompt.to_messages())
+    parser = JsonOutputParser()
+    return parser.parse(resp.content)
+
+@tool
+def extract_iteration_2(data: dict) -> dict:
+    """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
+    d2_text = data.get("d2_raw", "")
+    d3_text = data.get("d3_raw", "")
+    d4_text = data.get("d4_raw", "")
+    llm = get_llm_backend(
+        backend="local",
+        model="llama3.1:8b",
+        temperature=0,
+    )
+
+    iteration_system_2 = "You are an expert reliability and systems engineer. Please analysing the refined sentences and extract the failures in to JSON format."
+
+    iteration_prompt_2 = ChatPromptTemplate.from_messages([
+        ("system", iteration_system_2),
+        ("user", iter_prompt_2),  
+    ])
+    prompt = iteration_prompt_2.invoke({
+            "d2": d2_text,
+            "d3": d3_text,
+            "d4": d4_text
+    })
+    resp = llm.invoke(prompt.to_messages())
+    parser = JsonOutputParser()
+    return parser.parse(resp.content)
+
 
 @tool
 def parse_8d_doc(doc_path: str) -> dict:

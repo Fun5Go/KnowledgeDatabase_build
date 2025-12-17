@@ -77,7 +77,7 @@ def extract_structure_blocks(path, sheet_index=1):
     blocks = []
     current_element = None
 
-    for r in range(len(df)):
+    for r in range(len(df)): # Entity name is in A column, value is in C column
         col0 = str(df.iloc[r, 0]).strip().lower()
         col2 = ""
         if df.shape[1] > 2:
@@ -107,6 +107,9 @@ def extract_structure_blocks(path, sheet_index=1):
 # 3. Load DFMEA Table
 ###############################################################################
 def load_dfmea_table(path, sheet_index=1):
+    """
+    Output: DataFrame
+    """
     df = pd.read_excel(path, sheet_name=sheet_index, header=6, engine="openpyxl")
 
     df = df.dropna(how="all")
@@ -174,6 +177,16 @@ def split_dfmea_by_function(dfmea, structure_blocks):
 # 5.B Build FINAL nested flatten schema for human and machine readability
 ###############################################################################
 def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file_name):
+    """
+    Docstring for build_flat_failures_with_text
+    
+    :param system_name: string
+    :param structure_blocks: 
+    :param df_blocks: DataFrame
+    :param file_name: string
+
+    :return: JSON schema with flatten structure
+    """
     records = []
 
     for sb, df_block in zip(structure_blocks, df_blocks):
@@ -208,11 +221,16 @@ def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file
 
 
             text = (
-                f"System: {system_name}; Element: {element_clean}; Function: {function_clean}; "
-                f"Failure mode: {failure_mode}; Cause: {failure_cause_clean}; Discipline: {discipline}; "
-                f"Effect: {failure_effect}; Severity: {severity}; Occurrence: {occurrence}; Detection: {detection}; "
-                f"RPN: {rpn}; Controls prevention: {controls_prevention}; "
-                f"Current detection: {current_detection}; Recommended action: {recommended_action}."
+                f"The system is {system_name}. "
+                f"The system element is {element_clean} and the function is {function_clean}. "
+                f"The failure cause is {failure_cause_clean}, which causes the failure mode {failure_mode}. "
+                f"The failure mode {failure_mode} leads to the failure effect {failure_effect}. "
+                f"The discipline is {discipline}. "
+                f"The severity is {severity}, the occurrence is {occurrence}, and the detection is {detection}, "
+                f"resulting in an RPN of {rpn}. "
+                f"The controls for prevention are {controls_prevention}. "
+                f"The current detection controls are {current_detection}. "
+                f"The recommended action is {recommended_action}."
             )
 
             record = {
