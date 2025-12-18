@@ -13,5 +13,5 @@ def run(doc_path):
 
 
 if __name__ == "__main__":
-    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6782170310R02 - Motor noise.docx"
+    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6298120159R01.docx"
     run(path)

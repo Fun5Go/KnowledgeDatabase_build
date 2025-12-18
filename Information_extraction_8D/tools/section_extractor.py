@@ -8,6 +8,7 @@ from docx import Document
 from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
+from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
 
 
 
@@ -101,10 +102,21 @@ def extract_iteration_1(data: dict) -> dict:
         json_mode=True,
         temperature=0,
     )
-    iteration_system_1 = "You are an expert reliability and systems engineer. Please select the sentences from D2, D3, D4 that containing most valueable information."
+    iteration1_system_prompt= """
+    You are an expert reliability and systems engineer.
+        Your task is ONLY semantic signal selection.
+        Do NOT interpret, normalize, or infer failures.
+
+        Rules:
+        - Copy sentences verbatim from the text
+        - Select only sentences with engineering value
+        - Do NOT rewrite or summarize
+        - Do NOT invent information
+        - Output STRICT JSON only
+        """ 
 
     iteration_prompt_1 = ChatPromptTemplate.from_messages([
-        ("system", iteration_system_1),
+        ("system", iteration1_system_prompt),
         ("user", iter_prompt_1),  
     ])
     prompt = iteration_prompt_1.invoke({
@@ -113,31 +125,48 @@ def extract_iteration_1(data: dict) -> dict:
             "d4": d4_text
     })
     resp = llm.invoke(prompt.to_messages())
-    parser = JsonOutputParser()
-    return parser.parse(resp.content)
+    parsed = JsonOutputParser().parse(resp.content)
+
+    # Optional: strict validation
+    validated = Iteration1Output(**parsed)
+    return validated.dict()
 
 @tool
 def extract_iteration_2(data: dict) -> dict:
     """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
-    d2_text = data.get("d2_raw", "")
-    d3_text = data.get("d3_raw", "")
-    d4_text = data.get("d4_raw", "")
     llm = get_llm_backend(
         backend="local",
         model="llama3.1:8b",
         temperature=0,
     )
 
-    iteration_system_2 = "You are an expert reliability and systems engineer. Please analysing the refined sentences and extract the failures in to JSON format."
+    iteration_system_2 = """
+    You are an expert reliability and systems engineer.
 
+    You are given curated engineering signals extracted verbatim
+    from an 8D report.
+
+    Your task is to:
+    - identify distinct failures
+    - map failure modes, effects, and causes
+    - output structured FMEA-style JSON
+
+    Rules:
+    - Use ONLY the provided signals
+    - Do NOT invent information
+    - If information is missing, set fields to null
+    - Output STRICT JSON only
+"""
+    signals_bullets = "\n".join(
+        f"- [{s.get('source','?')}][{s['hint']}][{s['confidence']:.2f}] {s['text']}"
+        for s in data.get("signals", [])
+    )
     iteration_prompt_2 = ChatPromptTemplate.from_messages([
         ("system", iteration_system_2),
         ("user", iter_prompt_2),  
     ])
     prompt = iteration_prompt_2.invoke({
-            "d2": d2_text,
-            "d3": d3_text,
-            "d4": d4_text
+        "signals": signals_bullets
     })
     resp = llm.invoke(prompt.to_messages())
     parser = JsonOutputParser()

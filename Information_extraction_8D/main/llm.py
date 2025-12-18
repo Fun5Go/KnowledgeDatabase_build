@@ -28,16 +28,14 @@ def get_llm_backend(
     Returns an LLM instance based on selected backend.
     Backend controlled by environment: LLM_BACKEND=openai|azure|local
     """
-    backend = os.getenv("LLM_BACKEND", "openai")   # "local", "azure", etc.
+    backend = backend or os.getenv("LLM_BACKEND", "openai")
 
     if backend == "local":
-        # Local LLM (e.g. Llama 3.1)
         return ChatOllama(
             model=model or os.getenv("LLM_MODEL", "llama3.1:8b"),
             temperature=temperature,
         )
 
-    # OpenAI/Azure via LiteLLM gateway
     model_kwargs = {}
     if json_mode:
         model_kwargs["response_format"] = {"type": "json_object"}

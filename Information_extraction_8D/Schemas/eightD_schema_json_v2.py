@@ -7,14 +7,19 @@ class DisciplineType(str, Enum):
     ESW = "ESW"
     MCH = "MCH"
     OTHER = "Other"
-
+class TextEntity(BaseModel):
+    text: Optional[str]                     # exact copied text span
+    source_section: Optional[str]            # D2 / D3 / D4 / D5 / D6
+    entity_type: Optional[str]                # symptom | cause | action | observation | context
+    
 class FailureItem(BaseModel):        
     system_element: Optional[str]
     failure_effect: Optional[str]
     failure_mode: Optional[str]                  
     discipline_type: Optional[DisciplineType] = None        
-    root_cause: Optional[str]
-    infer_context: str                    
+    supporting_entities: List[TextEntity]   
+    inferred_insight: Optional[str]              
+
 
 
 class D2Section(BaseModel):

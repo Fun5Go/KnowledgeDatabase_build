@@ -1,8 +1,8 @@
-from Information_extraction_8D.main.llm import llm
 import json
 import re
 from Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt
-from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234
+from Information_extraction_8D.tools.doc_parser import extract_product
+from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234,extract_iteration_1,extract_iteration_2
 
 # ==========Test LLM (Pass)==========
 # resp = llm.invoke("Say hello, just one short sentence.")
@@ -70,25 +70,169 @@ from Information_extraction_8D.tools.section_extractor import extract_d2, extrac
 # print(sections)
 
 
-## D234 Version test ()
-d2_sample = """
-this is d2 sample text
-"""
-d3_sample = """
-this is d3 sample text
-"""
+# ## D234 Version test ()
+# d2_sample = """
+# this is d2 sample text
+# """
+# d3_sample = """
+# this is d3 sample text
+# """
 
-d4_sample = """
-this is d4 sample text
-"""
+# d4_sample = """
+# this is d4 sample text
+# """
 
-result = extract_failure_d234.invoke({
-            "data": {
-                "d2_raw": d2_sample,
-                "d3_raw": d3_sample,
-                "d4_raw": d4_sample
+# result = extract_failure_d234.invoke({
+#             "data": {
+#                 "d2_raw": d2_sample,
+#                 "d3_raw": d3_sample,
+#                 "d4_raw": d4_sample
 
-        }
-    })
+#         }
+#     })
 
-print (result)
+# print (result)
+
+#---------- Iteration test -------
+
+def build_iteration2_input(iter1_output: dict, min_conf: float = 0.6) -> dict:
+    return {
+        "system_name": iter1_output.get("system_name"),
+        "signals": [
+            {
+                "text": s["sentence"],
+                "hint": s["signal_type"],
+                "confidence": s["confidence"],
+                "source": s.get("source"),
+            }
+            for s in iter1_output.get("selected_sentences", [])
+            if s.get("confidence", 0) >= min_conf
+        ],
+    }
+
+def parse_section_simplified(file_path: str):
+        # 1) Parse document sections using the parse_8d_doc tool
+    # product_name = extract_product(file_path)
+    # print("Product name:", product_name)
+    parsed = parse_8d_doc.invoke({"doc_path": file_path})
+    sections = parsed["sections"]
+        # Initialization
+    d2_raw = None
+    d3_raw = None
+    d4_raw = None
+    for sec in sections:
+        title = sec["title"]
+        content = sec["content"]
+
+        # --------------------
+        # Extract section
+        # --------------------
+        if title.startswith("D2"):
+            d2_raw = content
+        if title.startswith("D3"):
+           d3_raw = content
+        if title.startswith("D4"):
+            d4_raw = content
+    return d2_raw, d3_raw, d4_raw
+# path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6298120159R01.docx"
+# d2_sample, d3_sample,d4_sample =  parse_section_simplified(path)
+# result = extract_iteration_1.invoke({
+#             "data": {
+#                 "d2_raw": d2_sample,
+#                 "d3_raw": d3_sample,
+#                 "d4_raw": d4_sample
+
+#         }
+#     })
+result = {
+  "selected_sentences": [
+    {
+      "sentence": "Ecofit faces issues with the ATPM 300W where the PCBs break down for a specific customer.",
+      "source": "D2",
+      "signal_type": "symptom",
+      "confidence": 0.9
+    },
+    {
+      "sentence": "The failure occurs after a few months or sometimes more than 1 year.",
+      "source": "D2",
+      "signal_type": "symptom",
+      "confidence": 0.8
+    },
+    {
+      "sentence": "The failed boards have the following components damaged: Input fuse: F100 Pre-charging diode of the PFC: D102 (short circuit) PFC MOSFET: T101 (short circuit) PFC diode: D103 (sometimes damaged, sometimes not) PFC inrush bypass diodes: D105 & D106 (sometimes damaged, sometimes not)",
+      "source": "D2",
+      "signal_type": "failure",
+      "confidence": 1.0
+    },
+    {
+      "sentence": "Based on the failed components the issue is likely caused by the inrush current begin too high.",
+      "source": "D2",
+      "signal_type": "cause",
+      "confidence": 0.9
+    },
+    {
+      "sentence": "Ecofit could re-produce the high inrush current by stopping the power supply for approximately 600ms when the motor is running:",
+      "source": "D4",
+      "signal_type": "evidence",
+      "confidence": 0.9
+    },
+    {
+      "sentence": "In the image above an inrush current of about 40A can be seen.",
+      "source": "D4",
+      "signal_type": "evidence",
+      "confidence": 0.9
+    },
+    {
+      "sentence": "Based on the datasheet of the pre-charging diode of the PFC: D102 and PFC inrush bypass diodes: D105 & D106 (S1M), the diodes are capable of handling 30A for 1x half a cycle:",
+      "source": "D4",
+      "signal_type": "evidence",
+      "confidence": 0.8
+    },
+    {
+      "sentence": "The 40A peak is out of spec of the datasheet, which could likely be the cause of the broken components on the PCB.",
+      "source": "D4",
+      "signal_type": "cause",
+      "confidence": 0.9
+    },
+    {
+      "sentence": "The 40A inrush current means that the NTC bypass relay (K100) is still conducting when the AC input power supply is quickly switched off and on again.",
+      "source": "D4",
+      "signal_type": "cause",
+      "confidence": 0.8
+    },
+    {
+      "sentence": "This is checked at AME.",
+      "source": "D4",
+      "signal_type": "evidence",
+      "confidence": 0.7
+    },
+    {
+      "sentence": "Even after approximately 3 seconds the inrush bypass relay is still conducting and the 40A inrush current peak can be seen:",
+      "source": "D4",
+      "signal_type": "evidence",
+      "confidence": 0.9
+    },
+    {
+      "sentence": "After 3 seconds the DC_LINK voltage dropped to 200V.",
+      "source": "D4",
+      "signal_type": "evidence",
+      "confidence": 0.8
+    },
+    {
+      "sentence": "When the PSU is switched on again, the inrush current reached 40A due to the NTC Bypass Relay still conducting.",
+      "source": "D4",
+      "signal_type": "evidence",
+      "confidence": 0.9
+    },
+    {
+      "sentence": "The ripple on the AC input voltage and current is likely due to the power supply not being able to properly handle the large inrush current.",
+      "source": "D4",
+      "signal_type": "cause",
+      "confidence": 0.8
+    }
+  ]
+}
+
+iter2_input =  build_iteration2_input(result)
+result_2 = extract_iteration_2.invoke({"data":iter2_input})
+print(result_2)
