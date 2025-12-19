@@ -135,13 +135,13 @@ def extract_iteration_1(data: dict) -> dict:
 def extract_iteration_2(data: dict) -> dict:
     """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
     llm = get_llm_backend(
-        # backend="local",
-        # model="llama3.1:8b",
-        # temperature=0,
-        backend="openai",
-        model="azure/gpt-4.1",
-        json_mode=True,
+        backend="local",
+        model="llama3.1:8b",
         temperature=0,
+        # backend="openai",
+        # model="azure/gpt-4.1",
+        # json_mode=True,
+        # temperature=0,
     )
 
     iteration_system_2 = """

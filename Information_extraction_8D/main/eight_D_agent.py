@@ -119,7 +119,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     raw_failures = output_iter2.get("failures", [])
     failures = []
     f_idx = 1 
-    for f in raw_failures:
+    for idx, f in enumerate(raw_failures, start=1):
         try:
             # ensure dict (in case f is a pydantic model)
             if hasattr(f, "model_dump"):
@@ -129,12 +129,10 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
             f.setdefault("supporting_entities", [])
 
             # --- generate failure_ID: <filename>_F1/F2/... ---
-            f["failure_ID"] = f"{base_name}_F{f_idx}"
-            f_idx += 1
-
+            f["failure_ID"] = f"{base_name}_F{idx}"
             failures.append(FailureItem(**f))
         except Exception as e:
-            print("Skipping invalid failure:", e)
+            print(f"Skipping invalid failure F{idx}:", e)
     # 4) Build top-level EightDCase object
     case = EightDCase(
         documents=[document_info],
