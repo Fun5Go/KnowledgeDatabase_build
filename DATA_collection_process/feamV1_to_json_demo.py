@@ -234,6 +234,8 @@ def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file
             )
 
             record = {
+                "source_type": "new_fmea",
+                
                 "system_name": system_name,
                 "system_element": element_clean,
                 "function": function_clean,

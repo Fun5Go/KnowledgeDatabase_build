@@ -48,7 +48,7 @@ Failure definition:
 Text entities:
 - Attach one or more supporting_entities per failure
 - Copy text EXACTLY from the signals (no paraphrasing)
-- source_section: D2 | D3 | D4 | D5 | D6
+- source_section: D2 | D3 | D4 
 - entity_type: symptom | cause | action | observation | context
 
 Input signals:
@@ -76,6 +76,7 @@ Output (STRICT JSON):
         }}
       ],
       "inferred_insight": ""
+      confidence: 0.0 # confidence score of the failure item (0.0 - 1.0)
     }}
   ]
 }}
