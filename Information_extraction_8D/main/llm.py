@@ -32,7 +32,7 @@ def get_llm_backend(
 
     if backend == "local":
         return ChatOllama(
-            model=model or os.getenv("LLM_MODEL", "llama3.1:8b"),
+            model=model or os.getenv("LLM_MODEL", "gemma3:latest"),
             temperature=temperature,
         )
 

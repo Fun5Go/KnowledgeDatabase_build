@@ -4,9 +4,11 @@ from Information_extraction_8D.tools.section_extractor import extract_d2, extrac
 from Information_extraction_8D.tools.doc_parser import extract_product
 # from tools.doc_parser import parse_8d_doc
 # from Agents.main.llm import llm
-from Information_extraction_8D.Schemas.eigthD_schema_json_v3 import DocumentInfo,MaintenaceTag, EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureItem
+from Information_extraction_8D.Schemas.eigthD_schema_json_v3 import DocumentInfo,MaintenaceTag, EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureChain
 import os, re
 from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
+import copy
+
 # def build_eight_d_agent():
 
 #     tools = [extract_d2,extract_d4,parse_8d_doc]
@@ -23,6 +25,7 @@ def build_iteration2_input(iter1_output, min_conf: float = 0.6) -> dict:
             {
                 "text": s.sentence,
                 "hint": s.signal_type,
+                "id": s.id, 
                 "confidence": s.confidence,
                 "source": s.source,
             }
@@ -30,7 +33,6 @@ def build_iteration2_input(iter1_output, min_conf: float = 0.6) -> dict:
             if s.confidence >= min_conf
         ]
     }
-
 
 
 
@@ -108,7 +110,9 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
                 "d4_raw": d4_raw or "",
         }
     })
-    
+
+
+    # output_iter1 = Iteration1Output(**output_iter1)
     input_iter2 = build_iteration2_input(output_iter1)
     print("Done!LLM iteration 2:")
     output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
@@ -116,32 +120,48 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     print("system name:",system_name)
 
 
-    raw_failures = output_iter2.get("failures", [])
-    failures = []
-    f_idx = 1 
-    for idx, f in enumerate(raw_failures, start=1):
-        try:
-            # ensure dict (in case f is a pydantic model)
-            if hasattr(f, "model_dump"):
-                f = f.model_dump()
-            f.setdefault("failure_level", "sub_system")
-            f.setdefault("discipline_type", "Other")
-            f.setdefault("supporting_entities", [])
+    failure_dict = copy.deepcopy(output_iter2)
 
-            # --- generate failure_ID: <filename>_F1/F2/... ---
-            f["failure_ID"] = f"{base_name}_F{idx}"
-            failures.append(FailureItem(**f))
-        except Exception as e:
-            print(f"Skipping invalid failure F{idx}:", e)
+    failure_dict["failure_ID"] = f"{base_name}_F1"
+    failure_dict.setdefault("failure_level", "sub_system")
+    failure_dict.setdefault("root_causes", [])
+
+    allowed_disciplines = {"HW", "ESW", "MCH", "Other"}
+
+    for c_idx, cause in enumerate(failure_dict["root_causes"]):
+
+        if hasattr(cause, "model_dump"):
+            cause = cause.model_dump()
+
+        cause.setdefault("cause_level", "unknown")
+        cause.setdefault("discipline_type", "Other")
+        cause.setdefault("confidence", 0.5)
+
+        if cause["discipline_type"] not in allowed_disciplines:
+            cause["discipline_type"] = "Other"
+
+        cause.setdefault("failure_mechanism", None)
+        cause.setdefault("supporting_entities", [])
+        cause.setdefault("inferred_insight", None)
+
+        if not cause.get("failure_cause"):
+            cause["failure_cause"] = "Unknown cause (LLM incomplete)"
+
+        cause["cause_ID"] = f"{base_name}_F1_C{c_idx + 1}"
+
+        failure_dict["root_causes"][c_idx] = cause
+
+    failure = FailureChain(**failure_dict)
+
     # 4) Build top-level EightDCase object
     case = EightDCase(
         documents=[document_info],
         maintenance_tag=MaintenaceTag(
             review_status= "pending",
-            Version = "V3"
+            Version = "V1"
         ),   # add extract_product() later if needed
         system_name=system_name,
-        failures= failures,
+        failure= failure,
         sections=EightDSections(
                                 D2=d2_section,
                                 D3=d3_section,
@@ -149,7 +169,6 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
                                 D5=d5_section,
                                 D6=d6_section,
                             ),
-        selected_sentences= input_iter2,
     )
 
-    return case
+    return case,output_iter1

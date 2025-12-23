@@ -11,23 +11,20 @@ class TextEntity(BaseModel):
 
     text: Optional[str]                     # exact copied text span
     source_section: Optional[str]            # D2 / D3 / D4 / D5 / D6
+    id: Optional[str]                     # S1, S2, ...
     entity_type: Optional[str]                # symptom | cause | action | observation | context
 
 
     
-class FailureItem(BaseModel):   
-    failure_ID: Optional[str]
-    failure_level: Literal["system","sub_system"]    
-    system_element: Optional[str]
-    failure_effect: Optional[str]
-    failure_mode: Optional[str]                  
-    discipline_type: Optional[Literal["HW", "ESW", "MCH","Other"]]       
-    supporting_entities: List[TextEntity] = Field(
-                                                    default_factory=list,
-                                                    description="Evidence sentences or text spans supporting this failure"
-                                                )  
-    inferred_insight: Optional[str]
-    confidence: float = Field(..., ge=0.0, le=1.0)
+class CauseItem(BaseModel):   
+    cause_ID: Optional[str] = None
+    cause_level: Literal["design","process","test","component"]
+    failure_cause: Optional[str]  # WHY it happened
+    failure_mechanism: Optional[str] = None # HOW it leads to failure
+    discipline_type: Optional[Literal["HW", "ESW", "MCH", "Other"]]
+    supporting_entities: List[TextEntity] = Field(default_factory=list)
+    inferred_insight: Optional[str] = None
+    confidence: Literal["high", "medium", "low"] = "medium"
 
 
 
@@ -39,6 +36,17 @@ class DocumentInfo(BaseModel):
 class MaintenaceTag(BaseModel):
     review_status: Literal["validated", "pending", "rejected"] = "pending"
     Version: Optional[str] = None
+    last_updated : Optional[str] = None
+    supersedes : Optional[str] = None
+
+class FailureChain(BaseModel):
+    failure_ID: Optional[str]
+    failure_level: Literal["system","sub_system","component"]
+    failure_element: Optional[str]  # e.g. PFC stage, DC-link
+    failure_mode: Optional[str]     # what broke (MOSFET destroyed)
+    failure_effect: Optional[str]   # system impact (DUT blew up)
+    supporting_entities: List[TextEntity] = Field(default_factory=list)
+    root_causes: List[CauseItem]
 
 
 class D2Section(BaseModel):
@@ -71,8 +79,7 @@ class EightDCase(BaseModel):
     documents: List[DocumentInfo]
     maintenance_tag: Optional[MaintenaceTag] = None
     system_name: Optional[str] = None
-    failures: List[FailureItem]
+    failure: FailureChain
     sections: EightDSections
-
     selected_sentences: Optional[Dict[str, Any]] = None
 

@@ -6,6 +6,8 @@ import pandas as pd
 import json
 import math
 import re
+from fmea_to_json.common_utils import to_scalar, strip_prefix, extract_discipline
+from fmea_to_json.common_utils import extract_metadata_from_file
 
 
 ###############################################################################
@@ -176,7 +178,7 @@ def split_dfmea_by_function(dfmea, structure_blocks):
 ###############################################################################
 # 5.B Build FINAL nested flatten schema for human and machine readability
 ###############################################################################
-def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file_name):
+def build_flat_failures_with_text(system_name, fmea_date, project_description, structure_blocks, df_blocks, file_name):
     """
     Docstring for build_flat_failures_with_text
     
@@ -235,6 +237,10 @@ def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file
 
             record = {
                 "source_type": "new_fmea",
+                "fmea_date": fmea_date,
+                "project_description": project_description,
+
+
                 
                 "system_name": system_name,
                 "system_element": element_clean,
@@ -275,7 +281,7 @@ def build_flat_failures_with_text(system_name, structure_blocks, df_blocks, file
 ###############################################################################
 # 6. MAIN FUNCTION
 ###############################################################################
-def dfmea_to_json(path, output_json, sheet_index=1):
+def dfmea_to_json_xlsm(path, output_json, sheet_index=1):
 
     print("\n=== STEP 0: Extract file name ===")
     file_name = os.path.splitext(os.path.basename(path))[0]
@@ -284,6 +290,16 @@ def dfmea_to_json(path, output_json, sheet_index=1):
     system_name_raw = extract_system_name(path, sheet_index)
     system_name = strip_prefix(system_name_raw)
     print("System Name:", system_name)
+
+    meta = extract_metadata_from_file(
+    path,
+    sheet_index=sheet_index,   
+    project_cell="I2",         
+    date_cell="T4",            
+    date_fallback_cell=None
+)
+    fmea_date = meta["fmea_date"]
+    project_description = meta["project_description"]
 
     print("\n=== STEP 2: Reading Structure Blocks ===")
     structure_blocks = extract_structure_blocks(path, sheet_index)
@@ -297,7 +313,14 @@ def dfmea_to_json(path, output_json, sheet_index=1):
     df_blocks = split_dfmea_by_function(dfmea, structure_blocks)
 
     print("\n=== STEP 5: Building Hierarchical Schema ===")
-    final_json = build_flat_failures_with_text(system_name, structure_blocks, df_blocks,file_name)
+    final_json = build_flat_failures_with_text(
+    system_name,
+    fmea_date,  
+    project_description,        # ✅ NEW
+    structure_blocks,
+    df_blocks,
+    file_name
+)
 
     # Write file
     with open(output_json, "w", encoding="utf-8") as f:
@@ -306,108 +329,6 @@ def dfmea_to_json(path, output_json, sheet_index=1):
     print("\n JSON saved to:", output_json)
 
 
+def process_dfmea_xlsm(path, output_json, sheet_index=1):
+    dfmea_to_json_xlsm(path, output_json, sheet_index)
 
-###############################################################################
-# 7. Run example
-###############################################################################
-if __name__ == "__main__":
-    # ## Single file example
-    # fmea_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\FMEA6367240034R02.xlsm"
-    # output_name = "FMEA_with_Solutions.json"
-    # dfmea_to_json(fmea_path, output_name)
-    # Input folder containing FMEA .xlsm files
-    input_folder = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\Motor"
-
-    # Output folder for JSON files
-    output_folder = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\database\fema_json_raw"
-
-    # Create output folder if not exists
-    os.makedirs(output_folder, exist_ok=True)
-
-    # Loop through all .xlsm files
-    for file in os.listdir(input_folder):
-        if file.lower().endswith(".xlsm"):
-            full_path = os.path.join(input_folder, file)
-
-            # Output JSON will use the same base filename
-            base_name = os.path.splitext(file)[0]
-            output_json = os.path.join(output_folder, base_name + ".json")
-
-            print("\n===============================================")
-            print(" Processing file:", file)
-            print("===============================================\n")
-
-            try:
-                dfmea_to_json(full_path, output_json)
-                print(" --> Completed:", output_json)
-            except Exception as e:
-                print(" *** ERROR processing file:", file)
-                print("     Reason:", e)
-
-
-
-
-
-
-###############################################################################
-# 5. Build FINAL nested hierarchical schema
-###############################################################################
-# def build_hierarchical_schema(system_name, structure_blocks, df_blocks):
-#     """
-#     Final structure:
-#     {
-#       "system_name": "...",
-#       "elements": [
-#         {
-#           "system_element": "...",
-#           "functions": [
-#             {
-#               "function": "...",
-#               "failures": [
-#                 {
-#                   "failure_effect": "...",
-#                   "severity": ...,
-#                   "failure_mode": "...",
-#                   "failure_cause": "..."
-#                 }
-#               ]
-#             }
-#           ]
-#         }
-#       ]
-#     }
-#   {link} to documents, other products ,etc.
-#   {category} to classify the product type
-#     """
-
-#     final = {"system_name": system_name, "elements": []}
-
-#     # Build unique element groups
-#     element_dict = {}
-
-#     for sb, df_block in zip(structure_blocks, df_blocks):
-
-#         element = sb["system_element"]
-#         function = sb["function"]
-
-#         if element not in element_dict:
-#             element_dict[element] = {"system_element": element, "functions": []}
-
-#         function_node = {"function": function, "failures": []}
-
-#         # Each DFMEA row = one failure record (1 effect → 1 mode → 1 cause)
-#         for _, row in df_block.iterrows():
-#             failure = {
-#                 "failure_effect": str(row["failure_effect"]),
-#                 "severity": convert(row["severity"]),
-#                 "failure_mode": str(row["failure_mode"]),
-#                 "failure_cause": str(row["failure_cause"])
-#             }
-#             function_node["failures"].append(failure)
-
-#         element_dict[element]["functions"].append(function_node)
-
-#     # Move into final structure
-#     final["elements"] = list(element_dict.values())
-
-#     return final

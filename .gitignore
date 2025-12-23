@@ -9,3 +9,5 @@ env*/
 
 *.json
 *.csv
+
+chroma*/

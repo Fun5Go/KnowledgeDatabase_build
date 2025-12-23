@@ -104,15 +104,16 @@ def extract_iteration_1(data: dict) -> dict:
     )
     iteration1_system_prompt= """
     You are an expert reliability and systems engineer.
-        Your task is ONLY semantic signal selection.
-        Do NOT interpret, normalize, or infer failures.
+    Your task is STRICTLY LIMITED to selecting sentences from the input text.
 
-        Rules:
-        - Copy sentences verbatim from the text
-        - Select only sentences with engineering value
-        - Do NOT rewrite or summarize
-        - Do NOT invent information
-        - Output STRICT JSON only
+    Rules (MANDATORY):
+    - Copy sentences EXACTLY as they appear in the text (verbatim substring)
+    - Do NOT merge, split, rewrite, normalize, or paraphrase
+    - Each selected sentence MUST exist as an exact substring
+    - Select only sentences with clear engineering value
+    - Do NOT infer causes, failures, or relationships
+    - Do NOT add any information
+    - Output STRICT JSON only (no comments, no markdown)
         """ 
 
     iteration_prompt_1 = ChatPromptTemplate.from_messages([
@@ -135,34 +136,36 @@ def extract_iteration_1(data: dict) -> dict:
 def extract_iteration_2(data: dict) -> dict:
     """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
     llm = get_llm_backend(
-        backend="local",
-        model="llama3.1:8b",
-        temperature=0,
-        # backend="openai",
-        # model="azure/gpt-4.1",
-        # json_mode=True,
+        # backend="local",
+        # model="llama3.1:8b",
         # temperature=0,
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True,
+        temperature=0,
     )
 
     iteration_system_2 = """
-    You are an expert reliability and systems engineer.
+    You are an expert reliability and FMEA engineer.
 
-    You are given curated engineering signals extracted verbatim
-    from an 8D report.
+    You are given extracted text signals from an 8D report:
+    - D2: Define problem and symptoms
+    - D3: Interim containment / quick fix
+    - D4: Root cause analysis
 
-    Your task is to:
-    - identify distinct failures
-    - map failure modes, effects, and causes
-    - output structured FMEA-style JSON
-
-    Rules:
-    - Use ONLY the provided signals
-    - Do NOT invent information
-    - If information is missing, set fields to null
-    - Output STRICT JSON only
+    Core constraints (MANDATORY):
+    - The entire input represents ONE failure case.
+    - Do NOT split into multiple failures.
+    - Use ONLY the provided signals.
+    - Do NOT invent or infer facts beyond the signals.
+    - Output STRICT JSON only.
 """
     signals_bullets = "\n".join(
-        f"- [{s.get('source','?')}][{s['hint']}][{s['confidence']:.2f}] {s['text']}"
+        f"- [id:{s.get('id','')}]"
+        f"[{s.get('source','?')}]"
+        f"[{s.get('signal_type', s.get('hint','?'))}]"
+        f"[{float(s.get('confidence',0.0)):.2f}] "
+        f"{s.get('text','')}"
         for s in data.get("signals", [])
     )
     iteration_prompt_2 = ChatPromptTemplate.from_messages([
