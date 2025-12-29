@@ -9,7 +9,8 @@ from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
-
+from langsmith import get_current_run_tree, traceable
+import os
 
 
 @tool
@@ -103,18 +104,9 @@ def extract_iteration_1(data: dict) -> dict:
         temperature=0,
     )
     iteration1_system_prompt= """
-    You are an expert reliability and systems engineer.
-    Your task is STRICTLY LIMITED to selecting sentences from the input text.
-
-    Rules (MANDATORY):
-    - Copy sentences EXACTLY as they appear in the text (verbatim substring)
-    - Do NOT merge, split, rewrite, normalize, or paraphrase
-    - Each selected sentence MUST exist as an exact substring
-    - Select only sentences with clear engineering value
-    - Do NOT infer causes, failures, or relationships
-    - Do NOT add any information
-    - Output STRICT JSON only (no comments, no markdown)
-        """ 
+    You are an expert quality and reliability engineer specializing in 8D problem solving, FMEA, and failure analysis.
+    Your task is STRICTLY LIMITED to selecting HIGH VALUE sentences from the input text D2,D3,D4
+    """ 
 
     iteration_prompt_1 = ChatPromptTemplate.from_messages([
         ("system", iteration1_system_prompt),
@@ -162,9 +154,9 @@ def extract_iteration_2(data: dict) -> dict:
 """
     signals_bullets = "\n".join(
         f"- [id:{s.get('id','')}]"
-        f"[{s.get('source','?')}]"
-        f"[{s.get('signal_type', s.get('hint','?'))}]"
-        f"[{float(s.get('confidence',0.0)):.2f}] "
+        f"[{s.get('source_section','?')}]"
+        f"[{s.get('entity_type','?')}]"
+        f"[{s.get('assertion_level','?')}] "
         f"{s.get('text','')}"
         for s in data.get("signals", [])
     )

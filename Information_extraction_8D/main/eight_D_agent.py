@@ -8,42 +8,49 @@ from Information_extraction_8D.Schemas.eigthD_schema_json_v3 import DocumentInfo
 import os, re
 from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
 import copy
+from typing import List, Dict, Any
+from langsmith import traceable, get_current_run_tree
 
-# def build_eight_d_agent():
-
-#     tools = [extract_d2,extract_d4,parse_8d_doc]
-
-#     agent = create_agent(
-#         model= llm,
-#         tools= tools
-#     )
-#     return agent
-
-def build_iteration2_input(iter1_output, min_conf: float = 0.6) -> dict:
+def build_iteration2_input(iter1_output: dict) -> dict:
     return {
         "signals": [
             {
-                "text": s.sentence,
-                "hint": s.signal_type,
-                "id": s.id, 
-                "confidence": s.confidence,
-                "source": s.source,
+                "id": s.id,
+                "text": s.text,
+                "entity_type": s.entity_type,
+                "assertion_level": s.assertion_level,
+                "source_section": s.source_section,
             }
             for s in iter1_output.selected_sentences
-            if s.confidence >= min_conf
-        ]
+        ],
     }
 
 
 
+def assign_sentence_ids(items: List[Dict[str, Any]], doc_prefix: str) -> List[Dict[str, Any]]:
+    """
+    Assign deterministic sequential IDs grouped by section.
+    Example: <doc_prefix>_D2_S001, <doc_prefix>_D4_S012
+    """
+    counters = {"D2": 0, "D3": 0, "D4": 0}
 
+    for item in items:
+        sec = item.source_section
+        if sec not in counters:
+            raise ValueError(f"Unexpected source_section: {sec}")
+
+        counters[sec] += 1
+        item.id = f"{doc_prefix}_{sec}_S{counters[sec]:03d}"
+
+    return items
+
+
+@traceable(name="8d-extraction-demo")
 def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
     # 1) Parse document sections using the parse_8d_doc tool
     product_name = extract_product(doc_path)
     print("Product name:", product_name)
-    parsed = parse_8d_doc.invoke({"doc_path": doc_path})
-    sections = parsed["sections"]
 
     # 2) Extract 8D ID from file name
     base_name = os.path.splitext(os.path.basename(doc_path))[0]
@@ -52,6 +59,16 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
         file_name=base_name,
         product_name=product_name,
     )
+
+    run = get_current_run_tree()
+    if run:
+        run.metadata.update({
+            "filename": base_name,
+            # "doc_path": doc_path,
+            "product_name": product_name,
+        })
+    parsed = parse_8d_doc.invoke({"doc_path": doc_path})
+    sections = parsed["sections"]
 
 
     # Initialization
@@ -111,8 +128,14 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
         }
     })
 
+    #output_iter1 = Iteration1Output(**output_iter1)
+    #Add ids to sentences
+    output_iter1.selected_sentences = assign_sentence_ids(
+    output_iter1.selected_sentences,
+    doc_prefix=base_name
+)
 
-    # output_iter1 = Iteration1Output(**output_iter1)
+
     input_iter2 = build_iteration2_input(output_iter1)
     print("Done!LLM iteration 2:")
     output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
@@ -169,6 +192,8 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
                                 D5=d5_section,
                                 D6=d6_section,
                             ),
+        selected_sentences=output_iter1.selected_sentences,
     )
+        
 
     return case,output_iter1

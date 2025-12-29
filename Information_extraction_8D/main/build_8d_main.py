@@ -2,8 +2,9 @@ import json
 from Information_extraction_8D.main.eight_D_agent import build_8d_case_from_docx
 import os
 
+SENTENCE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected"
+FAILURE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification"
 OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw"
-
 def run(doc_path: str) -> str:
     result, output_iter1 = build_8d_case_from_docx(doc_path)
 
@@ -27,5 +28,5 @@ def run(doc_path: str) -> str:
 
 
 if __name__ == "__main__":
-    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6298190081R02.docx"
+    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6318110137R04.docx"
     run(path)

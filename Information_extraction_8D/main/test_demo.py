@@ -3,7 +3,8 @@ import re
 from Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt
 from Information_extraction_8D.tools.doc_parser import extract_product
 from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234,extract_iteration_1,extract_iteration_2
-
+from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
+from typing import List, Dict, Any
 # ==========Test LLM (Pass)==========
 # resp = llm.invoke("Say hello, just one short sentence.")
 # print(resp.content)
@@ -95,20 +96,37 @@ from Information_extraction_8D.tools.section_extractor import extract_d2, extrac
 
 #---------- Iteration test -------
 
-# def build_iteration2_input(iter1_output: dict, min_conf: float = 0.6) -> dict:
-#     return {
-#         "system_name": iter1_output.get("system_name"),
-#         "signals": [
-#             {
-#                 "text": s["sentence"],
-#                 "hint": s["signal_type"],
-#                 "confidence": s["confidence"],
-#                 "source": s.get("source"),
-#             }
-#             for s in iter1_output.get("selected_sentences", [])
-#             if s.get("confidence", 0) >= min_conf
-#         ],
-#     }
+def build_iteration2_input(iter1_output: dict) -> dict:
+    return {
+        "system_name": iter1_output.get("system_name", ""),
+        "signals": [
+            {
+                # "id": s.get("id"),
+                "text": s.get("text"),
+                "entity_type": s.get("entity_type"),
+                "assertion_level": s.get("assertion_level"),
+                "source_section": s.get("source_section"),
+            }
+            for s in iter1_output.get("selected_sentences", [])
+        ],
+    }
+
+def assign_sentence_ids(items: List[Dict[str, Any]], doc_prefix: str) -> List[Dict[str, Any]]:
+    """
+    Assign deterministic sequential IDs grouped by section.
+    Example: <doc_prefix>_D2_S001, <doc_prefix>_D4_S012
+    """
+    counters = {"D2": 0, "D3": 0, "D4": 0}
+
+    for item in items:
+        sec = item.get("source_section")
+        if sec not in counters:
+            raise ValueError(f"Unexpected source_section: {sec}")
+
+        counters[sec] += 1
+        item["id"] = f"{doc_prefix}_{sec}_S{counters[sec]:03d}"
+
+    return items
 
 # def parse_section_simplified(file_path: str):
 #         # 1) Parse document sections using the parse_8d_doc tool
@@ -134,38 +152,56 @@ from Information_extraction_8D.tools.section_extractor import extract_d2, extrac
 #         if title.startswith("D4"):
 #             d4_raw = content
 #     return d2_raw, d3_raw, d4_raw
-# path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6298120159R01.docx"
-# d2_sample, d3_sample,d4_sample =  parse_section_simplified(path)
-# result = extract_iteration_1.invoke({
-#             "data": {
-#                 "d2_raw": d2_sample,
-#                 "d3_raw": d3_sample,
-#                 "d4_raw": d4_sample
 
-#         }
-#     })
+path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6318110147R01.docx"
+d2_sample, d3_sample,d4_sample =  parse_section_simplified(path)
+result = extract_iteration_1.invoke({
+            "data": {
+                "d2_raw": d2_sample,
+                "d3_raw": d3_sample,
+                "d4_raw": d4_sample
+
+        }
+    })
 
 
-# iter2_input =  build_iteration2_input(result)
+# 1) Assign IDs (Option A)
+sentences = output.get("selected_sentences", [])
+sentences = assign_sentence_ids(sentences, doc_prefix="8d_test_id")
+output["selected_sentences"] = sentences
+
+# 2) Validate against schema (will fail if anything is missing/wrong)
+validated = Iteration1Output(**output)
+
+print (validated)
+
+# # 3) Save
+# out_path = os.path.join(output_dir, f"{base_name}_iter1.json")
+# with open(out_path, "w", encoding="utf-8") as f:
+#     json.dump(validated.model_dump(), f, indent=2, ensure_ascii=False)
+
+
+
+# iter2_input =  build_iteration2_input(output)
 # result_2 = extract_iteration_2.invoke({"data":iter2_input})
 # print(result_2)
 
 
 
-#--------------------Docx header read test ------------------------
+# #--------------------Docx header read test ------------------------
 
-from docx import Document
-import zipfile
-import xml.etree.ElementTree as ET
-import os
-from datetime import datetime
+# from docx import Document
+# import zipfile
+# import xml.etree.ElementTree as ET
+# import os
+# from datetime import datetime
 
-path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6298120159R01.docx"
+# path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6298120159R01.docx"
 
-timestamp = os.path.getmtime(path)
-modified_time = datetime.fromtimestamp(timestamp)
+# timestamp = os.path.getmtime(path)
+# modified_time = datetime.fromtimestamp(timestamp)
 
-print("Date modified:", modified_time.strftime("%d-%m-%Y %H:%M:%S"))
+# print("Date modified:", modified_time.strftime("%d-%m-%Y %H:%M:%S"))
 
 
 

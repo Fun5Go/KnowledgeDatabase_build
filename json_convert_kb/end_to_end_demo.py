@@ -10,14 +10,6 @@ from langchain_huggingface import HuggingFaceEmbeddings
 # 1) Build Evidence Capsules (NO LLM)
 # =========================================================
 def build_evidence_capsules(data: Dict) -> List[Dict]:
-    """
-    Build evidence capsules from 8D JSON.
-    Rules:
-    - 1 root cause -> 1 capsule
-    - similarity_text: used for embedding & similarity retrieval
-    - reasoning_text: used for explanation / UI
-    """
-
     capsules = []
 
     doc0 = (data.get("documents") or [{}])[0]
@@ -29,47 +21,55 @@ def build_evidence_capsules(data: Dict) -> List[Dict]:
     failure_element = failure.get("failure_element")
     failure_effect = failure.get("failure_effect")
 
-    # -----------------------
-    # Failure-level entities
-    # -----------------------
+    # ========== NEW supporting_entities ==========
+    supporting_entities = failure.get("supporting_entities", [])
+
+    # -------- Failure-level facts --------
     failure_symptoms = []
-    failure_actions = []
+    failure_conditions = []
+    failure_occurrences = []
+    failure_investigations = []
 
-    for ent in failure.get("supporting_entities", []):
-        if not ent.get("text"):
+    for ent in supporting_entities:
+        text = ent.get("text")
+        if not text:
             continue
-        if ent.get("entity_type") == "symptom":
-            failure_symptoms.append(ent["text"])
-        elif ent.get("entity_type") == "action":
-            failure_actions.append(ent["text"])
 
-    # -----------------------
-    # Root causes -> capsules
-    # -----------------------
+        etype = ent.get("entity_type")
+
+        if etype == "symptom":
+            failure_symptoms.append(text)
+        elif etype == "condition":
+            failure_conditions.append(text)
+        elif etype == "occurrence":
+            failure_occurrences.append(text)
+        elif etype == "root_cause_evidence":
+            failure_investigations.append(text)
+
+    # -------- Root causes -> capsules --------
     for rc in failure.get("root_causes", []):
-        cause_id = rc.get("cause_ID")
+        capsule_id = rc.get("cause_ID")
         root_cause = rc.get("failure_cause")
         cause_level = rc.get("cause_level")
         discipline = rc.get("discipline_type")
         confidence = rc.get("confidence")
-        inferred_insight = rc.get("inferred_insight")
 
-        rc_evidence_texts = []
+        # -------- Root-cause evidence (NEW) --------
         rc_evidence_items = []
+        rc_evidence_texts = []
 
-        for ent in rc.get("supporting_entities", []):
-            if not ent.get("text"):
-                continue
-            rc_evidence_texts.append(ent["text"])
-            rc_evidence_items.append({
-                "text": ent.get("text"),
-                "source_section": ent.get("source_section"),
-                "signal_id": ent.get("id"),
-                "entity_type": ent.get("entity_type"),
-            })
+        for ent in supporting_entities:
+            if ent.get("entity_type") == "root_cause_evidence":
+                rc_evidence_items.append({
+                    "id": ent.get("id"),
+                    "text": ent.get("text"),
+                    "source_section": ent.get("source_section"),
+                    "assertion_level": ent.get("assertion_level"),
+                })
+                rc_evidence_texts.append(ent.get("text"))
 
         # =====================
-        # similarity_text (EMBED)
+        # similarity_text (NO assertion_level)
         # =====================
         similarity_lines = [
             f"Failure mode: {failure_mode}",
@@ -78,53 +78,49 @@ def build_evidence_capsules(data: Dict) -> List[Dict]:
             f"Root cause: {root_cause}",
         ]
 
-        for txt in rc_evidence_texts[:3]:  # limit noise
+        for txt in rc_evidence_texts[:3]:
             similarity_lines.append(f"Evidence: {txt}")
 
         similarity_text = "\n".join(similarity_lines)
 
         # =====================
-        # reasoning_text (EXPLAIN)
+        # reasoning_text (ASSERTION-AWARE)
         # =====================
-        reasoning_lines = []
+        reasoning_lines = ["Failure description:"]
 
-        reasoning_lines.append("Failure description:")
-        seen = set()
         for s in failure_symptoms:
-            if s not in seen:
+            reasoning_lines.append(f"- {s}")
+
+        if failure_conditions:
+            reasoning_lines.append("\nConditions:")
+            for s in failure_conditions:
                 reasoning_lines.append(f"- {s}")
-                seen.add(s)
+
+        if failure_occurrences:
+            reasoning_lines.append("\nOccurrences:")
+            for s in failure_occurrences:
+                reasoning_lines.append(f"- {s}")
+
+        if failure_investigations:
+            reasoning_lines.append("\nInvestigations:")
+            for s in failure_investigations:
+                reasoning_lines.append(f"- {s}")
 
         if failure_effect:
-            reasoning_lines.append(f"- Failure effect: {failure_effect}")
+            reasoning_lines.append(f"\nFailure effect:\n- {failure_effect}")
 
         reasoning_lines.append("\nRoot cause:")
         reasoning_lines.append(root_cause)
 
-        if inferred_insight:
-            reasoning_lines.append(f"\nInsight:\n{inferred_insight}")
-
         reasoning_lines.append("\nSupporting evidence:")
-        seen = set()
-        for txt in rc_evidence_texts:
-            if txt not in seen:
-                reasoning_lines.append(f"- {txt}")
-                seen.add(txt)
-
-        if failure_actions:
-            reasoning_lines.append("\nRelated actions / workarounds:")
-            seen = set()
-            for act in failure_actions:
-                if act not in seen:
-                    reasoning_lines.append(f"- {act}")
-                    seen.add(act)
+        for ev in rc_evidence_items:
+            lvl = ev.get("assertion_level", "unknown")
+            reasoning_lines.append(f"- [{lvl}] {ev['text']}")
 
         reasoning_lines.append(f"\nConfidence: {confidence}")
 
-        reasoning_text = "\n".join(reasoning_lines)
-
         capsules.append({
-            "capsule_id": cause_id,
+            "capsule_id": capsule_id,
             "source_type": "8D",
             "product": product_name,
             "failure_id": failure_id,
@@ -135,17 +131,33 @@ def build_evidence_capsules(data: Dict) -> List[Dict]:
             "discipline": discipline,
             "confidence": confidence,
             "similarity_text": similarity_text,
-            "reasoning_text": reasoning_text,
+            "reasoning_text": "\n".join(reasoning_lines),
+
+            # 保留原子事实（为下一步 sentence-level 做准备）
             "root_cause_evidence": rc_evidence_items,
-            "failure_symptoms": failure_symptoms,
-            "failure_actions": failure_actions,
         })
 
     return capsules
 
 
+
 # =========================================================
-# 2) Create / Load Chroma Vector Store
+# 2) Capsule Store (GLOBAL KB)
+# =========================================================
+def load_capsule_store(path: Path) -> Dict[str, Dict]:
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_capsule_store(store: Dict[str, Dict], path: Path):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(store, f, indent=2, ensure_ascii=False)
+
+
+# =========================================================
+# 3) Vector Store (Chroma)
 # =========================================================
 def create_vector_store(embeddings, persist_dir: Path):
     return Chroma(
@@ -161,9 +173,11 @@ def add_capsules_to_chroma(vector_store, capsules):
     ids = []
 
     for cap in capsules:
+        cid = cap["capsule_id"]
+
         texts.append(cap["similarity_text"])
         metadatas.append({
-            "capsule_id": cap["capsule_id"],
+            "capsule_id": cid,
             "failure_id": cap["failure_id"],
             "failure_element": cap["failure_element"],
             "discipline": cap["discipline"],
@@ -171,17 +185,17 @@ def add_capsules_to_chroma(vector_store, capsules):
             "confidence": cap["confidence"],
             "product": cap["product"],
         })
-        ids.append(cap["capsule_id"])  # unique ID for each capsule
+        ids.append(cid)
 
     vector_store.add_texts(
         texts=texts,
         metadatas=metadatas,
-        ids=ids
+        ids=ids,
     )
 
 
 # =========================================================
-# 3) Similar Failure Search + Reasoning Display
+# 4) Similar Failure Search + Reasoning Display
 # =========================================================
 def search_similar_failures(
     vector_store,
@@ -197,34 +211,44 @@ def search_similar_failures(
     )
 
     for rank, d in enumerate(docs, start=1):
-        cid = d.metadata["capsule_id"]
-        cap = capsule_store[cid]
+        cid = d.metadata.get("capsule_id")
+        cap = capsule_store.get(cid)
 
-        print("=" * 90)
+        print("=" * 100)
         print(f"Rank {rank} | Capsule ID: {cid}")
-        print(">>> EMBEDDED TEXT (page_content):")
+        print("\n>>> EMBEDDED TEXT:")
         print(d.page_content)
+
+        if cap is None:
+            print("\n[WARN] Capsule not found in capsule_store")
+            print("Metadata:", d.metadata)
+            continue
+
         print("\n---- Reasoning text ----")
         print(cap["reasoning_text"])
 
-        print("=" * 90)
-
-        print(">>> METADATA:")
+        print("\n>>> METADATA:")
         print(d.metadata)
 
     return docs
 
 
 # =========================================================
-# 4) End-to-End Demo
+# 5) End-to-End Demo (FULL KB MODE)
 # =========================================================
 if __name__ == "__main__":
 
     # -------- Paths --------
-    json_path = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D620721025401.json")
+    json_path = Path(
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D6318110135R04.json"
+    )
+
     kb_dir = Path(
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\chroma_capsule_kb"
     )
+    kb_dir.mkdir(parents=True, exist_ok=True)
+
+    capsule_store_path = kb_dir / "capsule_store.json"
 
     # -------- Load 8D JSON --------
     with open(json_path, "r", encoding="utf-8") as f:
@@ -232,10 +256,15 @@ if __name__ == "__main__":
 
     # -------- Build capsules --------
     capsules = build_evidence_capsules(data)
-    print(f"[INFO] Generated {len(capsules)} evidence capsules")
+    print(f"[INFO] Generated {len(capsules)} capsules from this file")
 
-    # -------- Capsule store (for reasoning lookup) --------
-    capsule_store = {c["capsule_id"]: c for c in capsules}
+    # -------- Load + merge GLOBAL capsule store --------
+    capsule_store = load_capsule_store(capsule_store_path)
+    for c in capsules:
+        capsule_store[c["capsule_id"]] = c
+    save_capsule_store(capsule_store, capsule_store_path)
+
+    print(f"[INFO] Global capsule store size: {len(capsule_store)}")
 
     # -------- Embeddings --------
     embeddings = HuggingFaceEmbeddings(
@@ -245,12 +274,12 @@ if __name__ == "__main__":
     # -------- Vector store --------
     vector_store = create_vector_store(embeddings, kb_dir)
 
-    # Add capsules only once (comment out after first run if needed)
+    # -------- Add to Chroma (id-based, safe for re-run) --------
     add_capsules_to_chroma(vector_store, capsules)
-    print("[INFO] Capsules added to Chroma vector store")
+    print("[INFO] Capsules added to Chroma")
 
     # -------- Query --------
-    query = "PCB failure"
+    query = "show me the current failure"
     print("\n[QUERY]", query)
 
     filters = {

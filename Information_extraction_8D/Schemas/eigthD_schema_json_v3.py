@@ -3,16 +3,27 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from enum import Enum
 from typing import Any, Dict, Optional, Literal
-
+from Information_extraction_8D.Schemas.eightD_sentence_schema import SelectedSentence
 
 
 
 class TextEntity(BaseModel):
-
-    text: Optional[str]                     # exact copied text span
-    source_section: Optional[str]            # D2 / D3 / D4 / D5 / D6
-    id: Optional[str]                     # S1, S2, ...
-    entity_type: Optional[str]                # symptom | cause | action | observation | context
+    id: str                                   # sentence id, e.g. <fileID>_D4_S003
+    text: str                                 # exact copied sentence text
+    source_section: Literal["D2","D3","D4"]   # origin section
+    entity_type: Literal[
+        "symptom",
+        "condition",
+        "occurrence",
+        "investigation",
+        "root_cause_evidence"
+    ]
+    assertion_level: Literal[
+        "observed",
+        "confirmed",
+        "ruled_out",
+        "suspected"
+    ]
 
 
     
@@ -81,5 +92,5 @@ class EightDCase(BaseModel):
     system_name: Optional[str] = None
     failure: FailureChain
     sections: EightDSections
-    selected_sentences: Optional[Dict[str, Any]] = None
+    selected_sentences: Optional[List[SelectedSentence]] = None
 
