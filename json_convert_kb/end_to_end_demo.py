@@ -43,7 +43,7 @@ def build_evidence_capsules(data: Dict) -> List[Dict]:
             failure_conditions.append(text)
         elif etype == "occurrence":
             failure_occurrences.append(text)
-        elif etype == "root_cause_evidence":
+        elif etype == "investigation":
             failure_investigations.append(text)
 
     # -------- Root causes -> capsules --------
