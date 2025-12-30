@@ -3,27 +3,11 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from enum import Enum
 from typing import Any, Dict, Optional, Literal
-from Information_extraction_8D.Schemas.eightD_sentence_schema import SelectedSentence
+from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
 
 
 
-class TextEntity(BaseModel):
-    id: str                                   # sentence id, e.g. <fileID>_D4_S003
-    text: str                                 # exact copied sentence text
-    source_section: Literal["D2","D3","D4"]   # origin section
-    entity_type: Literal[
-        "symptom",
-        "condition",
-        "occurrence",
-        "investigation",
-        "root_cause_evidence"
-    ]
-    assertion_level: Literal[
-        "observed",
-        "confirmed",
-        "ruled_out",
-        "suspected"
-    ]
+
 
 
     
@@ -33,7 +17,7 @@ class CauseItem(BaseModel):
     failure_cause: Optional[str]  # WHY it happened
     failure_mechanism: Optional[str] = None # HOW it leads to failure
     discipline_type: Optional[Literal["HW", "ESW", "MCH", "Other"]]
-    supporting_entities: List[TextEntity] = Field(default_factory=list)
+    supporting_entities: List[SelectedSentence] = Field(default_factory=list)
     inferred_insight: Optional[str] = None
     confidence: Literal["high", "medium", "low"] = "medium"
 
@@ -56,7 +40,7 @@ class FailureChain(BaseModel):
     failure_element: Optional[str]  # e.g. PFC stage, DC-link
     failure_mode: Optional[str]     # what broke (MOSFET destroyed)
     failure_effect: Optional[str]   # system impact (DUT blew up)
-    supporting_entities: List[TextEntity] = Field(default_factory=list)
+    supporting_entities: List[SelectedSentence] = Field(default_factory=list)
     root_causes: List[CauseItem]
 
 

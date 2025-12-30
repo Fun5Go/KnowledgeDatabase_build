@@ -8,7 +8,7 @@ from docx import Document
 from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
+from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import Iteration1Output
 from langsmith import get_current_run_tree, traceable
 import os
 
@@ -157,7 +157,9 @@ def extract_iteration_2(data: dict) -> dict:
         f"[{s.get('source_section','?')}]"
         f"[{s.get('entity_type','?')}]"
         f"[{s.get('assertion_level','?')}] "
-        f"{s.get('text','')}"
+        f"{s.get('text','')} "
+        f"(faithful_score={s.get('faithful_score','?')}, "
+        f"type={s.get('faithful_type','?')})"
         for s in data.get("signals", [])
     )
     iteration_prompt_2 = ChatPromptTemplate.from_messages([

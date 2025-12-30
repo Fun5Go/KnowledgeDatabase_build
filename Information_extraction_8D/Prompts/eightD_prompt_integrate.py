@@ -1,5 +1,4 @@
 Prompt = """
-
 Read the following 8D content (D2 problem definition + D3 interim actions + D4 root cause analysis) as **one single combined engineering document**.
 Your task is to extract all technical failures and their validated root causes from the whole text. 
 --- D2 Raw ---

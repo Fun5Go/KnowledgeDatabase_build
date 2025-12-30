@@ -1,6 +1,6 @@
 iter_prompt_1 = """
 SELECT FACTUAL SENTENCES from the D2-D4 section in 8D report.
-These sentences will be used for a failure knowledge base and failure entity extraction
+These sentences will be used for a failure knowledge base construction.
 
 --------------------------------------------------
 WHAT TO SELECT
@@ -29,8 +29,14 @@ Select atomic factual sentences and assign ONE entity_type per sentence:
 
 5. "root_cause_evidence" 
    - Physical or logical evidence of a cause
-   - Manufacturing defects, soldering issues
+   - Electronics components linked to failure
    - Process deviations linked to failure
+
+Disambiguation rules:
+- "symptom" = what is wrong or abnormal (failure behavior), not why.
+- "investigation" = actions or checks performed, including findings that something is OK.
+- "root_cause_evidence" = physical or logical evidence pointing to a cause (damage, defect, deviation).
+- Do NOT classify checks or tests as root_cause_evidence unless they directly reveal damage or defects.
 
 --------------------------------------------------
 ASSERTION LEVEL
@@ -59,8 +65,16 @@ SENTENCE RULES
 - One sentence = one fact
 - Split sentences with multiple facts
 - Remove references to figures, tables, or manuals
-- Light rephrasing allowed only for clarity
 - Do not infer or summarize
+
+Light rephrasing is allowed ONLY to:
+- remove pronouns or references
+- normalize tense
+- simplify wording without adding or removing facts
+
+Light rephrasing MUST preserve the original meaning and scope.
+Do NOT add new information or causal interpretation.
+
 
 --------------------------------------------------
 OUTPUT FORMAT
@@ -72,10 +86,12 @@ Each item must follow this schema exactly:
 {{
   "selected_sentences": [
     {{
-      "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
       "text": "Concise factual sentence",
       "source_section": "D2 | D3 | D4",
+      "annotations":{{
+      "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
       "assertion_level": "observed | confirmed | ruled_out | suspected"
+      }}
     }}
   ]
 }}
@@ -137,6 +153,7 @@ For each root cause:
 - cause_level:
     One of: 'design', 'process', 'test' or 'component'
 - failure_cause:
+    Should be specific electronics, software or mechanical engineering terms
     Root cause of the failure (or null)
     Must be explicitly supported by signals
 - discipline_type:
@@ -168,8 +185,7 @@ SUPPORTING ENTITIES RULES
 - text MUST be copied EXACTLY from the selected sentence text
 - id MUST reference the original sentence id
 - source_section MUST match the original sentence
-- entity_type MUST be copied from the original sentence entity_type
-- assertion_level MUST be copied from the original sentence assertion_level
+- annotations information keep the original one
 
 ====================
 INPUT SIGNAL FORMAT
@@ -199,8 +215,12 @@ OUTPUT (STRICT JSON)
       "id": "",
       "text": "",
       "source_section": "D2 | D3 | D4",
-      "entity_type": "",
-      "assertion_level": ""
+      "annotations":{{
+      "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
+      "assertion_level": "observed | confirmed | ruled_out | suspected"
+      "faithful_score": 
+      "faithful_type": 
+      }}
     }}
   ],
   "root_causes": [
@@ -213,8 +233,12 @@ OUTPUT (STRICT JSON)
           "id": "",
           "text": "",
           "source_section": "D2 | D3 | D4",
-          "entity_type": "",
-          "assertion_level": ""
+          "annotations":{{
+          "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
+          "assertion_level": "observed | confirmed | ruled_out | suspected"
+          "faithful_score": ""
+          "faithful_type": ""
+          }}
         }}
       ],
       "inferred_insight": "",

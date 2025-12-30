@@ -6,25 +6,27 @@ from Information_extraction_8D.tools.doc_parser import extract_product
 # from Agents.main.llm import llm
 from Information_extraction_8D.Schemas.eigthD_schema_json_v3 import DocumentInfo,MaintenaceTag, EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureChain
 import os, re
-from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
+from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import Iteration1Output
 import copy
 from typing import List, Dict, Any
 from langsmith import traceable, get_current_run_tree
+from Information_extraction_8D.Evaluation.evaluation_tool import check_faithfulness
 
-def build_iteration2_input(iter1_output: dict) -> dict:
+def build_iteration2_input(iter1_output) -> dict:
     return {
         "signals": [
             {
                 "id": s.id,
                 "text": s.text,
-                "entity_type": s.entity_type,
-                "assertion_level": s.assertion_level,
+                "entity_type": s.annotations.entity_type,
+                "assertion_level": s.annotations.assertion_level,
                 "source_section": s.source_section,
+                "faithful_score": s.annotations.faithful_score,
+                "faithful_type": s.annotations.faithful_type
             }
             for s in iter1_output.selected_sentences
         ],
     }
-
 
 
 def assign_sentence_ids(items: List[Dict[str, Any]], doc_prefix: str) -> List[Dict[str, Any]]:
@@ -43,6 +45,40 @@ def assign_sentence_ids(items: List[Dict[str, Any]], doc_prefix: str) -> List[Di
         item.id = f"{doc_prefix}_{sec}_S{counters[sec]:03d}"
 
     return items
+
+
+def annotate_faithfulness_for_sentences(
+    selected_sentences: List[Any],
+    *,
+    d2_raw: str,
+    d3_raw: str,
+    d4_raw: str,
+) -> List[Any]:
+    """
+    Adds faithful_score & faithful_type into each selected_sentence.annotations
+    """
+
+    source_text = "\n".join([
+        d2_raw or "",
+        d3_raw or "",
+        d4_raw or "",
+    ])
+
+    for sent in selected_sentences:
+        # sent.text is the extracted atomic sentence
+        result = check_faithfulness(
+            sentence=sent.text,
+            source_text=source_text,
+        )
+
+        # --- ensure annotations exists ---
+        if getattr(sent, "annotations", None) is None:
+            sent.annotations = {}
+
+        sent.annotations.faithful_type = result["type"]
+        sent.annotations.faithful_score = result["score"]
+
+    return selected_sentences
 
 
 @traceable(name="8d-extraction-demo")
@@ -120,25 +156,280 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
             d6_section = D6Section(raw_context=d6_raw)
 
     print("LLM iteration 1:")
-    output_iter1 =  extract_iteration_1.invoke({
-            "data": {
-                "d2_raw": d2_raw or "",
-                "d3_raw": d3_raw or "",
-                "d4_raw": d4_raw or "",
-        }
-    })
+    # output_iter1 =  extract_iteration_1.invoke({
+    #         "data": {
+    #             "d2_raw": d2_raw or "",
+    #             "d3_raw": d3_raw or "",
+    #             "d4_raw": d4_raw or "",
+    #     }
+    # })
+    output_iter1 = {
+  "selected_sentences": [
+    {
+      "text": "The DUT blew up during the voltage dips/interrupt test.",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The test that destroyed the DUT was during a custom test (not a test as specified in EN 61000-4-11).",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "condition",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The following components were destroyed: Fuse (F100), PFC MOSFET (T101), DC-link filter capacitor (C108).",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The following voltage dip test destroyed another DUT.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The destroyed DUT had similar components that were destroyed: Fuse (F100), PFC MOSFET (T101).",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "Only C108 didn’t get destroyed this time.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The gate control circuit has been changed in order to improve EMC.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The gate circuit was reverted back to the previous ATPM 300W design.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The same custom test as mentioned above was performed on the DUT with the reverted components.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "This time the DUT didn’t blow up.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The gate signal and DC-link voltage are measured at the moment the DUT will be destroyed during the voltage dips test.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The input current is measured to detect when the overcurrent trip of the PSU is activated.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The current limit of the PSU is set to 3A (fuse will break at 4A).",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "condition",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "In both scope images it can be seen that the current rises to about 4A for a short time due to the inrush current when a voltage dip occurs.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "The current clips at about 4A due to the soft overcurrent limit from the PFC chip, which reduces the duty cycle of the PFC MOSFET gate signal.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "With only R104 = 220Ω, the gate signal doesn’t return to 0V.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    },
+    {
+      "text": "With all the other components assembled, the gate signal does return to approximately 0V.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed"
+      }
+    }
+  ]
+}
 
-    #output_iter1 = Iteration1Output(**output_iter1)
+    output_iter1 = Iteration1Output(**output_iter1)
     #Add ids to sentences
     output_iter1.selected_sentences = assign_sentence_ids(
     output_iter1.selected_sentences,
     doc_prefix=base_name
 )
+    output_iter1.selected_sentences = annotate_faithfulness_for_sentences(
+    output_iter1.selected_sentences,
+    d2_raw=d2_raw,
+    d3_raw=d3_raw,
+    d4_raw=d4_raw,
+) 
+    # print(output_iter1)
 
 
-    input_iter2 = build_iteration2_input(output_iter1)
-    print("Done!LLM iteration 2:")
-    output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
+    # input_iter2 = build_iteration2_input(output_iter1)
+    # print("Done!LLM iteration 2:")
+    # output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
+    output_iter2 = {
+  "system_name": "",
+  "failure_element": "power supply",
+  "failure_mode": "component destruction",
+  "failure_effect": "device blown up",
+  "failure_level": "sub_system",
+  "supporting_entities": [
+    {
+      "id": "8D6298190081R02_D2_S001",
+      "text": "The DUT blew up during the voltage dips/interrupt test.",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6298190081R02_D2_S003",
+      "text": "The following components were destroyed: Fuse (F100), PFC MOSFET (T101), DC-link filter capacitor (C108).",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6298190081R02_D4_S001",
+      "text": "The following voltage dip test destroyed another DUT.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6298190081R02_D4_S002",
+      "text": "The destroyed DUT had similar components that were destroyed: Fuse (F100), PFC MOSFET (T101).",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    }
+  ],
+  "root_causes": [
+    {
+      "cause_level": "design",
+      "failure_cause": "gate control circuit modification",
+      "discipline_type": "HW",
+      "supporting_entities": [
+        {
+          "id": "8D6298190081R02_D4_S004",
+          "text": "The gate control circuit has been changed in order to improve EMC.",
+          "source_section": "D4",
+          "annotations": {
+            "entity_type": "investigation",
+            "assertion_level": "observed",
+            "faithful_score": 100,
+            "faithful_type": "fuzzy"
+          }
+        },
+        {
+          "id": "8D6298190081R02_D4_S005",
+          "text": "The gate circuit was reverted back to the previous ATPM 300W design.",
+          "source_section": "D4",
+          "annotations": {
+            "entity_type": "investigation",
+            "assertion_level": "observed",
+            "faithful_score": 100,
+            "faithful_type": "fuzzy"
+          }
+        },
+        {
+          "id": "8D6298190081R02_D4_S006",
+          "text": "The same custom test as mentioned above was performed on the DUT with the reverted components.",
+          "source_section": "D4",
+          "annotations": {
+            "entity_type": "investigation",
+            "assertion_level": "observed",
+            "faithful_score": 100,
+            "faithful_type": "exact"
+          }
+        },
+        {
+          "id": "8D6298190081R02_D4_S007",
+          "text": "This time the DUT didn’t blow up.",
+          "source_section": "D4",
+          "annotations": {
+            "entity_type": "symptom",
+            "assertion_level": "observed",
+            "faithful_score": 100,
+            "faithful_type": "exact"
+          }
+        }
+      ],
+      "inferred_insight": "Destruction of power supply components occurred after gate control circuit modification; reverting to previous design prevented failure.",
+      "confidence": "high"
+    }
+  ]
+}
     system_name = output_iter2.get("system_name") or ""
     print("system name:",system_name)
 
