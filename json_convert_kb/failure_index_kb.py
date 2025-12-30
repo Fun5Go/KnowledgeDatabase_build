@@ -75,8 +75,7 @@ def ingest_failure_record(
         supporting_ids.append(s.id)
 
         # 入 sentence KB
-        sentence_kb.add(s)
-
+        sentence_kb.add(s, failure.get("failure_ID"))
     # 3) failure 状态评估（基于 D2）
     status = evaluate_failure(sentences)
 
@@ -112,12 +111,13 @@ class SentenceKB:
             embedding_function=self.embedder
         )
 
-    def add(self, sentence):
+    def add(self, sentence,failure_id: str):
         self.collection.add(
             ids=[sentence.id],
             documents=[sentence.text],
             metadatas=[{
                 "case_id": sentence.case_id,
+                "failure_id": failure_id, 
                 "source_section": sentence.source_section,
                 "entity_type": sentence.annotations.get("entity_type"),
                 "assertion_level": sentence.annotations.get("assertion_level"),
@@ -210,16 +210,19 @@ class FailureIndexKB:
 #   }
 # }
 
-KB_ROOT = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\kb"
-).resolve()
+BASE_DIR = Path(__file__).resolve().parent
+
+
+KB_ROOT = (BASE_DIR.parent / "kb").resolve()
 SENTENCE_KB_DIR = (KB_ROOT / "sentence_kb").resolve()
 FAILURE_INDEX_PATH = (KB_ROOT / "failure_index_kb.jsonl").resolve()
 # SENTENCE_KB_DIR.mkdir(parents=True, exist_ok=True)
 
-json_path = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D6298190081R02.json"
-)
+JSON_ROOT = (BASE_DIR.parent / "eightD_json_raw").resolve()
+
+json_path = (JSON_ROOT / "8D6298190081R02.json").resolve()
+
+# Path(r"..\eightD_json_raw\8D6298190081R02.json")
 
 # -------- Load 8D JSON --------
 with open(json_path, "r", encoding="utf-8") as f:

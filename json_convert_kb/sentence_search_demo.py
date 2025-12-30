@@ -7,10 +7,11 @@ from chromadb.utils import embedding_functions
 # ======================
 # Config
 # ======================
-KB_ROOT = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\kb"
-).resolve()
 
+BASE_DIR = Path(__file__).resolve().parent
+
+
+KB_ROOT = (BASE_DIR.parent / "kb").resolve()
 SENTENCE_KB_DIR = (KB_ROOT / "sentence_kb").resolve()
 FAILURE_INDEX_PATH = (KB_ROOT / "failure_index_kb.jsonl").resolve()
 
