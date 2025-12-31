@@ -12,12 +12,12 @@ Select atomic factual sentences and assign ONE entity_type per sentence:
    - Observable failure behavior
    - What does not work or behaves incorrectly
 
-2.  "condition"
+2.  "condition" 
    - MUST describe an external operational or environmental state
-   - Temperature, power cycling, stress, usage state.
+   - Temperature, humidity, stress, usage state.
    - MUST describe an external state, not software logic or system behavior
 
-3.  "occurrence"
+3.  "occurrence" 
    - Frequency or probability of failure
    - Intermittent vs permanent behavior
    - Ratios such as 1/400x
@@ -26,6 +26,7 @@ Select atomic factual sentences and assign ONE entity_type per sentence:
    - Diagnostic findings
    - What was investigated and confirmed working
    - What was ruled out as a cause
+   - e.g.: "test", "investigate", "check"
 
 5. "root_cause_evidence" 
    - Physical or logical evidence of a cause
@@ -34,8 +35,8 @@ Select atomic factual sentences and assign ONE entity_type per sentence:
 
 Disambiguation rules:
 - "symptom" = what is wrong or abnormal (failure behavior), not why.
-- "investigation" = actions or checks performed, including findings that something is OK.
-- "root_cause_evidence" = physical or logical evidence pointing to a cause (damage, defect, deviation).
+- "investigation" = actions or checks performed, including findings that something is OK or not the cause.
+- "root_cause_evidence" = physical or logical evidence pointing to a cause .
 - Do NOT classify checks or tests as root_cause_evidence unless they directly reveal damage or defects.
 
 --------------------------------------------------
@@ -147,15 +148,14 @@ Rules:
 ====================
 ROOT CAUSE RULES (D4 focused)
 ====================
-Multiple root causes are allowed.
+!Multiple root causes are allowed.!
 
 For each root cause:
 - cause_level:
     One of: 'design', 'process', 'test' or 'component'
 - failure_cause:
     Should be specific electronics, software or mechanical engineering terms
-    Root cause of the failure (or null)
-    Must be explicitly supported by signals
+    Root cause directly leads to the failure mode
 - discipline_type:
     One of: "HW", "ESW", "MCH", "Other"
 - inferred_insight:
@@ -175,7 +175,6 @@ OUTPUT REFINEMENT RULES (MANDATORY)
 - failure_mode, failure_effect, and failure_cause MUST be short engineering labels
 - Use noun phrases, NOT full sentences
 - Length: typically 2–6 words
-- Do NOT include verbs like "is", "was", "due to", "because", "caused by"
 - Do NOT restate evidence text
 
 ====================

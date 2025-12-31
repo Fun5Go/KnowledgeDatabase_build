@@ -15,7 +15,7 @@ class CauseItem(BaseModel):
     cause_ID: Optional[str] = None
     cause_level: Literal["design","process","test","component"]
     failure_cause: Optional[str]  # WHY it happened
-    failure_mechanism: Optional[str] = None # HOW it leads to failure
+    cause_parent: Optional[str] = None # The cause chain
     discipline_type: Optional[Literal["HW", "ESW", "MCH", "Other"]]
     supporting_entities: List[SelectedSentence] = Field(default_factory=list)
     inferred_insight: Optional[str] = None

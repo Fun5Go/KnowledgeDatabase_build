@@ -18,6 +18,37 @@ FAILURE_INDEX_PATH = (KB_ROOT / "failure_index_kb.jsonl").resolve()
 TOP_K = 5
 MIN_FAITHFUL = 90
 
+# Filter
+def build_where_filter(
+    min_faithful: int,
+    sentence_role: str | None = None,
+    cause_id: str | None = None,
+):
+    conditions = []
+
+    # faithful_score >= min_faithful
+    conditions.append({
+        "faithful_score": {"$gte": min_faithful}
+    })
+
+    if sentence_role:
+        conditions.append({
+            "sentence_role": sentence_role
+        })
+
+    if cause_id:
+        conditions.append({
+            "cause_id": cause_id
+        })
+
+    #Chroma: only one operator
+    if len(conditions) == 1:
+        return conditions[0]
+
+    return {
+        "$and": conditions
+    }
+
 
 # ======================
 # Load Failure Index KB
@@ -55,9 +86,18 @@ def load_sentence_kb(persist_dir):
 # ======================
 # Search Demo
 # ======================
-def search(query: str):
+def search(
+    query: str,
+    sentence_role: str | None = None,
+    cause_id: str | None = None,
+):
     print("=" * 60)
     print("QUERY:", query)
+    print("FILTERS:", {
+        "sentence_role": sentence_role,
+        "cause_id": cause_id,
+        "min_faithful": MIN_FAITHFUL
+    })
     print("=" * 60)
 
     # 1) Load KBs
@@ -65,11 +105,17 @@ def search(query: str):
     print("Total sentences in KB:", collection.count())
     failure_index = load_failure_index(FAILURE_INDEX_PATH)
 
-    # 2) Sentence-level similarity search
+    # 2) Sentence-level similarity search with filters
+    where_filter = build_where_filter(
+        min_faithful=MIN_FAITHFUL,
+        sentence_role=sentence_role,
+        cause_id=cause_id,
+    )
+
     results = collection.query(
         query_texts=[query],
         n_results=TOP_K,
-        where={"faithful_score": {"$gte": MIN_FAITHFUL}}
+        where=where_filter
     )
 
     ids = results.get("ids", [[]])[0]
@@ -96,8 +142,12 @@ def search(query: str):
         print("Distance    :", round(dist, 4))
         print("Case ID     :", meta.get("case_id"))
         print("Section     :", meta.get("source_section"))
+        print("Role        :", meta.get("sentence_role"))
         print("Assertion   :", meta.get("assertion_level"))
         print("Faithful    :", meta.get("faithful_score"))
+
+        if meta.get("cause_id"):
+            print("Cause ID    :", meta.get("cause_id"))
 
         if failure:
             print("→ Failure ID:", failure["failure_id"])
@@ -114,5 +164,7 @@ def search(query: str):
 # Main
 # ======================
 if __name__ == "__main__":
-    query = "device blew up during voltage dip test"
-    search(query)
+    search(
+        "the cause related to capacitor component",
+        sentence_role="cause_sentence"
+    )
