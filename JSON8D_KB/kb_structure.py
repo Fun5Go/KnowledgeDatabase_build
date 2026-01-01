@@ -5,43 +5,174 @@ import chromadb
 from chromadb.utils import embedding_functions
 from pathlib import Path
 import json
+from typing import Optional
+from dataclasses import asdict
 
 
+# =========================================================
+# Data models
+# =========================================================
 
-# ------- Failure knowledge base structrue --------
+@dataclass
+class Sentence:
+    id: str
+    text: str
+    source_section: str
+    case_id: str
+    annotations: Dict[str, Any]
+
+
 @dataclass
 class Failure:
     failure_id: str
     failure_mode: str
     failure_element: str
-    failure_effect: str | None
-    product: str | None
-    status: str                      # supported / hypothesis / reviewed
+    failure_effect: Optional[str]
+    product: Optional[str]
+    status: str
     supporting_sentence_ids: List[str]
-    cause_ids: List[str]             # parent ID
+    cause_ids: List[str]
 
 
+@dataclass
+class Cause:
+    cause_id: str
+    failure_id: str
+    failure_mode: str
+    failure_element: str
+    failure_effect: Optional[str]
+    root_cause: str
+    cause_level: str
+    discipline: str
+    confidence: str
+    supporting_sentence_ids: List[str]
 
-class FailureKB:
+
+# =========================================================
+# Failure evaluation (used during ingest)
+# =========================================================
+
+def evaluate_failure(
+    sentences: List[Sentence],
+    min_faithful: int = 90,
+    allow_levels=("observed", "confirmed"),
+) -> str:
+    """
+    Decide whether a failure is supported or hypothesis
+    based ONLY on failure-level sentences.
+    """
+    for s in sentences:
+        ann = s.annotations or {}
+        if s.source_section != "D2":
+            continue
+        if ann.get("assertion_level") in allow_levels and int(
+            ann.get("faithful_score", 0)
+        ) >= min_faithful:
+            return "supported"
+    return "hypothesis"
+
+
+# =========================================================
+# Sentence KB (facts only)
+# =========================================================
+
+class SentenceKB:
     def __init__(self, persist_dir: Path):
-        self.persist_dir = persist_dir
+        self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
 
-        self.client = chromadb.PersistentClient(path=str(persist_dir))
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
 
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-MiniLM-L6-v2"
         )
 
         self.collection = self.client.get_or_create_collection(
+            name="sentences",
+            embedding_function=self.embedder,
+        )
+
+    def add(
+        self,
+        sentence: Sentence,
+        failure_id: str,
+        sentence_role: str,
+        cause_id: Optional[str] = None,
+    ):
+        self.collection.add(
+            ids=[sentence.id],
+            documents=[sentence.text],
+            metadatas=[{
+                "case_id": sentence.case_id,
+                "failure_id": failure_id,
+                "cause_id": cause_id or "",
+                "sentence_role": sentence_role,
+                "source_section": sentence.source_section,
+                "entity_type": sentence.annotations.get("entity_type"),
+                "assertion_level": sentence.annotations.get("assertion_level"),
+                "faithful_score": int(sentence.annotations.get("faithful_score", 0)),
+            }],
+        )
+
+    def get_by_ids(self, ids: List[str]) -> List[Sentence]:
+        if not ids:
+            return []
+
+        res = self.collection.get(
+            ids=ids,
+            include=["documents", "metadatas"],
+        )
+
+        sentences = []
+        for sid, text, meta in zip(
+            res["ids"], res["documents"], res["metadatas"]
+        ):
+            sentences.append(
+                Sentence(
+                    id=sid,
+                    text=text,
+                    source_section=meta.get("source_section", ""),
+                    case_id=meta.get("case_id", ""),
+                    annotations={
+                        "entity_type": meta.get("entity_type"),
+                        "assertion_level": meta.get("assertion_level"),
+                        "faithful_score": meta.get("faithful_score"),
+                    },
+                )
+            )
+        return sentences
+
+
+# =========================================================
+# Failure KB (entry gate)
+# =========================================================
+
+class FailureKB:
+    def __init__(self, persist_dir: Path):
+        self.persist_dir = Path(persist_dir)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        # -------- persistent store --------
+        self.store_path = self.persist_dir / "failure_store.json"
+        self.store: Dict[str, Dict[str, Any]] = {}
+        if self.store_path.exists():
+            with open(self.store_path, "r", encoding="utf-8") as f:
+                self.store = json.load(f)
+
+        # -------- vector store --------
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
+        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+        self.collection = self.client.get_or_create_collection(
             name="failure_kb",
             embedding_function=self.embedder,
         )
 
-        self.store: dict[str, dict] = {}
-
     def add(self, failure: Failure):
-        self.store[failure.failure_id] = failure.__dict__
+        self.store[failure.failure_id] = asdict(failure)
+        with open(self.store_path, "w", encoding="utf-8") as f:
+            json.dump(self.store, f, indent=2, ensure_ascii=False)
 
         embed_text = "\n".join([
             f"Failure mode: {failure.failure_mode}",
@@ -57,35 +188,35 @@ class FailureKB:
                 "failure_element": failure.failure_element,
                 "status": failure.status,
                 "product": failure.product or "",
-            }]
+            }],
         )
 
-    def search(self, query: str, k=3):
-        return self.collection.query(
+    def search(self, query: str, k: int = 3) -> List[str]:
+        res = self.collection.query(
             query_texts=[query],
             n_results=k,
         )
-    
+        return res["ids"][0] if res["ids"] else []
 
-#----------- Cause knowledge base structure ----------
-@dataclass
-class Cause:
-    cause_id: str
-    failure_id: str
-    failure_mode: str
-    failure_element: str
-    failure_effect: str | None
 
-    root_cause: str
-    cause_level: str
-    discipline: str
-    confidence: str
-
-    supporting_sentence_ids: List[str]
+# =========================================================
+# Cause KB (strictly under failure)
+# =========================================================
 
 class CauseKB:
     def __init__(self, persist_dir: Path):
-        self.client = chromadb.PersistentClient(path=str(persist_dir))
+        self.persist_dir = Path(persist_dir)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        # -------- persistent store --------
+        self.store_path = self.persist_dir / "cause_store.json"
+        self.store: Dict[str, Dict[str, Any]] = {}
+        if self.store_path.exists():
+            with open(self.store_path, "r", encoding="utf-8") as f:
+                self.store = json.load(f)
+
+        # -------- vector store --------
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-MiniLM-L6-v2"
         )
@@ -94,32 +225,134 @@ class CauseKB:
             embedding_function=self.embedder,
         )
 
-        self.store: dict[str, dict] = {}
-
     def add(self, cause: Cause):
-        self.store[cause.cause_id] = cause.__dict__
+        self.store[cause.cause_id] = asdict(cause)
+        with open(self.store_path, "w", encoding="utf-8") as f:
+            json.dump(self.store, f, indent=2, ensure_ascii=False)
 
-        similarity_text = "\n".join([
+        embed_text = "\n".join([
             f"Failure mode: {cause.failure_mode}",
             f"Failure element: {cause.failure_element}",
-            f"Failure effect: {cause.failure_effect or ''}",
             f"Root cause: {cause.root_cause}",
         ])
 
         self.collection.add(
             ids=[cause.cause_id],
-            documents=[similarity_text],
+            documents=[embed_text],
             metadatas=[{
                 "failure_id": cause.failure_id,
                 "discipline": cause.discipline,
                 "cause_level": cause.cause_level,
                 "confidence": cause.confidence,
-            }]
+            }],
         )
 
-    def search_under_failure(self, query: str, failure_id: str, k=5):
-        return self.collection.query(
+    def search_under_failure(
+        self,
+        query: str,
+        failure_id: str,
+        k: int = 5,
+    ) -> List[str]:
+        res = self.collection.query(
             query_texts=[query],
             n_results=k,
-            where={"failure_id": failure_id}
+            where={"failure_id": failure_id},
         )
+        return res["ids"][0] if res["ids"] else []
+
+@dataclass
+class Sentence:
+    id: str
+    text: str
+    source_section: str
+    annotations: Dict[str, Any]
+    case_id: str
+
+
+class SentenceKB:
+    def __init__(self, persist_dir):
+        self.persist_dir = Path(persist_dir).resolve()
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
+
+        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+
+        self.collection = self.client.get_or_create_collection(
+            name="sentences",
+            embedding_function=self.embedder,
+        )
+
+    def add(
+        self,
+        sentence: Sentence,
+        failure_id: str,
+        sentence_role: str,
+        cause_id: str | None = None,
+    ):
+        self.collection.add(
+            ids=[sentence.id],
+            documents=[sentence.text],
+            metadatas=[
+                {
+                    "case_id": sentence.case_id,
+                    "failure_id": failure_id,
+                    "cause_id": cause_id or "",
+                    "sentence_role": sentence_role,
+                    "source_section": sentence.source_section,
+                    "entity_type": sentence.annotations.get("entity_type"),
+                    "assertion_level": sentence.annotations.get("assertion_level"),
+                    "faithful_score": int(
+                        sentence.annotations.get("faithful_score", 0)
+                    ),
+                }
+            ],
+        )
+    def get_by_ids(self, ids: list[str]):
+        """
+        Fetch Sentence objects by IDs (for failure / cause evaluation).
+        """
+        if not ids:
+            return []
+
+        res = self.collection.get(
+            ids=ids,
+            include=["documents", "metadatas"]
+        )
+
+        sentences = []
+        for sid, text, meta in zip(
+            res["ids"], res["documents"], res["metadatas"]
+        ):
+            sentences.append(
+                Sentence(
+                    id=sid,
+                    text=text,
+                    source_section=meta.get("source_section", ""),
+                    case_id=meta.get("case_id", ""),
+                    annotations={
+                        "assertion_level": meta.get("assertion_level"),
+                        "faithful_score": meta.get("faithful_score"),
+                        "entity_type": meta.get("entity_type"),
+                    },
+                )
+            )
+        return sentences
+
+
+def evaluate_failure(
+    sentences: List[Sentence],
+    min_faithful: int = 90,
+    allow_levels=("observed", "confirmed"),
+) -> str:
+    for s in sentences:
+        if s.source_section != "D2":
+            continue
+        ann = s.annotations or {}
+        if ann.get("assertion_level") in allow_levels and int(
+            ann.get("faithful_score", 0)
+        ) >= min_faithful:
+            return "supported"
+    return "hypothesis"
