@@ -1,8 +1,10 @@
 from langchain.tools import tool
 from Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt, D4_prompt
 from Information_extraction_8D.tools.doc_parser import safe_json
+
 from Information_extraction_8D.Prompts.eightD_prompt_integrate import Prompt
-from Information_extraction_8D.Prompts.eightD_prompt_iteration import iter_prompt_1, iter_prompt_2
+from Information_extraction_8D.Prompts.eightD_prompt_iteration import iter_prompt_1
+from Information_extraction_8D.Prompts.eightD_prompt_iteration2 import iter_prompt_2
 from Information_extraction_8D.main.llm import get_llm_backend
 from docx import Document
 from typing import Optional, List, Literal
@@ -128,13 +130,13 @@ def extract_iteration_1(data: dict) -> dict:
 def extract_iteration_2(data: dict) -> dict:
     """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
     llm = get_llm_backend(
-        backend="local",
-        model="llama3.1:8b",
-        temperature=0,
-        # backend="openai",
-        # model="azure/gpt-4.1",
-        # json_mode=True,
+        # backend="local",
+        # model="llama3.1:8b",
         # temperature=0,
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True,
+        temperature=0,
     )
 
     iteration_system_2 = """

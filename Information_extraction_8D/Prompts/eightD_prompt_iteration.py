@@ -91,7 +91,7 @@ Each item must follow this schema exactly:
       "source_section": "D2 | D3 | D4",
       "annotations":{{
       "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-      "assertion_level": "observed | confirmed | ruled_out | suspected"
+      "assertion_level": "observed | confirmed | ruled_out | suspected",
       }}
     }}
   ]

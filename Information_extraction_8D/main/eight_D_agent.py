@@ -156,16 +156,273 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
             d6_section = D6Section(raw_context=d6_raw)
 
     print("LLM iteration 1:")
-    output_iter1 =  extract_iteration_1.invoke({
-            "data": {
-                "d2_raw": d2_raw or "",
-                "d3_raw": d3_raw or "",
-                "d4_raw": d4_raw or "",
-        }
-    })
+    # output_iter1 =  extract_iteration_1.invoke({
+    #         "data": {
+    #             "d2_raw": d2_raw or "",
+    #             "d3_raw": d3_raw or "",
+    #             "d4_raw": d4_raw or "",
+    #     }
+    # })
+    output_iter1 = {
+  "selected_sentences": [
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S001",
+      "text": "Prins has reported to AME that they see failures in the field where the R131 resistor on the ignition circuit breaks.",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S002",
+      "text": "This occurs at installation and leads to a non-functional product.",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S003",
+      "text": "In May 2024, Prins indicated that they saw several failures in the field on AFC 2.2 products.",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "occurrence",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S004",
+      "text": "Investigation at AME showed that on these products resistor R131 was broken.",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "symptom",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S005",
+      "text": "The rest of this document shows the follow-up on this.",
+      "source_section": "D2",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D3_S001",
+      "text": "It only fails in specific circumstances by installing the product.",
+      "source_section": "D3",
+      "annotations": {
+        "entity_type": "condition",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D3_S002",
+      "text": "Prins is able to control the fails in the field, which is currently <1%.",
+      "source_section": "D3",
+      "annotations": {
+        "entity_type": "occurrence",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S001",
+      "text": "The ignition resistor R131 breaks due to an overvoltage spike on the IGNITION(0) input on the AFC 2.2, which is caused by the ignition coil inside the car.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "root_cause_evidence",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S002",
+      "text": "When the ignition coil ignited the fuel inside the engine, a large voltage spike is created by the ignition coil.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "condition",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S003",
+      "text": "Some of the voltage created by the ignition coil can be seen back onto the IGNITION(0) input on the AFC 2.2.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S004",
+      "text": "The ignition pulse from the car was measured.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S005",
+      "text": "Without the AFC 2.2 connected, the pulse on the ignition is about 400V.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "condition",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S006",
+      "text": "With the AFC 2.2 connected, the voltage is clamped to about 75V and the current flowing into the IGNTION(0) input of the AFC 2.2 reaches 6.5A.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "condition",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S007",
+      "text": "The power that needs to be dissipated by R131 will be: 6.5A*6.5A*2.2Ω = 92.95W for about 13.5us.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S008",
+      "text": "The current resistor on the AFC 2.2 has a 1218 package.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S009",
+      "text": "This resistor can dissipate a power of 30W for 10us.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S010",
+      "text": "Which is too low for the measured pulse inside the car, especially since the pulse slowly ramps down to 0A, meaning that some margin should be taken into account.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "root_cause_evidence",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S011",
+      "text": "D116 often broke down in the AFC 2.2 due to the same voltage pulse.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "root_cause_evidence",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S012",
+      "text": "D116 should block the voltage clamped by D115.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S013",
+      "text": "D116 should be able to block a voltage of max 75V.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S014",
+      "text": "The voltage rating of D116 & D113 is only 30V.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S015",
+      "text": "D113 seems to not break down.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S016",
+      "text": "D113 should definitely also be updated to a higher voltage rated variant.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    }
+  ]
+}
 
 
-    #output_iter1 = Iteration1Output(**output_iter1)
+    output_iter1 = Iteration1Output(**output_iter1)
     #Add ids to sentences
     output_iter1.selected_sentences = assign_sentence_ids(
     output_iter1.selected_sentences,

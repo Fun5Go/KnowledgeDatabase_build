@@ -1,84 +1,128 @@
 
-iter_prompt_2 = """
+iter_prompt_2= """
 Task: Organize failure-related and cause-related information from extracted text signals.
 
 Primary goal:
 - Identify ONE distinct technical failure
-- Select the potential valuable signal sentence to identify the failure causes
-- NOT to decide the final true root cause
+- Preserve potentially valuable cause-related information
+- NOT to determine the final true root cause
 
-The purpose of this task is information preservation, not final judgment.
+This task is for information preservation and structuring, not final judgment.
 
 ====================
 GENERAL PRINCIPLES
 ====================
-- Prefer including potentially relevant signals over excluding them
-- Root causes in this task represent cause-related information clusters, NOT final conclusions
+- Prefer inclusion over exclusion
+- Multiple hypotheses and alternative cause paths are encouraged
+- Do NOT over-integrate or over-conclude
 
 ====================
-FAILURE RULES (D2 / D3 focused)
+FAILURE RULES (D2 / D3 focused, DFMEA-aligned)
 ====================
+
+Failure definition:
+- A failure describes WHAT went wrong: a loss, degradation, or abnormal execution of an intended function.
+- Failures describe functional behavior, NOT causes, tests, or investigations.
+
 - system_name:
     ONE global system name (string or "")
+
 - failure_element:
-    Functional system element or subsystem
-    (e.g. "power supply", "motor drive", "PCB")
+    Functional system element, component group, or subsystem
+    (e.g. "power supply", "motor drive", "input protection circuit")
+
 - failure_mode:
-    Operational malfunction during use
-    (e.g. "short circuit", "no start", "intermittent operation")
+    Short engineering noun phrase describing the functional failure mode
+    (2–6 words, no full sentences)
+    Examples:
+        - "no output voltage"
+        - "unexpected shutdown"
+        - "overcurrent during operation"
+
+    NOT allowed:
+        - test names or procedures
+        - investigation activities
+        - pure damage descriptions without functional meaning
+
 - failure_effect:
-    Observable consequence of the failure (or "")
+    Observable consequence resulting from the failure mode
+    (system impact, damage, or test outcome)
+    Use "" if not explicitly stated.
+
 - failure_level:
     One of: "system", "sub_system", "process"
 
 Rules:
-- Failure-related information must be supported mainly by signals with:
+- Failure-related information MUST be supported mainly by signals with:
     entity_type = symptom OR occurrence
-- Do NOT infer failure mode or effect beyond what is explicitly stated
-- If multiple formulations exist, choose the most general one
+- Damage or destruction statements (e.g. "burnt component")
+  SHOULD be treated as failure_effect unless a functional loss is stated
+- Test setups and investigations MUST NOT define failure_mode
+- If multiple descriptions exist, select the most general functional one
 
 ====================
-ROOT CAUSE RULES (D4 focused)
+ROOT CAUSE RULES (D4 focused, FMEA-aligned)
 ====================
-IMPORTANT:
-- root_causes are NOT final conclusions
-- They represent organized collections of cause-related information
-- Multiple alternative or progressive cause paths are ENCOURAGED
+
+Definition:
+- Root causes represent suspected cause mechanisms, conditions, or contributing factors
+- They are FMEA-style "Potential Cause / Mechanism", NOT final conclusions
+
+General rules:
+- Multiple, parallel, or layered cause paths are VALID
+
 
 For each root cause:
 - cause_level:
-    One of: "design", "process", "component", "software", "test_condition", "unknown"
+    One of:
+        "design"         (architecture, protection concept, margins)
+        "component"      (parts, materials, ratings)
+        "process"        (manufacturing, assembly, configuration)
+        "software"       (logic, timing, control)
+        "test_condition" (stress, misuse, environment, deviations)
+        "unknown"
+
 - failure_cause:
-    Short engineering label describing the suspected cause mechanism
+    Short engineering noun phrase describing the suspected cause mechanism
+    (2–6 words, no full sentences)
+    Examples:
+        - "insufficient input protection"
+        - "excessive voltage stress"
+        - "improper test setup"
+
 - discipline_type:
     One of: "HW", "ESW", "MCH", "Other"
--cause_parent:
-    ID of the parent cause (if any)
-    Should be a chain relation: 
-    General example: "component cause: capacitor/ resistor" -> "design cause: input protection not implemented" 
+
+- cause_parent:
+    ID of the parent cause, if applicable
+    Used to form causal chains
+    (e.g. test condition → electrical stress → component damage)
+
 - inferred_insight:
-    MAY summarize relationships between signals
-    MAY describe progressive or layered relationships
-        (e.g. test condition → electrical stress → component damage)
+    OPTIONAL.
+    May summarize relationships between causes or signals
+    MUST NOT assert certainty or final judgment
+
 - confidence:
     low | medium | high
+    Based on signal strength and assertion levels
 
 Rules:
-- Root causes must be supported mainly by signals with:
+- Root causes MUST be supported mainly by signals with:
     entity_type = investigation OR root_cause_evidence
+- Condition-based descriptions (usage, environment, test setup)
+  are valid root causes even without a detailed physical mechanism
 - Signals with assertion_level = suspected represent hypotheses only
-- Do NOT collapse multiple hypotheses into one unless explicitly stated
-
-Quantity guidance:
-- If cause-related signals exist, generate 1–3 root_causes
-- Even partial, competing, or intermediate explanations are valid
+- Do NOT merge distinct hypotheses unless explicitly stated
+- Prevention controls, detection methods, and actions
+  MUST NOT be modeled as failure modes or failure causes
 
 ====================
 OUTPUT REFINEMENT RULES (MANDATORY)
 ====================
 - failure_mode, failure_effect, and failure_cause MUST be:
     - short engineering noun phrases
-    - typically 2–6 words
+    - concise, non-redundant
 - Do NOT restate evidence text
 - Do NOT write full sentences as labels
 
@@ -95,10 +139,10 @@ SUPPORTING ENTITIES RULES
 SIGNAL SELECTION GUIDANCE
 ====================
 Include signals if they:
-- describe abnormal conditions, deviations, or stress factors
-- report measurements, comparisons, or investigations
-- mention test setups, test deviations, or environmental conditions
-- express hypotheses, suspicions, or possible explanations
+- describe abnormal behavior, damage, or deviations
+- report measurements, investigations, or comparisons
+- describe test conditions or environmental stress
+- express hypotheses or possible explanations
 
 Exclusion should be conservative.
 
@@ -124,7 +168,7 @@ OUTPUT (STRICT JSON)
   "failure_element": "",
   "failure_mode": "",
   "failure_effect": "",
-  "failure_level": "sub_system",
+  "failure_level": "",
   "supporting_entities": [
     {{
       "id": "",
@@ -132,9 +176,9 @@ OUTPUT (STRICT JSON)
       "source_section": "D2 | D3 | D4",
       "annotations":{{
       "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-      "assertion_level": "observed | confirmed | ruled_out | suspected"
-      "faithful_score": 
-      "faithful_type": 
+      "assertion_level": "observed | confirmed | ruled_out | suspected",
+      "faithful_score": ,
+      "faithful_type": ,
       }}
     }}
   ],
@@ -143,6 +187,7 @@ OUTPUT (STRICT JSON)
       "cause_level": "design | process | component | software | test_condition | unknown",
       "failure_cause": "",
       "discipline_type": "HW | ESW | MCH | Other",
+      "cause_parent": "",
       "supporting_entities": [
         {{
           "id": "",
@@ -150,15 +195,16 @@ OUTPUT (STRICT JSON)
           "source_section": "D2 | D3 | D4",
           "annotations":{{
           "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-          "assertion_level": "observed | confirmed | ruled_out | suspected"
-          "faithful_score": ""
-          "faithful_type": ""
+          "assertion_level": "observed | confirmed | ruled_out | suspected",
+          "faithful_score": "",
+          "faithful_type": "",
           }}
         }}
       ],
       "inferred_insight": "",
-      "confidence": "low | medium | high"
+      "confidence": "low | medium | high",
     }}
   ]
 }}
 """
+#- Partial or intermediate causes are preferred over forced completeness

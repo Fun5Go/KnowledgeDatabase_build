@@ -13,7 +13,14 @@ from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import Selected
     
 class CauseItem(BaseModel):   
     cause_ID: Optional[str] = None
-    cause_level: Literal["design","process","test","component"]
+    cause_level: Literal[
+    "design",
+    "process",
+    "component",
+    "software",
+    "test_condition",
+    "unknown"
+]
     failure_cause: Optional[str]  # WHY it happened
     cause_parent: Optional[str] = None # The cause chain
     discipline_type: Optional[Literal["HW", "ESW", "MCH", "Other"]]
@@ -38,8 +45,8 @@ class FailureChain(BaseModel):
     failure_ID: Optional[str]
     failure_level: Literal["system","sub_system","component"]
     failure_element: Optional[str]  # e.g. PFC stage, DC-link
-    failure_mode: Optional[str]     # what broke (MOSFET destroyed)
-    failure_effect: Optional[str]   # system impact (DUT blew up)
+    failure_mode: Optional[str]     # functional failure (e.g. "no output", "overcurrent")
+    failure_effect: Optional[str]   # observable impact or damage (e.g. "MOSFET destroyed")
     supporting_entities: List[SelectedSentence] = Field(default_factory=list)
     root_causes: List[CauseItem]
 
