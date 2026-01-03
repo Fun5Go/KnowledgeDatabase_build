@@ -1,21 +1,89 @@
-# Core LLM & embeddings
-openai
-tiktoken
+# =========================
+# Core LLM & tokenization
+# =========================
+openai==2.14.0
+tiktoken==0.12.0
 
-# RAG orchestration
-langchain
-langchain-community
-langchain-openai
+# (Optional) Local LLM runtime client
+ollama==0.6.1
 
+# =========================
+# RAG orchestration / graph
+# =========================
+langchain==1.2.0
+langchain-core==1.2.5
+langchain-community==0.4.1
+langchain-openai==1.1.6
+
+# Helpful LangChain extras (present in your env)
+langchain-text-splitters==1.1.0
+langchain-chroma==1.1.0
+langchain-huggingface==1.2.0
+langchain-ollama==1.0.1
+
+# Agent/Workflow orchestration (present in your env)
+langgraph==1.0.5
+langgraph-checkpoint==3.0.1
+langgraph-prebuilt==1.0.5
+langgraph-sdk==0.3.1
+
+# Observability / eval (present in your env)
+langsmith==0.5.0
+
+# =========================
+# Embeddings / rerank / NLP
+# =========================
+sentence-transformers==5.2.0
+transformers==4.57.3
+tokenizers==0.22.1
+huggingface-hub==0.36.0
+safetensors==0.7.0
+
+# ML stack (used by sentence-transformers / local inference)
+torch==2.9.1
+numpy==2.4.0
+scikit-learn==1.8.0
+scipy==1.16.3
+
+# (Optional) classical text processing
+nltk==3.9.2
+regex==2025.11.3
+RapidFuzz==3.14.3
+langdetect==1.0.9
+
+# =========================
 # Vector database
-chromadb
+# =========================
+chromadb==1.4.0
+# Chroma deps frequently needed in deployments (present in your env)
+onnxruntime==1.23.2
+mmh3==5.2.0
+orjson==3.11.5
 
+# =========================
 # Document loaders / parsing
-pandas          # for Excel
-python-docx     # for .docx parsing
-docx2txt        # for alternative Word loader
-pypdf           # for PDFs
+# =========================
+pandas==2.3.3          # Excel / tabular
+python-docx==1.2.0     # .docx parsing
+docx2txt==0.9          # alternative Word loader
+pypdf==6.5.0           # PDFs
 
-# (Optional but useful)
-unstructured    # better parsing for messy PDFs/Docs
-python-dotenv   # for loading API keys from .env
+# Better parsing for messy PDFs/Docs (present in your env)
+unstructured==0.18.21
+unstructured-client==0.42.6
+beautifulsoup4==4.14.3
+lxml==6.0.2
+html5lib==1.1
+
+# =========================
+# API server (optional)
+# =========================
+uvicorn==0.40.0
+
+# =========================
+# Utilities
+# =========================
+python-dotenv==1.2.1   # load API keys from .env
+requests==2.32.5
+httpx==0.28.1
+tqdm==4.67.1

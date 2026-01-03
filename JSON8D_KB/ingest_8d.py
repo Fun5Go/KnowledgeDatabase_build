@@ -30,7 +30,7 @@ def ingest_8d_json(
     failure = data["failure"]
 
     # =====================================================
-    # 1️⃣ Sentence KB（failure + cause sentence）
+    #  Sentence KB（failure + cause sentence）
     # =====================================================
     failure_sentence_ids: List[str] = []
 
@@ -50,7 +50,7 @@ def ingest_8d_json(
         failure_sentence_ids.append(s.id)
 
     # =====================================================
-    # 2️⃣ Failure KB（入口）
+    #  Failure KB（入口）
     # =====================================================
     status = evaluate_failure(sentence_kb.get_by_ids(failure_sentence_ids))
 
@@ -70,7 +70,7 @@ def ingest_8d_json(
     failure_kb.add(failure_obj)
 
     # =====================================================
-    # 3️⃣ Cause KB（必须挂在 failure 下）
+    #  Cause KB
     # =====================================================
     for cause in failure.get("root_causes", []):
         cause_id = cause["cause_ID"]
