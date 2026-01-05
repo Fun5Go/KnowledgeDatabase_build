@@ -34,7 +34,7 @@ class SelectedSentence(BaseModel):
         description="How strongly the fact is asserted in the source text"
     )
 
-    id: Optional[str] = Field(
+    sentence_id: Optional[str] = Field(
         default=None,
         description="Optional unique identifier for traceability"
     )

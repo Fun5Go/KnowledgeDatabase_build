@@ -6,8 +6,22 @@ from kb_structure import (
     Failure, FailureKB,
     Cause, CauseKB,
     Sentence, SentenceKB,
+    MaintenanceTag,
     evaluate_failure
 )
+
+
+def parse_maintenance_tag(raw: dict | None) -> MaintenanceTag:
+    raw = raw or {}
+    return MaintenanceTag(
+        review_status=raw.get("review_status", "pending"),
+        version=raw.get("Version", "V0"),
+        last_updated=raw.get("last_updated", ""),
+        supersedes=raw.get("supersedes"),
+    )
+
+
+
 
 
 def ingest_8d_json(
@@ -36,7 +50,7 @@ def ingest_8d_json(
 
     for ent in failure.get("supporting_entities", []):
         s = Sentence(
-            id=ent["id"],
+            id=ent["sentence_id"],
             text=ent["text"],
             source_section=ent.get("source_section", ""),
             case_id=case_id,
@@ -53,6 +67,10 @@ def ingest_8d_json(
     #  Failure KB（入口）
     # =====================================================
     status = evaluate_failure(sentence_kb.get_by_ids(failure_sentence_ids))
+    failure_maintenance = parse_maintenance_tag(
+        failure.get("maintenance_tag")
+    )
+    
 
     cause_ids: List[str] = []
 
@@ -65,6 +83,7 @@ def ingest_8d_json(
         status=status,
         supporting_sentence_ids=failure_sentence_ids,
         cause_ids=[],
+        maintenance=failure_maintenance,
     )
 
     failure_kb.add(failure_obj)
@@ -78,7 +97,7 @@ def ingest_8d_json(
 
         for ent in cause.get("supporting_entities", []):
             s = Sentence(
-                id=ent["id"],
+                id=ent["sentence_id"],
                 text=ent["text"],
                 source_section=ent.get("source_section", ""),
                 case_id=case_id,
@@ -92,6 +111,10 @@ def ingest_8d_json(
             )
             cause_sentence_ids.append(s.id)
 
+        cause_maintenance = parse_maintenance_tag(
+            cause.get("maintenance_tag")
+        )
+
         cause_obj = Cause(
             cause_id=cause_id,
             failure_id=failure["failure_ID"],
@@ -103,10 +126,11 @@ def ingest_8d_json(
             discipline=cause.get("discipline_type", ""),
             confidence=cause.get("confidence", ""),
             supporting_sentence_ids=cause_sentence_ids,
+            maintenance=cause_maintenance
         )
 
         cause_kb.add(cause_obj)
         cause_ids.append(cause_id)
 
-    # 🔑 回写 cause_ids
+    # cause_ids
     failure_kb.store[failure["failure_ID"]]["cause_ids"] = cause_ids

@@ -13,7 +13,7 @@ This task is for information preservation and structuring, not final judgment.
 GENERAL PRINCIPLES
 ====================
 - Prefer inclusion over exclusion
-- Multiple hypotheses and alternative cause paths are encouraged
+- Multiple hypotheses and alternative cause paths are encouraged (Max 4)
 - Do NOT over-integrate or over-conclude
 
 ====================
@@ -67,6 +67,7 @@ ROOT CAUSE RULES (D4 focused, FMEA-aligned)
 Definition:
 - Root causes represent suspected cause mechanisms, conditions, or contributing factors
 - They are FMEA-style "Potential Cause / Mechanism", NOT final conclusions
+- It is the the cause directly or indirectly influencing the failure mode
 
 General rules:
 - Multiple, parallel, or layered cause paths are VALID
@@ -129,11 +130,9 @@ OUTPUT REFINEMENT RULES (MANDATORY)
 ====================
 SUPPORTING ENTITIES RULES
 ====================
-- Every failure and every root cause MUST be supported by one or more signals
-- text MUST be copied EXACTLY from the selected sentence text
-- id MUST reference the original sentence id
-- source_section MUST match the original sentence
-- annotations MUST be copied exactly from the input signal
+- ONLY reference sentence IDs
+- DO NOT add other information to the supporting entities except for sentence IDs
+- Only use sentence IDs that appear in the input signals
 
 ====================
 SIGNAL SELECTION GUIDANCE
@@ -171,14 +170,7 @@ OUTPUT (STRICT JSON)
   "failure_level": "",
   "supporting_entities": [
     {{
-      "id": "",
-      "text": "",
-      "source_section": "D2 | D3 | D4",
-      "annotations":{{
-      "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-      "assertion_level": "observed | confirmed | ruled_out | suspected",
-      "faithful_score": ,
-      "faithful_type": ,
+      "sentence_id": "",
       }}
     }}
   ],
@@ -190,15 +182,7 @@ OUTPUT (STRICT JSON)
       "cause_parent": "",
       "supporting_entities": [
         {{
-          "id": "",
-          "text": "",
-          "source_section": "D2 | D3 | D4",
-          "annotations":{{
-          "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-          "assertion_level": "observed | confirmed | ruled_out | suspected",
-          "faithful_score": "",
-          "faithful_type": "",
-          }}
+          "sentence_id": "",
         }}
       ],
       "inferred_insight": "",

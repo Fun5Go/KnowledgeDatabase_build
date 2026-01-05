@@ -11,12 +11,16 @@ import copy
 from typing import List, Dict, Any
 from langsmith import traceable, get_current_run_tree
 from Information_extraction_8D.Evaluation.evaluation_tool import check_faithfulness
+from datetime import datetime
+
+
+# Helper functions
 
 def build_iteration2_input(iter1_output) -> dict:
     return {
         "signals": [
             {
-                "id": s.id,
+                "sentence_id": s.sentence_id,
                 "text": s.text,
                 "entity_type": s.annotations.entity_type,
                 "assertion_level": s.annotations.assertion_level,
@@ -42,7 +46,7 @@ def assign_sentence_ids(items: List[Dict[str, Any]], doc_prefix: str) -> List[Di
             raise ValueError(f"Unexpected source_section: {sec}")
 
         counters[sec] += 1
-        item.id = f"{doc_prefix}_{sec}_S{counters[sec]:03d}"
+        item.sentence_id = f"{doc_prefix}_{sec}_S{counters[sec]:03d}"
 
     return items
 
@@ -79,6 +83,37 @@ def annotate_faithfulness_for_sentences(
         sent.annotations.faithful_score = result["score"]
 
     return selected_sentences
+
+def default_maintenance_tag(
+    review_status="pending",
+    version="V1",
+):
+    return MaintenaceTag(
+        review_status=review_status,
+        Version=version,
+        last_updated=datetime.utcnow().isoformat(),
+        supersedes=None,
+    )
+
+
+
+def resolve_supporting_entities(id_refs, sentence_index):
+    """
+    id_refs: [{"sentence_id": "..."}]
+    sentence_index: dict[id -> Sentence]
+    """
+    resolved = []
+    for ref in id_refs:
+        sid = ref["sentence_id"]
+        if sid in sentence_index:
+            s = sentence_index[sid]
+            resolved.append({
+                "sentence_id": s.sentence_id,
+                "text": s.text,
+                "source_section": s.source_section,
+                "annotations": s.annotations
+            })
+    return resolved
 
 
 @traceable(name="8d-extraction-demo")
@@ -155,7 +190,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
             d6_raw = content
             d6_section = D6Section(raw_context=d6_raw)
 
-    print("LLM iteration 1:")
+    #print("LLM iteration 1:")
     # output_iter1 =  extract_iteration_1.invoke({
     #         "data": {
     #             "d2_raw": d2_raw or "",
@@ -163,11 +198,12 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     #             "d4_raw": d4_raw or "",
     #     }
     # })
+
     output_iter1 = {
   "selected_sentences": [
     {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S001",
-      "text": "Prins has reported to AME that they see failures in the field where the R131 resistor on the ignition circuit breaks.",
+      "id": "8D6016160115R01_D2_S001",
+      "text": "R & V motors swapped.",
       "source_section": "D2",
       "annotations": {
         "entity_type": "symptom",
@@ -177,52 +213,8 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
       }
     },
     {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S002",
-      "text": "This occurs at installation and leads to a non-functional product.",
-      "source_section": "D2",
-      "annotations": {
-        "entity_type": "symptom",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S003",
-      "text": "In May 2024, Prins indicated that they saw several failures in the field on AFC 2.2 products.",
-      "source_section": "D2",
-      "annotations": {
-        "entity_type": "occurrence",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S004",
-      "text": "Investigation at AME showed that on these products resistor R131 was broken.",
-      "source_section": "D2",
-      "annotations": {
-        "entity_type": "symptom",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D2_S005",
-      "text": "The rest of this document shows the follow-up on this.",
-      "source_section": "D2",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D3_S001",
-      "text": "It only fails in specific circumstances by installing the product.",
+      "id": "8D6016160115R01_D3_S001",
+      "text": "At this moment, there is no production.",
       "source_section": "D3",
       "annotations": {
         "entity_type": "condition",
@@ -232,32 +224,10 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
       }
     },
     {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D3_S002",
-      "text": "Prins is able to control the fails in the field, which is currently <1%.",
+      "id": "8D6016160115R01_D3_S002",
+      "text": "No quick fix introduced.",
       "source_section": "D3",
       "annotations": {
-        "entity_type": "occurrence",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S001",
-      "text": "The ignition resistor R131 breaks due to an overvoltage spike on the IGNITION(0) input on the AFC 2.2, which is caused by the ignition coil inside the car.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "root_cause_evidence",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S002",
-      "text": "When the ignition coil ignited the fuel inside the engine, a large voltage spike is created by the ignition coil.",
-      "source_section": "D4",
-      "annotations": {
         "entity_type": "condition",
         "assertion_level": "observed",
         "faithful_score": 100,
@@ -265,8 +235,8 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
       }
     },
     {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S003",
-      "text": "Some of the voltage created by the ignition coil can be seen back onto the IGNITION(0) input on the AFC 2.2.",
+      "id": "8D6016160115R01_D4_S001",
+      "text": "The motors have unique metal brackets who fit in a dedicated jig of the tester.",
       "source_section": "D4",
       "annotations": {
         "entity_type": "investigation",
@@ -276,8 +246,8 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
       }
     },
     {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S004",
-      "text": "The ignition pulse from the car was measured.",
+      "id": "8D6016160115R01_D4_S002",
+      "text": "The test can identify if the motor and bracket by stretching the motor until an over load occurs.",
       "source_section": "D4",
       "annotations": {
         "entity_type": "investigation",
@@ -287,147 +257,50 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
       }
     },
     {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S005",
-      "text": "Without the AFC 2.2 connected, the pulse on the ignition is about 400V.",
+      "id": "8D6016160115R01_D4_S003",
+      "text": "Every motor and bracket combination has a unique length.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6016160115R01_D4_S004",
+      "text": "If the test detects a deviation, the operator can intervene in the testing process.",
+      "source_section": "D4",
+      "annotations": {
+        "entity_type": "investigation",
+        "assertion_level": "observed",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "id": "8D6016160115R01_D4_S005",
+      "text": "After a manual intervention, there is no automated test verification.",
       "source_section": "D4",
       "annotations": {
         "entity_type": "condition",
         "assertion_level": "observed",
         "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S006",
-      "text": "With the AFC 2.2 connected, the voltage is clamped to about 75V and the current flowing into the IGNTION(0) input of the AFC 2.2 reaches 6.5A.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "condition",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S007",
-      "text": "The power that needs to be dissipated by R131 will be: 6.5A*6.5A*2.2Ω = 92.95W for about 13.5us.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
         "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S008",
-      "text": "The current resistor on the AFC 2.2 has a 1218 package.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S009",
-      "text": "This resistor can dissipate a power of 30W for 10us.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S010",
-      "text": "Which is too low for the measured pulse inside the car, especially since the pulse slowly ramps down to 0A, meaning that some margin should be taken into account.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "root_cause_evidence",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S011",
-      "text": "D116 often broke down in the AFC 2.2 due to the same voltage pulse.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "root_cause_evidence",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S012",
-      "text": "D116 should block the voltage clamped by D115.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S013",
-      "text": "D116 should be able to block a voltage of max 75V.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S014",
-      "text": "The voltage rating of D116 & D113 is only 30V.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S015",
-      "text": "D113 seems to not break down.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "id": "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails_D4_S016",
-      "text": "D113 should definitely also be updated to a higher voltage rated variant.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
       }
     }
   ]
 }
 
-
     output_iter1 = Iteration1Output(**output_iter1)
+
     #Add ids to sentences
     output_iter1.selected_sentences = assign_sentence_ids(
     output_iter1.selected_sentences,
     doc_prefix=base_name
 )
+    
+    # ------ Faithfulness annotation ------
     output_iter1.selected_sentences = annotate_faithfulness_for_sentences(
     output_iter1.selected_sentences,
     d2_raw=d2_raw,
@@ -440,18 +313,32 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     input_iter2 = build_iteration2_input(output_iter1)
     print("Done!LLM iteration 2:")
     output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
+
+    sentence_index = {s.sentence_id: s for s in output_iter1.selected_sentences}
+
+    #-----Failure entity building------
     system_name = output_iter2.get("system_name") or ""
     print("system name:",system_name)
 
 
     failure_dict = copy.deepcopy(output_iter2)
 
+    failure_dict["supporting_entities"] = resolve_supporting_entities(
+    failure_dict.get("supporting_entities", []),
+    sentence_index)
+
     failure_dict["failure_ID"] = f"{base_name}_F1"
     failure_dict.setdefault("failure_level", "sub_system")
     failure_dict.setdefault("root_causes", [])
 
+    failure_dict["maintenance_tag"] = default_maintenance_tag(
+    review_status="pending",
+    version="V1",)  # MaintenaceTag(version="V1", review_status="pending")
+
     allowed_disciplines = {"HW", "ESW", "MCH", "Other"}
 
+
+    #-----Root cause building------
     for c_idx, cause in enumerate(failure_dict["root_causes"]):
 
         if hasattr(cause, "model_dump"):
@@ -459,7 +346,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
         cause.setdefault("cause_level", "unknown")
         cause.setdefault("discipline_type", "Other")
-        cause.setdefault("confidence", 0.5)
+        cause.setdefault("confidence", "medium")
 
         if cause["discipline_type"] not in allowed_disciplines:
             cause["discipline_type"] = "Other"
@@ -471,11 +358,20 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
         if not cause.get("failure_cause"):
             cause["failure_cause"] = "Unknown cause (LLM incomplete)"
 
-        cause["cause_ID"] = f"{base_name}_F1_C{c_idx + 1}"
+        cause["cause_ID"] = f"{base_name}_F1_C{c_idx + 1}"  # Add ID
+
+        # Add surpporting text back
+        cause["supporting_entities"] = resolve_supporting_entities(
+        cause.get("supporting_entities", []),
+        sentence_index)
+
+        cause["maintenance_tag"] = default_maintenance_tag(
+        review_status="pending",
+        version="V1",) # MaintenaceTag(version="V1", review_status="pending")
 
         failure_dict["root_causes"][c_idx] = cause
 
-    failure = FailureChain(**failure_dict)
+    failure = FailureChain(**failure_dict) # Convert to FailureChain model
 
     # 4) Build top-level EightDCase object
     case = EightDCase(

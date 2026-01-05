@@ -13,41 +13,54 @@ def query_failure_to_cause(
     k_cause=5,
 ):
     # =====================================================
-    # 1 Failure Indenx
+    # 1. Search failures
     # =====================================================
     failure_ids = failure_kb.search(query_text, k=k_failure)
 
-    results = []
-
+    grouped_results = []
 
     for fid in failure_ids:
-        failure_obj = failure_kb.store[fid]
+        failure_obj = failure_kb.store.get(fid)
+        if failure_obj is None:
+            print(f"[WARN] failure_id {fid} not found in store")
+            continue
 
         # =================================================
-        # 2. Cause（under this failure）
+        # 2. Search causes under this failure
         # =================================================
         cause_ids = cause_kb.search_under_failure(
             query=query_text,
             failure_id=fid,
             k=k_cause,
         )
+
+        causes = []
+
         for cid in cause_ids:
             cause_obj = cause_kb.store.get(cid)
             if cause_obj is None:
                 print(f"[WARN] cause_id {cid} not found in store")
                 continue
 
-            evidence = sentence_kb.get_by_ids(
+            evidence_sents = sentence_kb.get_by_ids(
                 cause_obj["supporting_sentence_ids"]
             )
 
-            results.append({
-                "failure": failure_kb.store[fid],
+            causes.append({
                 "cause": cause_obj,
-                "evidence": [s.text for s in evidence],
+                "evidence": [s.text for s in evidence_sents],
             })
 
-    return results
+        # If the failure does not have any valid causes, skip it
+        if not causes:
+            continue
+
+        grouped_results.append({
+            "failure": failure_obj,
+            "causes": causes,
+        })
+
+    return grouped_results
 
 
 
@@ -76,7 +89,7 @@ def main():
     cause_kb = CauseKB(persist_dir=cause_dir)
 
     # Query text
-    query_text = "show me the current failure"
+    query_text = "The failure mode is short problem and the failure cause is bootstrap capacitor"
     # query_text = "current spike destroyed power supply"
 
     print("\n================ QUERY ================")
@@ -98,8 +111,7 @@ def main():
 
     for i, r in enumerate(results, start=1):
         f = r["failure"]
-        c = r["cause"]
-        evidence = r["evidence"]
+        causes = r["causes"]
 
         print("\n" + "=" * 80)
         print(f"[{i}] FAILURE")
@@ -108,16 +120,20 @@ def main():
         print(f"Element : {f['failure_element']}")
         print(f"Status  : {f['status']}")
 
-        print("\n→ ROOT CAUSE")
-        print(f"ID         : {c['cause_id']}")
-        print(f"Cause      : {c['root_cause']}")
-        print(f"Level      : {c['cause_level']}")
-        print(f"Discipline : {c['discipline']}")
-        print(f"Confidence : {c['confidence']}")
+        for j, cblock in enumerate(causes, start=1):
+            c = cblock["cause"]
+            evidence = cblock["evidence"]
 
-        print("\n→ SUPPORTING EVIDENCE")
-        for s in evidence:
-            print(f"- {s}")
+            print("\n→ ROOT CAUSE", f"(#{j})")
+            print(f"ID         : {c['cause_id']}")
+            print(f"Cause      : {c['root_cause']}")
+            print(f"Level      : {c['cause_level']}")
+            print(f"Discipline : {c['discipline']}")
+            print(f"Confidence : {c['confidence']}")
+
+            print("\n→ SUPPORTING EVIDENCE")
+            for s in evidence:
+                print(f"- {s}")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ def resolve_paths():
 def main():
     sentence_dir, failure_dir, cause_dir, json_root = resolve_paths()
 
-    json_path = json_root / "8D6047210073R04 - Prins AFC 2.2 ignition circuit fails.json"
+    json_path = json_root / "8D6016160115R01.json"
     if not json_path.exists():
         raise FileNotFoundError(f"JSON not found: {json_path}")
 

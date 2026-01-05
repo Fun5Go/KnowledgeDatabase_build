@@ -10,15 +10,15 @@ from query import query_failure_to_cause
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 
-# 8D JSON folder: 优先同级 eightD_json_raw；没有就去上一级找
-JSON_ROOT = BASE_DIR.parent / "eightD_json_raw"
+# JSON_ROOT = BASE_DIR.parent / "eightD_json_raw"
+JSON_ROOT = Path(r'C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification').resolve()
 # if not JSON_ROOT.exists():
 #     JSON_ROOT = BASE_DIR.parent / "eightD_json_raw"
 
 if not JSON_ROOT.exists():
     raise FileNotFoundError(f"Cannot find eightD_json_raw folder at: {BASE_DIR} or {BASE_DIR.parent}")
 
-# Persist KB data folder（建议不要和代码混在一起）
+# Persist KB data folder
 KB_DATA_ROOT = BASE_DIR.parent / "kb_data"
 SENTENCE_KB_DIR = KB_DATA_ROOT / "sentence_kb"
 FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
@@ -58,46 +58,46 @@ print(f"Failure KB count  : {failure_kb.collection.count()}")
 print(f"Cause KB count    : {cause_kb.collection.count()}")
 
 
-# =========================================================
-# 4) Run an end-to-end query
-# =========================================================
-query = "current spike destroyed power supply"
-print("\n================ QUERY ================")
-print(query)
+# # =========================================================
+# # 4) Run an end-to-end query
+# # =========================================================
+# query = "current spike destroyed power supply"
+# print("\n================ QUERY ================")
+# print(query)
 
-results = query_failure_to_cause(
-    query_text=query,
-    failure_kb=failure_kb,
-    cause_kb=cause_kb,
-    sentence_kb=sentence_kb,
-    k_failure=3,
-    k_cause=3,
-)
+# results = query_failure_to_cause(
+#     query_text=query,
+#     failure_kb=failure_kb,
+#     cause_kb=cause_kb,
+#     sentence_kb=sentence_kb,
+#     k_failure=3,
+#     k_cause=3,
+# )
 
-# =========================================================
-# 5) Display results
-# =========================================================
-print("\n================ RESULTS ================")
+# # =========================================================
+# # 5) Display results
+# # =========================================================
+# print("\n================ RESULTS ================")
 
-for i, r in enumerate(results, start=1):
-    f = r["failure"]
-    c = r["cause"]
-    evidence = r["evidence"]
+# for i, r in enumerate(results, start=1):
+#     f = r["failure"]
+#     c = r["cause"]
+#     evidence = r["evidence"]
 
-    print("\n" + "=" * 80)
-    print(f"[{i}] FAILURE")
-    print(f"ID      : {f['failure_id']}")
-    print(f"Mode    : {f['failure_mode']}")
-    print(f"Element : {f['failure_element']}")
-    print(f"Status  : {f['status']}")
+#     print("\n" + "=" * 80)
+#     print(f"[{i}] FAILURE")
+#     print(f"ID      : {f['failure_id']}")
+#     print(f"Mode    : {f['failure_mode']}")
+#     print(f"Element : {f['failure_element']}")
+#     print(f"Status  : {f['status']}")
 
-    print("\n→ ROOT CAUSE")
-    print(f"ID         : {c['cause_id']}")
-    print(f"Cause      : {c['root_cause']}")
-    print(f"Level      : {c['cause_level']}")
-    print(f"Discipline : {c['discipline']}")
-    print(f"Confidence : {c['confidence']}")
+#     print("\n→ ROOT CAUSE")
+#     print(f"ID         : {c['cause_id']}")
+#     print(f"Cause      : {c['root_cause']}")
+#     print(f"Level      : {c['cause_level']}")
+#     print(f"Discipline : {c['discipline']}")
+#     print(f"Confidence : {c['confidence']}")
 
-    print("\n→ SUPPORTING EVIDENCE")
-    for s in evidence:
-        print(f"- {s}")
+#     print("\n→ SUPPORTING EVIDENCE")
+#     for s in evidence:
+#         print(f"- {s}")

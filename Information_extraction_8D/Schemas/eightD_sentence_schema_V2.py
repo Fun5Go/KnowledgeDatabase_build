@@ -26,7 +26,7 @@ class AnnotationItem(BaseModel):
     faithful_type: Literal["exact","partial","fuzzy","hallucinated"] = None
 
 class SelectedSentence(BaseModel):
-    id: Optional[str] = Field(
+    sentence_id: Optional[str] = Field(
         default=None,
         description="Optional unique identifier for traceability"
     )

@@ -155,7 +155,7 @@ def extract_iteration_2(data: dict) -> dict:
     - Output STRICT JSON only.
 """
     signals_bullets = "\n".join(
-        f"- [id:{s.get('id','')}]"
+        f"- [id:{s.get('sentence_id','')}]"
         f"[{s.get('source_section','?')}]"
         f"[{s.get('entity_type','?')}]"
         f"[{s.get('assertion_level','?')}] "

@@ -9,9 +9,17 @@ from typing import Optional
 from dataclasses import asdict
 
 
+
 # =========================================================
 # Data models
 # =========================================================
+
+@dataclass
+class MaintenanceTag:
+    review_status: str        # reviewed | pending | rejected
+    version: str              # e.g. V1
+    last_updated: str
+    supersedes: Optional[str] # previous ID
 
 @dataclass
 class Sentence:
@@ -20,6 +28,8 @@ class Sentence:
     source_section: str
     case_id: str
     annotations: Dict[str, Any]
+
+    #is_activate: bool = True # Keep the invalid sentences
 
 
 @dataclass
@@ -32,6 +42,11 @@ class Failure:
     status: str
     supporting_sentence_ids: List[str]
     cause_ids: List[str]
+    maintenance: MaintenanceTag
+
+    # Maintenance
+    # revision: int
+    # last_updated: str
 
 
 @dataclass
@@ -47,6 +62,11 @@ class Cause:
     confidence: str
     supporting_sentence_ids: List[str]
 
+    # Maintenance
+    maintenance: MaintenanceTag
+    # revision: int
+    # last_updated: str
+
 
 # =========================================================
 # Failure evaluation (used during ingest)
@@ -54,7 +74,7 @@ class Cause:
 
 def evaluate_failure(
     sentences: List[Sentence],
-    min_faithful: int = 90,
+    min_faithful: int = 95,
     allow_levels=("observed", "confirmed"),
 ) -> str:
     """
@@ -168,6 +188,7 @@ class FailureKB:
             name="failure_kb",
             embedding_function=self.embedder,
         )
+        
 
     def add(self, failure: Failure):
         self.store[failure.failure_id] = asdict(failure)
@@ -186,8 +207,10 @@ class FailureKB:
             metadatas=[{
                 "failure_mode": failure.failure_mode,
                 "failure_element": failure.failure_element,
-                "status": failure.status,
                 "product": failure.product or "",
+                "review_status": failure.maintenance.review_status,
+                "version": failure.maintenance.version,
+                "last_updated": failure.maintenance.last_updated,
             }],
         )
 
@@ -225,6 +248,7 @@ class CauseKB:
             embedding_function=self.embedder,
         )
 
+    # Embedding function
     def add(self, cause: Cause):
         self.store[cause.cause_id] = asdict(cause)
         with open(self.store_path, "w", encoding="utf-8") as f:
@@ -234,6 +258,7 @@ class CauseKB:
             f"Failure mode: {cause.failure_mode}",
             f"Failure element: {cause.failure_element}",
             f"Root cause: {cause.root_cause}",
+            
         ])
 
         self.collection.add(
@@ -244,9 +269,11 @@ class CauseKB:
                 "discipline": cause.discipline,
                 "cause_level": cause.cause_level,
                 "confidence": cause.confidence,
+                "review_status": cause.maintenance.review_status,
+                "version": cause.maintenance.version,
             }],
         )
-
+    # Search function
     def search_under_failure(
         self,
         query: str,

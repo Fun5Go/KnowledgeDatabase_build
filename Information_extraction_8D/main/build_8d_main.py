@@ -12,12 +12,12 @@ def run(doc_path: str) -> str:
 
     base_name = os.path.splitext(os.path.basename(doc_path))[0]
 
-    # ---- 保存最终 EightDCase ----
+    # ---- Save EightDCase ----
     output_case_path = os.path.join(OUTPUT_DIR, f"{base_name}.json")
     with open(output_case_path, "w", encoding="utf-8") as f:
         json.dump(result.model_dump(), f, indent=2, ensure_ascii=False)
 
-    # ---- 保存 Iteration 1 ----
+    # ---- Save Iteration 1 ----
     output_iter1_path = os.path.join(
         OUTPUT_DIR, f"{base_name}_iter1.json"
     )
@@ -28,5 +28,5 @@ def run(doc_path: str) -> str:
 
 
 if __name__ == "__main__":
-    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6047210073R04 - Prins AFC 2.2 ignition circuit fails.docx"
+    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6016160115R01.docx"
     run(path)

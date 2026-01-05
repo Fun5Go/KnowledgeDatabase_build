@@ -6,12 +6,19 @@ from collections import defaultdict
 import hashlib
 
 
+
+# =========================================================
+# Helpers
+# =========================================================
+
 def normalize(x: str | None) -> str:
     return (x or "").strip().lower()
 
+
 def build_failure_signature(row: dict) -> tuple:
     """
-    For regroup
+    Regroup rule:
+    failure_effect is now part of the signature
     """
     if row.get("source_type") == "new_fmea":
         return (
@@ -19,31 +26,33 @@ def build_failure_signature(row: dict) -> tuple:
             normalize(row.get("system_element")),
             normalize(row.get("function")),
             normalize(row.get("failure_mode")),
+            normalize(row.get("failure_effect")),   
         )
     else:  # old_fmea
         return (
             normalize(row.get("failure_type")),
             normalize(row.get("failure_mode")),
+            normalize(row.get("failure_effect")),   
         )
 
 
-def make_failure_id(signature: tuple, file_name: str) -> str:
-    sig_str = "|".join(signature)
-    h = hashlib.md5(sig_str.encode("utf-8")).hexdigest()[:8]
-    return f"{file_name}__F_{h}"
-
+# =========================================================
+# Ingest
+# =========================================================
 
 def ingest_fmea_json(
     json_path: Path,
-    failure_kb,
-    cause_kb,
+    failure_kb: FMEAFailureKB,
+    cause_kb: FMEACauseKB,
 ):
     rows = json.loads(json_path.read_text(encoding="utf-8"))
     if isinstance(rows, dict):
         rows = [rows]
 
+    file_name = rows[0].get("file_name", json_path.stem)
+
     # -------------------------------------------------
-    # 1️⃣ 按 failure signature regroup
+    # 1️⃣ Regroup rows by failure signature
     # -------------------------------------------------
     grouped: dict[tuple, list[dict]] = defaultdict(list)
 
@@ -52,14 +61,16 @@ def ingest_fmea_json(
         grouped[sig].append(row)
 
     # -------------------------------------------------
-    # 2️⃣ 每个 failure group → 1 Failure + N Causes
+    # 2️⃣ Sequential Failure IDs: F1, F2, ...
     # -------------------------------------------------
+    failure_counter = 1
+
     for sig, group in grouped.items():
         first = group[0]
         source_type = first.get("source_type")
-        file_name = first.get("file_name")
 
-        failure_id = make_failure_id(sig, file_name)
+        failure_id = f"{file_name}__F{failure_counter}"
+        failure_counter += 1
 
         # ---------- Failure fields ----------
         if source_type == "new_fmea":
@@ -72,22 +83,23 @@ def ingest_fmea_json(
             function = None
 
         failure_mode = first.get("failure_mode")
-
-        # effect：可能不同，合并
-        effects = list({
-            r.get("failure_effect")
-            for r in group
-            if r.get("failure_effect")
-        })
-        failure_effect = "; ".join(effects)
+        failure_effect = first.get("failure_effect")
 
         severity = max(
-            [r.get("severity") for r in group if isinstance(r.get("severity"), (int, float))],
+            [
+                r.get("severity")
+                for r in group
+                if isinstance(r.get("severity"), (int, float))
+            ],
             default=None,
         )
 
         rpn = max(
-            [r.get("rpn") for r in group if isinstance(r.get("rpn"), (int, float))],
+            [
+                r.get("rpn")
+                for r in group
+                if isinstance(r.get("rpn"), (int, float))
+            ],
             default=None,
         )
 
@@ -101,45 +113,70 @@ def ingest_fmea_json(
             severity=severity,
             rpn=rpn,
             cause_ids=[],
+            source_type=source_type,
         )
 
-        # ---------- 写入 Failure KB（只一次） ----------
+        # ---------- Write Failure KB ----------
         if failure_id not in failure_kb.store:
             failure_kb.add(failure_obj)
 
         # -------------------------------------------------
-        # 3️⃣ 为每条 row 建 Cause
+        # 3️⃣ Causes under this failure: C1, C2, ...
         # -------------------------------------------------
-        for idx, row in enumerate(group, start=1):
+        cause_counter = 1
+
+        for row in group:
             cause_text = row.get("failure_cause")
             if not cause_text:
                 continue
 
-            cause_id = f"{failure_id}_C{idx}"
+            cause_id = f"{failure_id}_C{cause_counter}"
+            cause_counter += 1
 
             if source_type == "new_fmea":
                 discipline = row.get("cause_discipline")
-                confidence = "high"
+                cause_obj = FMEACause(
+                    cause_id=cause_id,
+                    failure_id=failure_id,
+                    failure_cause=row.get("failure_cause"),
+                    discipline=row.get("cause_discipline"),
+
+                    prevention=row.get("controls_prevention"),
+                    detection=row.get("current_detection"),
+                    detection_value=row.get("detection"),
+                    occurrence=row.get("occurrence"),
+                    recommended_action=row.get("recommended_action"),
+                )
             else:
                 discipline = None
-                confidence = "low"
 
-            cause_obj = FMEACause(
-                cause_id=cause_id,
-                failure_id=failure_id,
-                failure_cause=cause_text,
-                discipline=discipline,
-            )
+            if source_type == "old_fmea":
+                cause_obj = FMEACause(
+                    cause_id=cause_id,
+                    failure_id=failure_id,
+                    failure_cause=row.get("failure_cause"),
+                    discipline=None,
+
+                    prevention=None,  
+                    detection=row.get("current_detection") or row.get("detection"),
+                    detection_value=row.get("detection"),
+                    occurrence=row.get("occurrence"),
+                    recommended_action=row.get("recommended_action"),
+
+                )
+
 
             cause_kb.add(cause_obj)
             failure_obj.cause_ids.append(cause_id)
 
-        # ---------- 回写 failure → cause 关系 ----------
+        # ---------- Back-write failure → causes ----------
         failure_kb.store[failure_id]["cause_ids"] = failure_obj.cause_ids
 
+    # -------------------------------------------------
+    # 4️⃣ Persist failure store
+    # -------------------------------------------------
     failure_kb.store_path.write_text(
         json.dumps(failure_kb.store, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-
 

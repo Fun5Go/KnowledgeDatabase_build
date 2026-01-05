@@ -29,9 +29,7 @@ def query_fmea(
     print(failure_query)
     print("=" * 80)
 
-    # -------------------------------------------------
-    # 1️⃣ 搜索 Failure KB
-    # -------------------------------------------------
+    # Search failures
     failure_ids = failure_kb.search(
         query=failure_query,
         k=top_k_failure,
@@ -58,9 +56,7 @@ def query_fmea(
         cause_ids = failure.get("cause_ids", [])
         print(f"\n→ Linked causes ({len(cause_ids)}):")
 
-        # -------------------------------------------------
-        # 2️⃣ 在该 Failure 下搜索 Causes
-        # -------------------------------------------------
+        # Search the causes under the failure
         cause_results = cause_kb.search_under_failure(
             query=failure_query,
             failure_id=fid,

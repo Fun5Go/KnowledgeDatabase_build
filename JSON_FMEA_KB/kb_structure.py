@@ -35,6 +35,8 @@ class FMEAFailure:
 
     cause_ids: List[str]
 
+    source_type: str # Old/New FMEA
+
 
 @dataclass
 class FMEACause:
@@ -43,6 +45,15 @@ class FMEACause:
 
     failure_cause: str
     discipline: Optional[str]
+
+    # Controls entity
+    prevention: Optional[str]          # controls_prevention
+    detection: Optional[str]            # current_detection
+    detection_value: Optional[float]    # detection (number)
+
+    occurrence: Optional[float]         # occurrence (number)
+    recommended_action: Optional[str]   # recommended_action
+
 
 
 class FMEAFailureKB:
@@ -74,6 +85,7 @@ class FMEAFailureKB:
             f"Failure mode: {failure.failure_mode}",
             f"Failure element: {failure.failure_element or ''}",
             f"Failure effect: {failure.failure_effect or ''}",
+            f"Element function: {failure.function or ''}",
         ])
 
         self.collection.upsert(
@@ -83,6 +95,7 @@ class FMEAFailureKB:
                 "system": failure.system or "",
                 "severity": failure.severity or 0,
                 "rpn": failure.rpn or 0,
+                "type": failure.source_type
             }],
         )
 

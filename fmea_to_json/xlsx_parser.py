@@ -1,27 +1,17 @@
 import os
 import json
+import math
 import pandas as pd
-from fmea_to_json.common_utils import to_scalar
-from fmea_to_json.common_utils import extract_metadata_from_file, is_numeric_like
+import numpy as np
+from fmea_to_json.common_utils import (
+    to_scalar,
+    extract_metadata_from_file,
+    is_numeric_like
+)
 
-
-def extract_metadata_old(df):
-    metadata = {"project_description": "Unknown", "fmea_date": "Unknown"}
-
-    try:
-        metadata["project_description"] = to_scalar(df.iloc[1, 4])
-    except:
-        pass
-
-    try:
-        metadata["fmea_date"] = to_scalar(df.iloc[3, 9]) or to_scalar(df.iloc[2, 9])
-    except:
-        pass
-
-    return metadata
-
-
-# --------- minimal helpers (NEW) ----------
+###############################################################################
+# Helpers
+###############################################################################
 def norm_col(x):
     return " ".join(str(x).lower().strip().split())
 
@@ -32,52 +22,127 @@ def build_col_map(header_row):
         for i, v in enumerate(header_row.tolist())
         if str(v).strip() != ""
     }
-# ------------------------------------------
 
 
+def get_cell(row, col_map, *header_names, default_idx=None):
+    """
+    Get value using header map first, fallback to fixed index.
+    """
+    for name in header_names:
+        idx = col_map.get(norm_col(name))
+        if idx is not None:
+            return to_scalar(row.iloc[idx])
+
+    if default_idx is not None:
+        return to_scalar(row.iloc[default_idx])
+
+    return ""
+
+
+def get_int_cell(row, col_map, *header_names, default_idx=None):
+    """
+    Same as get_cell, but ensures numeric-like value.
+    """
+    val = get_cell(row, col_map, *header_names, default_idx=default_idx)
+    return val if is_numeric_like(val) else ""
+
+
+###############################################################################
+# Core extraction
+###############################################################################
 def extract_old_fmea_failures(df, metadata, file_name):
     records = []
 
+    # ------------------------------------------------------------
+    # 1. Locate header row
+    # ------------------------------------------------------------
     header_idx = -1
-    for i in range(min(15, len(df))):
-        if "process step" in " ".join(df.iloc[i].astype(str).str.lower()):
+    for i in range(min(20, len(df))):
+        row_text = " ".join(df.iloc[i].astype(str).str.lower())
+        if "process step" in row_text:
             header_idx = i
             break
 
     if header_idx == -1:
         return records
 
-    # NEW: header-based column map
     header_row = df.iloc[header_idx]
     col_map = build_col_map(header_row)
 
-    df_data = df.iloc[header_idx + 1:]
+    df_data = df.iloc[header_idx + 1:].dropna(how="all")
 
+    # ------------------------------------------------------------
+    # 2. Iterate rows
+    # ------------------------------------------------------------
     for _, row in df_data.iterrows():
-        if len(row) < 12:
-            continue
 
-        # default (fixed index)
-        failure_cause = to_scalar(row.iloc[5])
-
-        # NEW: numeric cause -> use header name map
-        if is_numeric_like(failure_cause):
-            failure_cause = to_scalar(
-                row.iloc[col_map.get("potential cause(s) of failure")]
-            )
-            current_detection = to_scalar(
-                row.iloc[col_map.get("current controls")]
-            )
-            recommended_action = to_scalar(
-                row.iloc[col_map.get("recommended actions")]
-            )
-        else:
-            current_detection = to_scalar(row.iloc[8])
-            recommended_action = to_scalar(row.iloc[11])
+        failure_cause = get_cell(
+            row, col_map,
+            "potential cause(s) of failure",
+            default_idx=5
+        )
 
         if not failure_cause:
             continue
 
+        failure_type = get_cell(
+            row, col_map,
+            "process step",
+            default_idx=1
+        )
+
+        failure_mode = get_cell(
+            row, col_map,
+            "potential failure mode",
+            default_idx=2
+        )
+
+        failure_effect = get_cell(
+            row, col_map,
+            "potential effect(s) of failure",
+            default_idx=3
+        )
+
+        severity = get_int_cell(
+            row, col_map,
+            "severity",
+            default_idx=4
+        )
+
+        occurrence = get_int_cell(
+            row, col_map,
+            "occurrence",
+            default_idx=6
+        )
+
+        detection = get_int_cell(
+            row, col_map,
+            "detection",
+            default_idx=9
+        )
+
+        rpn = get_int_cell(
+            row, col_map,
+            "rpn", "so",
+            default_idx=10
+        )
+
+        current_detection = get_cell(
+            row, col_map,
+            "current controls",
+            default_idx=8
+        )
+
+        recommended_action = get_cell(
+            row, col_map,
+            "recommended actions",
+            "recommended action",
+            default_idx=11
+        )
+
+        # ------------------------------------------------------------
+        # 3. Build record (JSON schema UNCHANGED)
+        # ------------------------------------------------------------
         record = {
             "source_type": "old_fmea",
             "file_name": file_name,
@@ -85,29 +150,26 @@ def extract_old_fmea_failures(df, metadata, file_name):
             "project_description": metadata["project_description"],
             "fmea_date": metadata["fmea_date"],
 
-            # NEW: Process Step -> failure_type
-            "failure_type": to_scalar(
-                row.iloc[col_map.get("process step", 1)]
-            ),
-            "failure_mode": to_scalar(row.iloc[2]),
-            "failure_effect": to_scalar(row.iloc[3]),
+            "failure_type": failure_type,
+            "failure_mode": failure_mode,
+            "failure_effect": failure_effect,
 
-            "severity": to_scalar(row.iloc[4]),
-            "occurrence": to_scalar(row.iloc[6]),
-            "detection": to_scalar(row.iloc[9]),
-            "rpn": to_scalar(row.iloc[10]),
+            "severity": severity,
+            "occurrence": occurrence,
+            "detection": detection,
+            "rpn": rpn,
 
             "failure_cause": failure_cause,
             "current_detection": current_detection,
             "recommended_action": recommended_action,
 
             "text": (
-                f"Failure mode {to_scalar(row.iloc[2])}. "
-                f"Cause {failure_cause} leads to effect {to_scalar(row.iloc[3])}. "
-                f"Severity {to_scalar(row.iloc[4])}, "
-                f"Occurrence {to_scalar(row.iloc[6])}, "
-                f"Detection {to_scalar(row.iloc[9])}, "
-                f"RPN {to_scalar(row.iloc[10])}. "
+                f"Failure mode {failure_mode}. "
+                f"Cause {failure_cause} leads to effect {failure_effect}. "
+                f"Severity {severity}, "
+                f"Occurrence {occurrence}, "
+                f"Detection {detection}, "
+                f"RPN {rpn}. "
                 f"Action {recommended_action}."
             )
         }
@@ -117,6 +179,9 @@ def extract_old_fmea_failures(df, metadata, file_name):
     return records
 
 
+###############################################################################
+# Main entry
+###############################################################################
 def process_old_fmea_xlsx(path, output_json):
     file_name = os.path.splitext(os.path.basename(path))[0]
 
@@ -139,3 +204,5 @@ def process_old_fmea_xlsx(path, output_json):
 
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
+
+    print("Old FMEA JSON saved to:", output_json)

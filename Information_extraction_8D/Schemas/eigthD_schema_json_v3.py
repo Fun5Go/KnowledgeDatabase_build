@@ -6,9 +6,11 @@ from typing import Any, Dict, Optional, Literal
 from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
 
 
-
-
-
+class MaintenaceTag(BaseModel):
+    review_status: Literal["validated", "pending", "rejected"] = "pending"
+    Version: Optional[str] = None
+    last_updated : Optional[str] = None
+    supersedes : Optional[str] = None
 
     
 class CauseItem(BaseModel):   
@@ -27,19 +29,15 @@ class CauseItem(BaseModel):
     supporting_entities: List[SelectedSentence] = Field(default_factory=list)
     inferred_insight: Optional[str] = None
     confidence: Literal["high", "medium", "low"] = "medium"
-
-
+    maintenance_tag: Optional[MaintenaceTag] = None
+    
 
 class DocumentInfo(BaseModel):
     file_name: str
     product_name: Optional[str] = None
     date: Optional[str] = None
 
-class MaintenaceTag(BaseModel):
-    review_status: Literal["validated", "pending", "rejected"] = "pending"
-    Version: Optional[str] = None
-    last_updated : Optional[str] = None
-    supersedes : Optional[str] = None
+
 
 class FailureChain(BaseModel):
     failure_ID: Optional[str]
@@ -48,7 +46,9 @@ class FailureChain(BaseModel):
     failure_mode: Optional[str]     # functional failure (e.g. "no output", "overcurrent")
     failure_effect: Optional[str]   # observable impact or damage (e.g. "MOSFET destroyed")
     supporting_entities: List[SelectedSentence] = Field(default_factory=list)
+    maintenance_tag: Optional[MaintenaceTag] = None
     root_causes: List[CauseItem]
+
 
 
 class D2Section(BaseModel):
