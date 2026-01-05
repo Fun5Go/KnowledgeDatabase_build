@@ -19,6 +19,13 @@ import os
 def extract_d2(section_text: str):
     """Extract structured D2 information."""
 
+    llm = get_llm_backend(
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True,
+        temperature=0,
+    )
+
     messages = [
         {
             "role": "system",
@@ -37,6 +44,12 @@ def extract_d2(section_text: str):
 @tool
 def extract_d4(data: dict):
     """Extract D4 root cause JSON, using D2 info as structured context."""
+    llm = get_llm_backend(
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True,
+        temperature=0,
+    )
 
     # Tool input is always ONE dict — extract fields manually
     section_text = data.get("section_text", "")
