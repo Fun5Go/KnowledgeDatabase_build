@@ -116,7 +116,7 @@ def resolve_supporting_entities(id_refs, sentence_index):
     return resolved
 
 
-@traceable(name="8d-extraction-demo")
+@traceable(name="8d-extraction-batch(11-18)")
 def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
     # 1) Parse document sections using the parse_8d_doc tool
@@ -125,7 +125,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
     # 2) Extract 8D ID from file name
     base_name = os.path.splitext(os.path.basename(doc_path))[0]
-    print("fileID:",base_name)
+    # print("fileID:",base_name)
     document_info = DocumentInfo(
         file_name=base_name,
         product_name=product_name,
@@ -147,7 +147,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     d3_raw = None
     d4_raw = None
 
-
+    print("Parsed sections")
     # 3) Loop through parsed sections
     for sec in sections:
         title = sec["title"]
@@ -164,7 +164,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
         # Extract D3 section
         # --------------------
         if title.startswith("D3"):
-            print("Copying D3 section...")
+            # print("Copying D3 section...")
             d3_raw = content
             d3_section = D3Section(raw_context=d3_raw)
         # --------------------
@@ -174,125 +174,33 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
             d4_raw = content
             d4_section = D4Section(raw_context=d4_raw)
 
-
         # --------------------
         # Extract D5 section
         # --------------------
         if title.startswith("D5"):
-            print("Copying D5 section...")
+            # print("Copying D5 section...")
             d5_raw = content
             d5_section = D5Section(raw_context=d5_raw)
         # --------------------
         # Extract D6 section
         # --------------------
         if title.startswith("D6"):
-            print("Copying D6 section...")
+            # print("Copying D6 section...")
             d6_raw = content
             d6_section = D6Section(raw_context=d6_raw)
 
-    #print("LLM iteration 1:")
-    # output_iter1 =  extract_iteration_1.invoke({
-    #         "data": {
-    #             "d2_raw": d2_raw or "",
-    #             "d3_raw": d3_raw or "",
-    #             "d4_raw": d4_raw or "",
-    #     }
-    # })
+    print("LLM iteration 1")
+    output_iter1 =  extract_iteration_1.invoke({
+            "data": {
+                "d2_raw": d2_raw or "",
+                "d3_raw": d3_raw or "",
+                "d4_raw": d4_raw or "",
+        }
+    })
 
-    output_iter1 = {
-  "selected_sentences": [
-    {
-      "id": "8D6016160115R01_D2_S001",
-      "text": "R & V motors swapped.",
-      "source_section": "D2",
-      "annotations": {
-        "entity_type": "symptom",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6016160115R01_D3_S001",
-      "text": "At this moment, there is no production.",
-      "source_section": "D3",
-      "annotations": {
-        "entity_type": "condition",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6016160115R01_D3_S002",
-      "text": "No quick fix introduced.",
-      "source_section": "D3",
-      "annotations": {
-        "entity_type": "condition",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6016160115R01_D4_S001",
-      "text": "The motors have unique metal brackets who fit in a dedicated jig of the tester.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6016160115R01_D4_S002",
-      "text": "The test can identify if the motor and bracket by stretching the motor until an over load occurs.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6016160115R01_D4_S003",
-      "text": "Every motor and bracket combination has a unique length.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6016160115R01_D4_S004",
-      "text": "If the test detects a deviation, the operator can intervene in the testing process.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "investigation",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "id": "8D6016160115R01_D4_S005",
-      "text": "After a manual intervention, there is no automated test verification.",
-      "source_section": "D4",
-      "annotations": {
-        "entity_type": "condition",
-        "assertion_level": "observed",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    }
-  ]
-}
 
-    output_iter1 = Iteration1Output(**output_iter1)
+
+    #output_iter1 = Iteration1Output(**output_iter1)
 
     #Add ids to sentences
     output_iter1.selected_sentences = assign_sentence_ids(
@@ -311,7 +219,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
 
     input_iter2 = build_iteration2_input(output_iter1)
-    print("Done!LLM iteration 2:")
+    print("LLM iteration 2")
     output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
 
     sentence_index = {s.sentence_id: s for s in output_iter1.selected_sentences}

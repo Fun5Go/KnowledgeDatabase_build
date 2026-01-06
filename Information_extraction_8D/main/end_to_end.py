@@ -61,9 +61,11 @@ def batch_run(folder_path: str) -> None:
 
     print(f"Found {len(docx_files)} docx files.")
 
-    for doc_path in docx_files[:4]:
+    for i, doc_path in enumerate(docx_files[10:]):
         try:
+            print(f"Processing {i+1}/{len(docx_files)}: {os.path.basename(doc_path)}")
             run(doc_path)
+            print(f"✔ Success: {os.path.basename(doc_path)}")
         except Exception as e:
             print(f"✖ Failed: {os.path.basename(doc_path)}")
             print(f"  Reason: {e}")

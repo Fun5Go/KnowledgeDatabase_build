@@ -13,23 +13,30 @@ This task is for information preservation and structuring, not final judgment.
 GENERAL PRINCIPLES
 ====================
 - Prefer inclusion over exclusion
-- Multiple hypotheses and alternative cause paths are encouraged (Max 4)
-- Do NOT over-integrate or over-conclude
+- Multiple parallel or alternative cause paths are VALID (max 4)
+- Preserve uncertainty
+- Do NOT resolve contradictions
 
 ====================
-FAILURE RULES (D2 / D3 focused, DFMEA-aligned)
+FAILURE RULES (D2 / D3 focused)
 ====================
 
 Failure definition:
-- A failure describes WHAT went wrong: a loss, degradation, or abnormal execution of an intended function.
-- Failures describe functional behavior, NOT causes, tests, or investigations.
+A failure describes WHAT went wrong:
+- loss of function
+- degraded performance
+- abnormal execution of intended function
+- pyhsical damage
 
+Failure describes BEHAVIOR, not cause or investigation.
+
+Fields:
 - system_name:
-    ONE global system name (string or "")
+    ONE global system name, or ""
 
 - failure_element:
     Functional system element, component group, or subsystem
-    (e.g. "power supply", "motor drive", "input protection circuit")
+    Example: "power supply", "motor drive", "input protection circuit", interface)
 
 - failure_mode:
     Short engineering noun phrase describing the functional failure mode
@@ -38,36 +45,34 @@ Failure definition:
         - "no output voltage"
         - "unexpected shutdown"
         - "overcurrent during operation"
-
-    NOT allowed:
-        - test names or procedures
-        - investigation activities
-        - pure damage descriptions without functional meaning
+    Explicitly NOT a failure_mode:
+      - component damage descriptions
+      - investigation outcomes
+      - test names or procedures
+      - causes or stress mechanisms
 
 - failure_effect:
     Observable consequence resulting from the failure mode
     (system impact, damage, or test outcome)
-    Use "" if not explicitly stated.
+    If the effect is not explicitly stated as a consequence,set failure_effect = "".
+    Do NOT infer system impact.
 
 - failure_level:
-    One of: "system", "sub_system", "process"
+    One of:system | sub_system | process
 
-Rules:
-- Failure-related information MUST be supported mainly by signals with:
-    entity_type = symptom OR occurrence
-- Damage or destruction statements (e.g. "burnt component")
-  SHOULD be treated as failure_effect unless a functional loss is stated
-- Test setups and investigations MUST NOT define failure_mode
-- If multiple descriptions exist, select the most general functional one
+Failure supporting_entities:
+- MUST reference symptom or occurrence in D2 signals
+- MUST NOT reference investigation-only signals
 
 ====================
 ROOT CAUSE RULES (D4 focused, FMEA-aligned)
 ====================
 
 Definition:
-- Root causes represent suspected cause mechanisms, conditions, or contributing factors
-- They are FMEA-style "Potential Cause / Mechanism", NOT final conclusions
-- It is the the cause directly or indirectly influencing the failure mode
+Root causes are POTENTIAL cause mechanisms or contributing factors,
+not final conclusions.
+
+They answer: "What could have led to the failure?"
 
 General rules:
 - Multiple, parallel, or layered cause paths are VALID
@@ -77,9 +82,9 @@ For each root cause:
 - cause_level:
     One of:
         "design"         (architecture, protection concept, margins)
-        "component"      (parts, materials, ratings)
+        "component"      (parts, materials, electronics)
         "process"        (manufacturing, assembly, configuration)
-        "software"       (logic, timing, control)
+        "software"       (logic, timing, control,algorithm)
         "test_condition" (stress, misuse, environment, deviations)
         "unknown"
 
@@ -87,36 +92,38 @@ For each root cause:
     Short engineering noun phrase describing the suspected cause mechanism
     (2–6 words, no full sentences)
     Examples:
-        - "insufficient input protection"
-        - "excessive voltage stress"
-        - "improper test setup"
+        - "Incorrect driving of blanking circuit - ESW"
+        - "Fault in communication cable (short/open) - Other"
+        - "Pre-charge active device failes - HW"
+        - "Magnet alignment / magnetization - MCH"
 
 - discipline_type:
     One of: "HW", "ESW", "MCH", "Other"
 
 - cause_parent:
-    ID of the parent cause, if applicable
-    Used to form causal chains
-    (e.g. test condition → electrical stress → component damage)
+  - ID of parent cause IF a causal chain is explicit
+  - Use ONLY when a sequential relationship is clear
+  - Use cause_parent ONLY if:
+    - one cause clearly leads to another in the text
+    - the relationship is explicitly or logically sequential
+      (e.g. test condition → electrical stress → component damage)
+      Otherwise leave cause_parent empty.
 
-- inferred_insight:
-    OPTIONAL.
+- inferred_insight:(OPTIONAL)
     May summarize relationships between causes or signals
     MUST NOT assert certainty or final judgment
 
-- confidence:
-    low | medium | high
-    Based on signal strength and assertion levels
+- confidence
+  - low | medium | high
 
-Rules:
-- Root causes MUST be supported mainly by signals with:
-    entity_type = investigation OR root_cause_evidence
-- Condition-based descriptions (usage, environment, test setup)
-  are valid root causes even without a detailed physical mechanism
-- Signals with assertion_level = suspected represent hypotheses only
-- Do NOT merge distinct hypotheses unless explicitly stated
-- Prevention controls, detection methods, and actions
-  MUST NOT be modeled as failure modes or failure causes
+Confidence guidance:
+- high: confirmed signals, strong evidence, no contradictions
+- medium: observed findings or multiple suspected signals
+- low: single suspected signal or hypothesis only
+
+Root cause supporting_entities:
+- MUST reference D4 investigation or root_cause_evidence signals
+- Do NOT reference  D2 symptom-only signals
 
 ====================
 OUTPUT REFINEMENT RULES (MANDATORY)

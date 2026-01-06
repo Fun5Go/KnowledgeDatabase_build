@@ -89,7 +89,7 @@ def main():
     cause_kb = CauseKB(persist_dir=cause_dir)
 
     # Query text
-    query_text = "The failure mode is short problem and the failure cause is bootstrap capacitor"
+    query_text = "failure_mode: Hall sensor failure,failure_effect: Motor not running,"
     # query_text = "current spike destroyed power supply"
 
     print("\n================ QUERY ================")
@@ -118,6 +118,7 @@ def main():
         print(f"ID      : {f['failure_id']}")
         print(f"Mode    : {f['failure_mode']}")
         print(f"Element : {f['failure_element']}")
+        print(f"Effect    : {f['failure_effect']}")
         print(f"Status  : {f['status']}")
 
         for j, cblock in enumerate(causes, start=1):

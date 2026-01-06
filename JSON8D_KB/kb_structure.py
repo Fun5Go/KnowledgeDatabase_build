@@ -201,7 +201,7 @@ class FailureKB:
             f"Failure effect: {failure.failure_effect or ''}",
         ])
 
-        self.collection.add(
+        self.collection.upsert(
             ids=[failure.failure_id],
             documents=[embed_text],
             metadatas=[{
@@ -261,7 +261,7 @@ class CauseKB:
             
         ])
 
-        self.collection.add(
+        self.collection.upsert(
             ids=[cause.cause_id],
             documents=[embed_text],
             metadatas=[{

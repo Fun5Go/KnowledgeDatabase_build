@@ -81,13 +81,16 @@ class FMEAFailureKB:
             json.dumps(self.store, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        embed_text = "\n".join([
-            f"Failure mode: {failure.failure_mode}",
-            f"Failure element: {failure.failure_element or ''}",
-            f"Failure effect: {failure.failure_effect or ''}",
-            f"Element function: {failure.function or ''}",
-        ])
 
+        # Minimize the noise
+        embed_text = " | ".join(
+            t for t in [
+                failure.failure_mode,
+                failure.failure_element,
+                failure.failure_effect,
+            ]
+            if t
+        )
         self.collection.upsert(
             ids=[failure.failure_id],
             documents=[embed_text],

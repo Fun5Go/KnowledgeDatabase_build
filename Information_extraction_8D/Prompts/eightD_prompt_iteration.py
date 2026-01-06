@@ -11,16 +11,20 @@ Select atomic factual sentences and assign ONE entity_type per sentence:
 1. "symptom" 
    - Observable failure behavior
    - What does not work or behaves incorrectly
+   - Focus on RESULTS, not actions
 
 2.  "condition" 
    - MUST describe an external operational or environmental state
    - Temperature, humidity, stress, usage state.
    - MUST describe an external state, not software logic or system behavior
+     NOT condition if:
+   - caused by misconfiguration, assembly error, or deviation
+   - part of a test setup or procedure
+   - implies a causal mechanism
 
 3.  "occurrence" 
-   - Frequency or probability of failure
-   - Intermittent vs permanent behavior
-   - Ratios such as 1/400x
+   - Frequency, probability, or repetition pattern of failure
+   - Ratios, counts, intermittent vs permanent behavior
 
 4.  "investigation" 
    - Diagnostic findings
@@ -43,20 +47,24 @@ Disambiguation rules:
 ASSERTION LEVEL
 --------------------------------------------------
 
-For each sentence, assign an assertion_level describing
-how the statement is asserted in the source text.
+For each sentence, assign ONE assertion_level:
 
-Use ONLY one of the following values:
+- observed
+  - Directly seen or measured
+  - Default for physical findings
 
-- observed     : directly seen or measured
-- confirmed    : verified through testing or repetition
-- ruled_out    : explicitly stated as not being the cause
-- suspected    : hypothesis or correlation, not yet proven
+- confirmed
+  - Explicitly stated as confirmed, verified or concluded
 
-Rules:
-- Use “confirmed” ONLY if explicitly stated
-- Use “observed” for physical findings unless confirmation is stated
-- Do NOT treat assertion_level as probability or final conclusion
+
+- ruled_out
+  - Explicitly stated as NOT being the cause
+
+- suspected
+  - Hypothesis, assumption, or correlation
+  - Words like: "suspected", "may be", "possible", "likely"
+
+Do NOT infer assertion strength.
 
 
 --------------------------------------------------
@@ -72,9 +80,6 @@ Light rephrasing is allowed ONLY to:
 - remove pronouns or references
 - normalize tense
 - simplify wording without adding or removing facts
-
-Light rephrasing MUST preserve the original meaning and scope.
-Do NOT add new information or causal interpretation.
 
 
 --------------------------------------------------

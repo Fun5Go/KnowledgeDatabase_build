@@ -19,7 +19,7 @@ if not JSON_ROOT.exists():
     raise FileNotFoundError(f"Cannot find eightD_json_raw folder at: {BASE_DIR} or {BASE_DIR.parent}")
 
 # Persist KB data folder
-KB_DATA_ROOT = BASE_DIR.parent / "kb_data"
+KB_DATA_ROOT = BASE_DIR / "kb_data"
 SENTENCE_KB_DIR = KB_DATA_ROOT / "sentence_kb"
 FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
 CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
