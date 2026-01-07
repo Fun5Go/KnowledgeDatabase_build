@@ -4,66 +4,132 @@ from pathlib import Path
 
 
 
-def query_failure_to_cause(
-    query_text: str,
+def retrieve_failures(
+    *,
+    failure_kb: FailureKB,
+    failure_mode: str | None,
+    failure_element: str | None,
+    failure_effect: str | None,
+    k: int = 3,
+):
+    return failure_kb.search(
+        failure_mode=failure_mode,
+        failure_element=failure_element,
+        failure_effect=failure_effect,
+        k=k,
+    )
+
+
+def retrieve_causes(
+    *,
+    cause_kb: CauseKB,
+    cause_query: str,
+    failure_id: str,
+    k: int = 5,
+):
+    return cause_kb.search_under_failure(
+        query=cause_query,
+        failure_id=failure_id,
+        k=k,
+    )
+
+def failure_to_cause_pipeline(
+    *,
+    failure_mode: str | None,
+    failure_element: str | None,
+    failure_effect: str | None,
+    cause_query: str,
     failure_kb: FailureKB,
     cause_kb: CauseKB,
     sentence_kb: SentenceKB,
     k_failure=3,
     k_cause=5,
 ):
-    # =====================================================
-    # 1. Search failures
-    # =====================================================
-    failure_ids = failure_kb.search(query_text, k=k_failure)
+    results = []
 
-    grouped_results = []
+    # -----------------------------
+    # 1) Failure (WHAT broke)
+    # -----------------------------
+    failure_ids = retrieve_failures(
+        failure_kb=failure_kb,
+        failure_mode=failure_mode,
+        failure_element=failure_element,
+        failure_effect=failure_effect,
+        k=k_failure,
+    )
 
     for fid in failure_ids:
-        failure_obj = failure_kb.store.get(fid)
-        if failure_obj is None:
-            print(f"[WARN] failure_id {fid} not found in store")
+        failure = failure_kb.store.get(fid)
+        if not failure:
             continue
 
-        # =================================================
-        # 2. Search causes under this failure
-        # =================================================
-        cause_ids = cause_kb.search_under_failure(
-            query=query_text,
+        # -----------------------------
+        # 2) Cause (WHY it broke)
+        # -----------------------------
+        cause_ids = retrieve_causes(
+            cause_kb=cause_kb,
+            cause_query=cause_query,
             failure_id=fid,
             k=k_cause,
         )
 
         causes = []
-
         for cid in cause_ids:
-            cause_obj = cause_kb.store.get(cid)
-            if cause_obj is None:
-                print(f"[WARN] cause_id {cid} not found in store")
+            cause = cause_kb.store.get(cid)
+            if not cause:
                 continue
 
-            evidence_sents = sentence_kb.get_by_ids(
-                cause_obj["supporting_sentence_ids"]
+            evidence = sentence_kb.get_by_ids(
+                cause.get("supporting_sentence_ids", [])
             )
 
             causes.append({
-                "cause": cause_obj,
-                "evidence": [s.text for s in evidence_sents],
+                "cause": cause,
+                "evidence": [s.text for s in evidence],
             })
 
-        # If the failure does not have any valid causes, skip it
-        if not causes:
-            continue
+        if causes:
+            results.append({
+                "failure": failure,
+                "causes": causes,
+            })
 
-        grouped_results.append({
-            "failure": failure_obj,
-            "causes": causes,
-        })
+    return results
 
-    return grouped_results
+def detail_print_results(results: list[dict]):
 
+    print("\n================ RESULTS ================")
 
+    if not results:
+        print("[WARN] No results. (Maybe you haven't ingested any JSON yet?)")
+        return
 
+    for i, r in enumerate(results, start=1):
+        f = r.get("failure", {})
+        causes = r.get("causes", [])
+
+        print("\n" + "=" * 80)
+        print(f"[{i}] FAILURE")
+        print(f"ID      : {f.get('failure_id', '')}")
+        print(f"Mode    : {f.get('failure_mode', '')}")
+        print(f"Element : {f.get('failure_element', '')}")
+        print(f"Effect  : {f.get('failure_effect', '')}")
+        print(f"Status  : {f.get('status', '')}")
+
+        for j, cblock in enumerate(causes, start=1):
+            c = cblock.get("cause", {})
+            evidence = cblock.get("evidence", [])
+
+            print("\n→ ROOT CAUSE", f"(#{j})")
+            print(f"ID         : {c.get('cause_id', '')}")
+            print(f"Cause      : {c.get('root_cause', '')}")
+            print(f"Level      : {c.get('cause_level', '')}")
+            print(f"Discipline : {c.get('discipline', '')}")
+            print(f"Confidence : {c.get('confidence', '')}")
+
+            print("\n→ SUPPORTING EVIDENCE")
+            for s in evidence:
+                print(f"- {s}")
 
 
 def resolve_paths():
@@ -83,59 +149,29 @@ def resolve_paths():
 def main():
     sentence_dir, failure_dir, cause_dir = resolve_paths()
 
-    # Load existing persisted KBs
-    sentence_kb = SentenceKB(persist_dir=sentence_dir)
-    failure_kb = FailureKB(persist_dir=failure_dir)
-    cause_kb = CauseKB(persist_dir=cause_dir)
+    sentence_kb = SentenceKB(sentence_dir)
+    failure_kb = FailureKB(failure_dir)
+    cause_kb = CauseKB(cause_dir)
 
-    # Query text
-    query_text = "failure_mode: Hall sensor failure,failure_effect: Motor not running,"
-    # query_text = "current spike destroyed power supply"
-
-    print("\n================ QUERY ================")
-    print(query_text)
-
-    results = query_failure_to_cause(
-        query_text=query_text,
+    results = failure_to_cause_pipeline(
+        failure_mode="motor fails to restart",
+        failure_element="",
+        failure_effect="",
+        cause_query="incorrect start-up state machine",
         failure_kb=failure_kb,
         cause_kb=cause_kb,
         sentence_kb=sentence_kb,
         k_failure=3,
         k_cause=3,
     )
+    detail_print_results(results)
 
-    print("\n================ RESULTS ================")
-    if not results:
-        print("[WARN] No results. (Maybe you haven't ingested any JSON yet?)")
-        return
+    # for r in results:
+    #     f = r["failure"]
+    #     print("\nFAILURE:", f["failure_id"], f["failure_mode"])
 
-    for i, r in enumerate(results, start=1):
-        f = r["failure"]
-        causes = r["causes"]
-
-        print("\n" + "=" * 80)
-        print(f"[{i}] FAILURE")
-        print(f"ID      : {f['failure_id']}")
-        print(f"Mode    : {f['failure_mode']}")
-        print(f"Element : {f['failure_element']}")
-        print(f"Effect    : {f['failure_effect']}")
-        print(f"Status  : {f['status']}")
-
-        for j, cblock in enumerate(causes, start=1):
-            c = cblock["cause"]
-            evidence = cblock["evidence"]
-
-            print("\n→ ROOT CAUSE", f"(#{j})")
-            print(f"ID         : {c['cause_id']}")
-            print(f"Cause      : {c['root_cause']}")
-            print(f"Level      : {c['cause_level']}")
-            print(f"Discipline : {c['discipline']}")
-            print(f"Confidence : {c['confidence']}")
-
-            print("\n→ SUPPORTING EVIDENCE")
-            for s in evidence:
-                print(f"- {s}")
-
+    #     for c in r["causes"]:
+    #         print("  CAUSE:", c["cause"]["root_cause"])
 
 if __name__ == "__main__":
     main()

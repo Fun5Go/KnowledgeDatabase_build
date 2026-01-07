@@ -128,11 +128,13 @@ Root cause supporting_entities:
 ====================
 OUTPUT REFINEMENT RULES (MANDATORY)
 ====================
-- failure_mode, failure_effect, and failure_cause MUST be:
-    - short engineering noun phrases
-    - concise, non-redundant
+- failure_mode, failure_effect, failure_cause:
+  - noun phrases only
+  - concise and non-redundant
+  - no full sentences
+
 - Do NOT restate evidence text
-- Do NOT write full sentences as labels
+- Do NOT introduce new information
 
 ====================
 SUPPORTING ENTITIES RULES
@@ -140,17 +142,6 @@ SUPPORTING ENTITIES RULES
 - ONLY reference sentence IDs
 - DO NOT add other information to the supporting entities except for sentence IDs
 - Only use sentence IDs that appear in the input signals
-
-====================
-SIGNAL SELECTION GUIDANCE
-====================
-Include signals if they:
-- describe abnormal behavior, damage, or deviations
-- report measurements, investigations, or comparisons
-- describe test conditions or environmental stress
-- express hypotheses or possible explanations
-
-Exclusion should be conservative.
 
 ====================
 INPUT SIGNAL FORMAT

@@ -7,7 +7,7 @@ from pathlib import Path
 import json
 from typing import Optional
 from dataclasses import asdict
-
+from collections import defaultdict
 
 
 # =========================================================
@@ -184,46 +184,132 @@ class FailureKB:
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-MiniLM-L6-v2"
         )
+
         self.collection = self.client.get_or_create_collection(
             name="failure_kb",
             embedding_function=self.embedder,
         )
-        
 
-    def add(self, failure: Failure):
+    # =========================================================
+    # Add failure (ROLE-AWARE embedding)
+    # =========================================================
+    def add(self, failure):
+        # ---- structured store ----
         self.store[failure.failure_id] = asdict(failure)
         with open(self.store_path, "w", encoding="utf-8") as f:
             json.dump(self.store, f, indent=2, ensure_ascii=False)
 
-        # Minimize the noise
-        embed_text = " | ".join(
-            t for t in [
-                failure.failure_mode,
-                failure.failure_element,
-                failure.failure_effect,
-            ]
-            if t
-        )
+        ids = []
+        documents = []
+        metadatas = []
 
-        self.collection.upsert(
-            ids=[failure.failure_id],
-            documents=[embed_text],
-            metadatas=[{
+        def add_field(text: Optional[str], role: str):
+            if not text:
+                return
+            ids.append(f"{failure.failure_id}::{role}")
+            documents.append(text)
+            metadatas.append({
+                "failure_id": failure.failure_id,
+                "role": role,
+
+                # keep your existing metadata
                 "failure_mode": failure.failure_mode,
                 "failure_element": failure.failure_element,
                 "product": failure.product or "",
                 "review_status": failure.maintenance.review_status,
                 "version": failure.maintenance.version,
                 "last_updated": failure.maintenance.last_updated,
-            }],
-        )
+            })
 
-    def search(self, query: str, k: int = 3) -> List[str]:
-        res = self.collection.query(
+        # ---- split embedding ----
+        add_field(failure.failure_mode, "failure_mode")
+        add_field(failure.failure_element, "failure_element")
+        add_field(failure.failure_effect, "failure_effect")
+
+        if ids:
+            self.collection.upsert(
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+            )
+
+    # =========================================================
+    # Low-level role-based search
+    # =========================================================
+    def search_by_role(
+        self,
+        query: str,
+        role: str,
+        k: int = 5,
+    ):
+        return self.collection.query(
             query_texts=[query],
             n_results=k,
+            where={"role": role},
         )
-        return res["ids"][0] if res["ids"] else []
+
+    # =========================================================
+    # High-level merged search (FMEA style)
+    # =========================================================
+    def search(
+        self,
+        failure_mode: Optional[str] = None,
+        failure_element: Optional[str] = None,
+        failure_effect: Optional[str] = None,
+        k: int = 3,
+    ) -> List[str]:
+        """
+        Return ranked failure_ids
+        """
+
+        merged = defaultdict(lambda: {
+            "score": 0.0,
+            "roles": set(),
+        })
+
+        def merge_hits(res, role, weight):
+            if not res["ids"]:
+                return
+            for meta, dist in zip(
+                res["metadatas"][0],
+                res["distances"][0],
+            ):
+                fid = meta["failure_id"]
+                merged[fid]["score"] += weight * (1 - dist)
+                merged[fid]["roles"].add(role)
+
+        # ---- role-aware retrieval ----
+        if failure_mode:
+            res = self.search_by_role(
+                failure_mode, "failure_mode", k
+            )
+            merge_hits(res, "failure_mode", 0.5)
+
+        if failure_element:
+            res = self.search_by_role(
+                failure_element, "failure_element", k
+            )
+            merge_hits(res, "failure_element", 0.4)
+
+        if failure_effect:
+            res = self.search_by_role(
+                failure_effect, "failure_effect", k
+            )
+            merge_hits(res, "failure_effect", 0.3)
+
+        ranked = sorted(
+            merged.items(),
+            key=lambda x: (x[1]["score"], len(x[1]["roles"])),
+            reverse=True,
+        )
+
+        return [fid for fid, _ in ranked[:k]]
+
+    # =========================================================
+    # Get full failure object
+    # =========================================================
+    def get(self, failure_id: str) -> Optional[Dict[str, Any]]:
+        return self.store.get(failure_id)
 
 
 # =========================================================

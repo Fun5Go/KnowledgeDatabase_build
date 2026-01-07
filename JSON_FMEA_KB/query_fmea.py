@@ -1,73 +1,111 @@
 from pathlib import Path
+from typing import Optional
 from pprint import pprint
 
 from kb_structure import FMEAFailureKB, FMEACauseKB
 
 
+
+# =========================================================
+# Path resolver
+# =========================================================
 def resolve_paths():
     base = Path(__file__).resolve().parent
-
     kb_data = base / "kb_data"
-    failure_dir = kb_data / "failure_kb"
-    cause_dir = kb_data / "cause_kb"
-
-    return failure_dir, cause_dir
+    return kb_data / "failure_kb", kb_data / "cause_kb"
 
 
-def query_fmea(
-    failure_query: str,
-    top_k_failure: int = 3,
-    top_k_cause: int = 5,
+# =========================================================
+# Failure retrieval (independent)
+# =========================================================
+def retrieve_failures(
+    failure_mode: Optional[str] = None,
+    failure_element: Optional[str] = None,
+    failure_effect: Optional[str] = None,
+    top_k: int = 3,
 ):
-    failure_dir, cause_dir = resolve_paths()
-
+    failure_dir, _ = resolve_paths()
     failure_kb = FMEAFailureKB(persist_dir=failure_dir)
+
+    return failure_kb.search(
+        failure_mode=failure_mode,
+        failure_element=failure_element,
+        failure_effect=failure_effect,
+        k=top_k,
+    ), failure_kb
+
+
+# =========================================================
+# Cause retrieval (independent)
+# =========================================================
+def retrieve_causes(
+    cause_query: str,
+    failure_id: Optional[str] = None,
+    top_k: int = 5,
+):
+    _, cause_dir = resolve_paths()
     cause_kb = FMEACauseKB(persist_dir=cause_dir)
 
-    print("=" * 80)
-    print("FAILURE QUERY:")
-    print(failure_query)
-    print("=" * 80)
+    if failure_id:
+        return cause_kb.search_under_failure(
+            query=cause_query,
+            failure_id=failure_id,
+            k=top_k,
+        ), cause_kb
 
-    # Search failures
-    failure_ids = failure_kb.search(
-        query=failure_query,
-        k=top_k_failure,
+    return cause_kb.search(
+        query=cause_query,
+        k=top_k,
+    ), cause_kb
+
+
+# =========================================================
+# High-level demo pipeline
+# =========================================================
+def query_fmea_demo():
+    # -------------------------
+    # 1) Failure query (STRUCTURE)
+    # -------------------------
+    failure_ids, failure_kb = retrieve_failures(
+        failure_element="Motor drive",
+        failure_mode="Motor drive EMI too high",
+        failure_effect="FC not complying to relevant EMC norm", 
+        top_k=3,
     )
 
     if not failure_ids:
         print("No similar failures found.")
         return
 
-    print(f"\nTop {len(failure_ids)} similar failures:\n")
+    print("=" * 80)
+    print("FAILURE RESULTS")
+    print("=" * 80)
 
     for rank, fid in enumerate(failure_ids, start=1):
-        failure = failure_kb.store.get(fid)
+        failure = failure_kb.get(fid)
 
         print("-" * 80)
-        print(f"[Failure #{rank}]")
-        print(f"Failure ID    : {fid}")
-        print(f"Failure mode  : {failure.get('failure_mode')}")
-        print(f"Element       : {failure.get('failure_element')}")
-        print(f"Function      : {failure.get('function')}")
-        print(f"Effect        : {failure.get('failure_effect')}")
-        print(f"Severity / RPN: {failure.get('severity')} / {failure.get('rpn')}")
+        print(f"[Failure #{rank}] {fid}")
+        print(f"Mode     : {failure.get('failure_mode')}")
+        print(f"Element  : {failure.get('failure_element')}")
+        print(f"Effect   : {failure.get('failure_effect')}")
+        print(f"Severity : {failure.get('severity')} | RPN: {failure.get('rpn')}")
 
-        cause_ids = failure.get("cause_ids", [])
-        print(f"\n→ Linked causes ({len(cause_ids)}):")
-
-        # Search the causes under the failure
-        cause_results = cause_kb.search_under_failure(
-            query=failure_query,
+        # -------------------------
+        # 2) Cause query (MECHANISM)
+        # -------------------------
+        cause_ids, cause_kb = retrieve_causes(
+            cause_query="List of potential cause",
             failure_id=fid,
-            k=top_k_cause,
+            top_k=5,
         )
 
-        if not cause_results:
+        print(f"\n→ Linked causes ({len(cause_ids)}):")
+        if not cause_ids:
             print("  (no causes retrieved)")
             continue
 
-        for cid in cause_results:
+        for cid in cause_ids:
             cause = cause_kb.store.get(cid, {})
             print(f"  - Cause ID   : {cid}")
             print(f"    Cause text : {cause.get('failure_cause')}")
@@ -77,9 +115,6 @@ def query_fmea(
     print("=" * 80)
 
 
+# =========================================================
 if __name__ == "__main__":
-    query_fmea(
-        failure_query="no connection between control module and control card",
-        top_k_failure=3,
-        top_k_cause=5,
-    )
+    query_fmea_demo()
