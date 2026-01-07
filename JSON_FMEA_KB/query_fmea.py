@@ -67,9 +67,9 @@ def query_fmea_demo():
     # 1) Failure query (STRUCTURE)
     # -------------------------
     failure_ids, failure_kb = retrieve_failures(
-        failure_element="Motor drive",
-        failure_mode="Motor drive EMI too high",
-        failure_effect="FC not complying to relevant EMC norm", 
+        failure_element="",
+        failure_mode="Current/voltage measurement damaged",
+        failure_effect="Motor drive damaged", 
         top_k=3,
     )
 
@@ -95,7 +95,7 @@ def query_fmea_demo():
         # 2) Cause query (MECHANISM)
         # -------------------------
         cause_ids, cause_kb = retrieve_causes(
-            cause_query="List of potential cause",
+            cause_query="Power surge",
             failure_id=fid,
             top_k=5,
         )

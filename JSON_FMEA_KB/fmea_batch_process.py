@@ -43,7 +43,7 @@ json_files = sorted(JSON_ROOT.glob("*.json"))
 print(f"[INFO] JSON_ROOT = {JSON_ROOT}")
 print(f"[INFO] Found {len(json_files)} FMEA JSON files")
 
-for jp in json_files[:5]:
+for jp in json_files[:]:
     print(f"[INGEST] {jp.name}")
 
     try:
