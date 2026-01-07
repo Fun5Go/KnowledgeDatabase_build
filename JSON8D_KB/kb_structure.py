@@ -195,11 +195,15 @@ class FailureKB:
         with open(self.store_path, "w", encoding="utf-8") as f:
             json.dump(self.store, f, indent=2, ensure_ascii=False)
 
-        embed_text = "\n".join([
-            f"Failure mode: {failure.failure_mode}",
-            f"Failure element: {failure.failure_element}",
-            f"Failure effect: {failure.failure_effect or ''}",
-        ])
+        # Minimize the noise
+        embed_text = " | ".join(
+            t for t in [
+                failure.failure_mode,
+                failure.failure_element,
+                failure.failure_effect,
+            ]
+            if t
+        )
 
         self.collection.upsert(
             ids=[failure.failure_id],
@@ -255,10 +259,7 @@ class CauseKB:
             json.dump(self.store, f, indent=2, ensure_ascii=False)
 
         embed_text = "\n".join([
-            f"Failure mode: {cause.failure_mode}",
-            f"Failure element: {cause.failure_element}",
-            f"Root cause: {cause.root_cause}",
-            
+            f"Root cause: {cause.root_cause}"
         ])
 
         self.collection.upsert(
