@@ -10,6 +10,20 @@ from dataclasses import asdict
 from collections import defaultdict
 
 
+#======= Helper =========
+def is_valid_embed_text(text: Optional[str]) -> bool:
+    if text is None:
+        return False
+    t = text.strip()
+    if not t:
+        return False
+    if t.lower() in {
+        "-", "n/a", "na", "null", "none", "tbd", "to be defined"
+    }:
+        return False
+    return True
+
+
 # =========================================================
 # Data models
 # =========================================================
@@ -204,7 +218,7 @@ class FailureKB:
         metadatas = []
 
         def add_field(text: Optional[str], role: str):
-            if not text:
+            if not is_valid_embed_text(text):
                 return
             ids.append(f"{failure.failure_id}::{role}")
             documents.append(text)

@@ -259,14 +259,17 @@ def validate_k1_k4(
     return report
 
 
+
+
 if __name__ == "__main__":
     # Example wiring: adapt BASE_DIR in your project entrypoint
     BASE_DIR = Path(__file__).resolve().parent
 
-    KB_DATA_ROOT = BASE_DIR / "kb_data"
+    KB_DATA_ROOT = BASE_DIR.parent / "kb_data"
     FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
     CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
 
+    
     report = validate_k1_k4(FAILURE_KB_DIR, CAUSE_KB_DIR, max_print=50)
 
     print("\n========== KB VALIDATION (K1–K4) ==========")
@@ -284,3 +287,5 @@ if __name__ == "__main__":
     dump("K2 null semantics issues", report["samples"]["K2_null_semantics_issues"])
     dump("K3 id errors", report["samples"]["K3_id_errors"])
     dump("K4 referential integrity errors", report["samples"]["K4_ref_integrity_errors"])
+
+    

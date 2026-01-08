@@ -263,7 +263,7 @@ if __name__ == "__main__":
     # Example wiring: adapt BASE_DIR in your project entrypoint
     BASE_DIR = Path(__file__).resolve().parent
 
-    KB_DATA_ROOT = BASE_DIR / "kb_data"
+    KB_DATA_ROOT = BASE_DIR.parent / "kb_data"
     FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
     CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
 
