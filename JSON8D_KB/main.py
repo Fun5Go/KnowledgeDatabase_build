@@ -2,7 +2,7 @@ from pathlib import Path
 
 from kb_structure import FailureKB, CauseKB, SentenceKB
 from ingest_8d import ingest_8d_json
-from query import query_failure_to_cause
+
 
 
 # =========================================================
@@ -57,47 +57,3 @@ print(f"Sentence KB count : {sentence_kb.collection.count()}")
 print(f"Failure KB count  : {failure_kb.collection.count()}")
 print(f"Cause KB count    : {cause_kb.collection.count()}")
 
-
-# # =========================================================
-# # 4) Run an end-to-end query
-# # =========================================================
-# query = "current spike destroyed power supply"
-# print("\n================ QUERY ================")
-# print(query)
-
-# results = query_failure_to_cause(
-#     query_text=query,
-#     failure_kb=failure_kb,
-#     cause_kb=cause_kb,
-#     sentence_kb=sentence_kb,
-#     k_failure=3,
-#     k_cause=3,
-# )
-
-# # =========================================================
-# # 5) Display results
-# # =========================================================
-# print("\n================ RESULTS ================")
-
-# for i, r in enumerate(results, start=1):
-#     f = r["failure"]
-#     c = r["cause"]
-#     evidence = r["evidence"]
-
-#     print("\n" + "=" * 80)
-#     print(f"[{i}] FAILURE")
-#     print(f"ID      : {f['failure_id']}")
-#     print(f"Mode    : {f['failure_mode']}")
-#     print(f"Element : {f['failure_element']}")
-#     print(f"Status  : {f['status']}")
-
-#     print("\n→ ROOT CAUSE")
-#     print(f"ID         : {c['cause_id']}")
-#     print(f"Cause      : {c['root_cause']}")
-#     print(f"Level      : {c['cause_level']}")
-#     print(f"Discipline : {c['discipline']}")
-#     print(f"Confidence : {c['confidence']}")
-
-#     print("\n→ SUPPORTING EVIDENCE")
-#     for s in evidence:
-#         print(f"- {s}")

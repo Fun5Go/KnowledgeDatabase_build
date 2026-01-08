@@ -88,7 +88,7 @@ def check_cause_schema(cause_id: str, c: Dict[str, Any]) -> List[str]:
         errors.append("missing cause_id")
     if not c.get("failure_id") or is_blank_str(c.get("failure_id")):
         errors.append("missing failure_id (in cause)")
-    if not c.get("root_cause") or is_blank_str(c.get("root_cause")):
+    if not c.get("failure_cause") or is_blank_str(c.get("root_cause")):
         errors.append("missing root_cause")
 
     # Optional but typed fields (if present)
@@ -205,8 +205,8 @@ def validate_k1_k4(
     cause_kb_dir: Path,
     max_print: int = 30,
 ) -> Dict[str, Any]:
-    failure_store_path = failure_kb_dir / "failure_store.json"
-    cause_store_path = cause_kb_dir / "cause_store.json"
+    failure_store_path = failure_kb_dir / "fmea_failure_store.json"
+    cause_store_path = cause_kb_dir / "fmea_cause_store.json"
 
     failure_store = load_json(failure_store_path)
     cause_store = load_json(cause_store_path)
