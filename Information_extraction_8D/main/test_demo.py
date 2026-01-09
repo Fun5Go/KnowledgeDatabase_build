@@ -5,6 +5,7 @@ from Information_extraction_8D.tools.doc_parser import extract_product
 from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234,extract_iteration_1,extract_iteration_2
 from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
 from typing import List, Dict, Any
+from Information_extraction_8D.tools.text_normalization import extract_valuable_sentences  
 # ==========Test LLM (Pass)==========
 # resp = llm.invoke("Say hello, just one short sentence.")
 # print(resp.content)
@@ -153,27 +154,27 @@ def assign_sentence_ids(items: List[Dict[str, Any]], doc_prefix: str) -> List[Di
 #             d4_raw = content
 #     return d2_raw, d3_raw, d4_raw
 
-path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6318110147R01.docx"
-d2_sample, d3_sample,d4_sample =  parse_section_simplified(path)
-result = extract_iteration_1.invoke({
-            "data": {
-                "d2_raw": d2_sample,
-                "d3_raw": d3_sample,
-                "d4_raw": d4_sample
+# path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example\8D6318110147R01.docx"
+# d2_sample, d3_sample,d4_sample =  parse_section_simplified(path)
+# result = extract_iteration_1.invoke({
+#             "data": {
+#                 "d2_raw": d2_sample,
+#                 "d3_raw": d3_sample,
+#                 "d4_raw": d4_sample
 
-        }
-    })
+#         }
+#     })
 
 
-# 1) Assign IDs (Option A)
-sentences = output.get("selected_sentences", [])
-sentences = assign_sentence_ids(sentences, doc_prefix="8d_test_id")
-output["selected_sentences"] = sentences
+# # 1) Assign IDs (Option A)
+# sentences = output.get("selected_sentences", [])
+# sentences = assign_sentence_ids(sentences, doc_prefix="8d_test_id")
+# output["selected_sentences"] = sentences
 
-# 2) Validate against schema (will fail if anything is missing/wrong)
-validated = Iteration1Output(**output)
+# # 2) Validate against schema (will fail if anything is missing/wrong)
+# validated = Iteration1Output(**output)
 
-print (validated)
+# print (validated)
 
 # # 3) Save
 # out_path = os.path.join(output_dir, f"{base_name}_iter1.json")
@@ -205,6 +206,11 @@ print (validated)
 
 
 
+#=====Text normalization text======
+TEST_TEXT = "The following products where investigated by RD&D.\nTable 2-1 Checked products\nThe list includes two modules of a recent production batch that did not pass the functional test, which is part of the end of line testing. One that passes the functional test of a recent production batch, and an older product from 2019 that passed the functional test.\nIt was found that there is an unwanted oscillation of about 2MHz on the drain current of the fly-back converter, which powers the low voltage electronics on the board. Figure 2-1 (a) shows the drain current of the fly-back converter before the PFC is enabled. The oscillation is clearly visible. The amplitude of the first pulse of the oscillation is close the turn-off current of the regulator that controls the fly-back converter. The controller has a fixed turn-off limit of 250mA typically and a leading edge blanking to prevent false triggering due the current spikes due to switching of 250ns typically. The first peak of the oscillation is very close to the blanking and amplitude limit. When observing the cursor line in Figure 2-1 (a) it can be seen that the amplitude of the first peak is equal to the turn-off current of the regulator.\nAfter enabling of the PFC the amplitude of the ~2MHz oscillation becomes slightly higher resulting too early switching which in turn leads to loss of secondary voltage and a reset of the product. Figure 2-1 (b) depicts the current waveform after enabling the PFC where the fly-back controller switches due the peak of the first oscillation, which leads to loss of power in turn resetting the product.\nFigure 2-1 Drain current during (magenta) of SN 20-25-001-015 before the PFC is enabled (a) and with the PFC enabled (b). SN 20-21-001-205 showed similar results.\nThe same measurement was repeated on two products that passed the FT, see Figure 2-2. Figure 2-2. (a) shows the drain current SN: 20-21-001-012 from the same production batch of the failed products. It can be seen that also for this module the first peak is close to blanking and amplitude limit. A test was conducted by further increasing the DC link voltage from 425V to 445V, which increases the amplitude of the oscillation. The passed product remained working, but from the cursor lines  in Figure 2-2. (a) it can be seen that the amplitude of the oscillation is equal to the turn-off limit of the controller. So the margin is very slim.\nFigure 2-2. (b) shows the drain current of SN:19-40-001-006. Also that module shows the oscillation, however, some margin is present between the amplitude of the first peak and the turn-off current of the controller IC. Also for this module the DC link voltage was increased to 445V and the product remained working.\nFigure 2-2 Drain current during (yellow) of SN 20-21-001-012 (a) and SN 19-40-001-006 (b) both with the PFC enabled."
 
+result =  extract_valuable_sentences(TEST_TEXT)
+
+print(result)
 
 

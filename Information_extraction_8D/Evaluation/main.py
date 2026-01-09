@@ -8,11 +8,11 @@ from Information_extraction_8D.Evaluation.evaluation_tool import evaluate_iter1,
 BASE_DIR = Path(__file__).resolve().parent
 
 RAW_TEXT_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification\8D6298110111R01.json" # ← 改成你的真实路径
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification\8D6298110111R01.json"
 )
 
 SELECTED_SENTENCES_PATH = Path(
-     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected\8D6298110111R01_sentences.json" # ← 改成你的真实路径
+     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected\8D6298110111R01_sentences.json" 
 )
 
 
