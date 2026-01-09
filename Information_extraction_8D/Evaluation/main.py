@@ -5,17 +5,23 @@ from pathlib import Path
 from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
 from Information_extraction_8D.Evaluation.evaluation_tool import evaluate_iter1, summarize_eval
 
+BASE_DIR = Path(__file__).resolve().parent
+
 RAW_TEXT_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D6298190081R02.json" # ← 改成你的真实路径
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification\8D6298110111R01.json" # ← 改成你的真实路径
 )
 
 SELECTED_SENTENCES_PATH = Path(
-     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D6298190081R02_iter1.json" # ← 改成你的真实路径
+     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected\8D6298110111R01_sentences.json" # ← 改成你的真实路径
 )
 
-OUTPUT_PATH = Path(
-    r"iter1_evaluation_result_8D6298190081R02.json"
-)
+
+
+# OUTPUT_PATH = Path(
+#     r"iter1_evaluation_result_8D6298190081R02.json"
+# )
+
+OUTPUT_PATH = BASE_DIR / "sentence_evaluation_8D6298110111R01.json"
 # =========================================================
 # IO helpers
 # =========================================================
