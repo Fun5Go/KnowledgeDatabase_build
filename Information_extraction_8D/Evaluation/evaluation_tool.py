@@ -76,11 +76,11 @@ def check_faithfulness(
     if not sent_norm:
         return {"faithful": False, "type": "hallucinated", "score": 0}
 
-    # 1. Exact containment
+    # Exact containment
     if sent_norm in src_norm:
         return {"faithful": True, "type": "exact", "score": 100}
 
-    # 2. Global fuzzy (token-set is safer than partial)
+    # Global fuzzy (token-set is safer than partial)
     fuzzy_score = int(fuzz.token_set_ratio(sent_norm, src_norm))
 
     # 3. Lemma-level token coverage (anti light-rephrase)
@@ -89,7 +89,7 @@ def check_faithfulness(
     coverage = _token_coverage(sent_tokens, src_tokens)
     coverage_score = int(coverage * 100)
 
-    # 4. Final score = strongest signal
+    # Final score = strongest signal
     final_score = max(fuzzy_score, coverage_score)
 
     if final_score >= fuzzy_threshold:

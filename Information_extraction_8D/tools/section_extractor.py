@@ -106,7 +106,7 @@ def extract_failure_d234(data: dict) -> dict:
     parser = JsonOutputParser()
     return parser.parse(resp.content)
 
-@tool
+@tool # Langsmith tool
 def extract_iteration_1(data: dict) -> dict:
     """Analyze D2, D3, D4 sections to extract sentences """
     # Input from each section
@@ -174,6 +174,7 @@ def extract_iteration_2(data: dict) -> dict:
     - Do NOT invent or infer facts beyond the signals.
     - Output STRICT JSON only.
 """
+
     signals_bullets = "\n".join(
         f"- [id:{s.get('sentence_id','')}]"
         f"[{s.get('source_section','?')}]"

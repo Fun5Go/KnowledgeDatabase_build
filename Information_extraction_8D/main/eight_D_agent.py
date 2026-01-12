@@ -12,9 +12,32 @@ from typing import List, Dict, Any
 from langsmith import traceable, get_current_run_tree
 from Information_extraction_8D.Evaluation.evaluation_tool import check_faithfulness
 from datetime import datetime
+import unicodedata
 
 
 # Helper functions
+
+
+def normalize_text(text: str) -> str:
+    if not text:
+        return ""
+
+    # Normalize unicode (quotes, accents, etc.)
+    text = unicodedata.normalize("NFKC", text)
+
+    # Normalize line endings
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Convert bullet variants to "-"
+    text = re.sub(r"[•●▪▫–—]", "-", text)
+
+    # Collapse multiple spaces
+    text = re.sub(r"[ \t]+", " ", text)
+
+    # Collapse excessive newlines (keep max 2)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 
 def build_iteration2_input(iter1_output) -> dict:
     return {
@@ -150,8 +173,8 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     print("Parsed sections")
     # 3) Loop through parsed sections
     for sec in sections:
-        title = sec["title"]
-        content = sec["content"]
+        title = normalize_text(sec["title"])
+        content = normalize_text(sec["content"])
 
         # --------------------
         # Extract D2 section
