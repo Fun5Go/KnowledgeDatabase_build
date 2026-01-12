@@ -38,6 +38,9 @@ def safe_mean(values: List[float]) -> Optional[float]:
         return None
     return float(np.mean(values))
 
+def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
 
 # =========================================================
 # Core Semantic Evaluation
@@ -243,6 +246,75 @@ class SemanticEvaluator:
                 anomalies.append(it)
 
         return anomalies
+    
+     # -----------------------------------------------------
+    # SD4-F: Near-duplicate failure detection (role-aware)
+    # -----------------------------------------------------
+    def find_near_duplicate_failures(
+        self,
+        threshold: float = 0.92,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find highly similar failure pairs using role-aware embeddings.
+        """
+
+        # role -> list[(failure_id, embedding)]
+        role_map = {r: [] for r in ROLES}
+
+        data = self.collection.get(
+            include=["embeddings", "metadatas"]
+        )
+
+        for emb, meta in zip(data["embeddings"], data["metadatas"]):
+            role = meta.get("role")
+            fid = meta.get("failure_id")
+            if role in role_map:
+                role_map[role].append((fid, np.array(emb)))
+
+        # weight must match retrieval logic
+        role_weights = {
+            "failure_mode": 0.5,
+            "failure_element": 0.4,
+            "failure_effect": 0.3,
+        }
+
+        pair_scores: Dict[tuple, Dict[str, Any]] = {}
+
+        for role, items in role_map.items():
+            w = role_weights.get(role, 0.0)
+
+            for i in range(len(items)):
+                fid1, e1 = items[i]
+                for j in range(i + 1, len(items)):
+                    fid2, e2 = items[j]
+                    if fid1 == fid2:
+                        continue
+
+                    sim = cosine_sim(e1, e2)
+                    key = tuple(sorted([fid1, fid2]))
+
+                    if key not in pair_scores:
+                        pair_scores[key] = {
+                            "failure_1": key[0],
+                            "failure_2": key[1],
+                            "score": 0.0,
+                            "roles": set(),
+                        }
+
+                    pair_scores[key]["score"] += w * sim
+                    pair_scores[key]["roles"].add(role)
+
+        results = []
+        for v in pair_scores.values():
+            if v["score"] >= threshold:
+                results.append({
+                    "failure_1": v["failure_1"],
+                    "failure_2": v["failure_2"],
+                    "similarity": round(v["score"], 4),
+                    "roles": sorted(v["roles"]),
+                })
+
+        return sorted(results, key=lambda x: -x["similarity"])
 
 
 class CauseSemanticEvaluator:
@@ -307,6 +379,55 @@ class CauseSemanticEvaluator:
             "outlier_threshold": threshold,
             "outliers": outliers,
         }
+    
+        # -----------------------------------------------------
+    # SD4-C: Near-duplicate cause detection
+    # -----------------------------------------------------
+    def find_near_duplicate_causes(
+        self,
+        failure_pairs: List[Dict[str, Any]],
+        threshold: float = 0.90,
+    ) -> List[Dict[str, Any]]:
+
+        data = self.collection.get(
+            include=["embeddings", "metadatas"]
+        )
+
+        causes = []
+        for emb, meta, cid in zip(
+            data["embeddings"],
+            data["metadatas"],
+            data["ids"],
+        ):
+            causes.append({
+                "cause_id": cid,
+                "failure_id": meta.get("failure_id"),
+                "embedding": np.array(emb),
+            })
+
+        by_failure = {}
+        for c in causes:
+            by_failure.setdefault(c["failure_id"], []).append(c)
+
+        results = []
+
+        for pair in failure_pairs:
+            f1 = pair["failure_1"]
+            f2 = pair["failure_2"]
+
+            for c1 in by_failure.get(f1, []):
+                for c2 in by_failure.get(f2, []):
+                    sim = cosine_sim(c1["embedding"], c2["embedding"])
+                    if sim >= threshold:
+                        results.append({
+                            "failure_1": f1,
+                            "failure_2": f2,
+                            "cause_1": c1["cause_id"],
+                            "cause_2": c2["cause_id"],
+                            "similarity": round(sim, 4),
+                        })
+
+        return sorted(results, key=lambda x: -x["similarity"])
 
 
 # =========================================================
@@ -352,6 +473,15 @@ def run_semantic_evaluation(
         margin=0.05,
     )
 
+    near_failures = evaluator.find_near_duplicate_failures(
+        threshold=0.92
+    )
+    # Similar check
+    report["failure"]["near_duplicates"] = {
+        "count": len(near_failures),
+        "pairs": near_failures,
+    }
+
     # ---- Cause semantic evaluation ----
     cause_eval = CauseSemanticEvaluator(cause_kb_dir)
     report["cause"]["cohesion"] = cause_eval.evaluate_cohesion(k=k)
@@ -360,6 +490,17 @@ def run_semantic_evaluation(
         json.dumps(report, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+        # ---- Cause SD4: near-duplicates under similar failures ----
+    near_causes = cause_eval.find_near_duplicate_causes(
+        failure_pairs=near_failures,
+        threshold=0.90,
+    )
+
+    report["cause"]["near_duplicates"] = {
+        "count": len(near_causes),
+        "pairs": near_causes,
+    }
 
     print(f"[OK] Semantic evaluation report written to: {output_path}")
     return report

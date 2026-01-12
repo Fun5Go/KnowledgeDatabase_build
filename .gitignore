@@ -8,6 +8,7 @@ env*/
 .env
 
 *.json
+*.jsonl
 *.csv
 
 chroma*/
