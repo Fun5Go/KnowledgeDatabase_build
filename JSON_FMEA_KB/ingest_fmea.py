@@ -15,6 +15,30 @@ def normalize(x: str | None) -> str:
     return (x or "").strip().lower()
 
 
+def parse_number(value):
+    """
+    Convert value to float or int if possible.
+    Return None if invalid.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, (int, float)):
+        return value
+
+    if isinstance(value, str):
+        v = value.strip()
+        if v == "" or v.lower() in {"n/a", "na", "null", "none", "-"}:
+            return None
+        try:
+            if "." in v:
+                return float(v)
+            return int(v)
+        except ValueError:
+            return None
+
+    return None
+
 def is_failure_element_term(failure_type: str | None) -> bool:
     ft = normalize(failure_type)
     if not ft:
@@ -145,7 +169,7 @@ def ingest_fmea_json(
         failure_id = f"{file_name}__F{failure_counter}"
         failure_counter += 1
 
- # ---------- Failure fields ----------
+        # ---------- Failure fields ----------
         if source_type == "new_fmea":
             system = first.get("system_name")
             element = first.get("system_element")
@@ -171,23 +195,21 @@ def ingest_fmea_json(
         failure_mode = first.get("failure_mode")
         failure_effect = first.get("failure_effect")
 
-        severity = max(
-            [
-                r.get("severity")
-                for r in group
-                if isinstance(r.get("severity"), (int, float))
-            ],
-            default=None,
-        )
+        severity_values = [
+            parse_number(r.get("severity"))
+            for r in group
+            if parse_number(r.get("severity")) is not None
+        ]
 
-        rpn = max(
-            [
-                r.get("rpn")
-                for r in group
-                if isinstance(r.get("rpn"), (int, float))
-            ],
-            default=None,
-        )
+        severity = max(severity_values) if severity_values else None
+
+        rpn_values = [
+            parse_number(r.get("rpn"))
+            for r in group
+            if parse_number(r.get("rpn")) is not None
+        ]
+
+        rpn = max(rpn_values) if rpn_values else None
 
         failure_obj = FMEAFailure(
             failure_id=failure_id,
@@ -224,13 +246,17 @@ def ingest_fmea_json(
                 cause_obj = FMEACause(
                     cause_id=cause_id,
                     failure_id=failure_id,
+                    failure_mode= failure_mode,
+                    failure_element=element,
+                    failure_effect=failure_effect,
+                    
                     failure_cause=row.get("failure_cause"),
                     discipline=row.get("cause_discipline"),
 
                     prevention=row.get("controls_prevention"),
                     detection=row.get("current_detection"),
-                    detection_value=row.get("detection"),
-                    occurrence=row.get("occurrence"),
+                    detection_value=parse_number(row.get("detection")),
+                    occurrence=parse_number(row.get("occurrence")),
                     recommended_action=row.get("recommended_action"),
                 )
             else:
@@ -240,13 +266,17 @@ def ingest_fmea_json(
                 cause_obj = FMEACause(
                     cause_id=cause_id,
                     failure_id=failure_id,
+                    failure_mode= failure_mode,
+                    failure_element=element,
+                    failure_effect=failure_effect,
+
                     failure_cause=row.get("failure_cause"),
                     discipline=None,
 
                     prevention=None,  
                     detection=row.get("current_detection") or row.get("detection"),
-                    detection_value=row.get("detection"),
-                    occurrence=row.get("occurrence"),
+                    detection_value=parse_number(row.get("detection")),
+                    occurrence=parse_number(row.get("occurrence")),
                     recommended_action=row.get("recommended_action"),
 
                 )

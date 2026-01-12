@@ -58,6 +58,9 @@ class FMEAFailure:
 class FMEACause:
     cause_id: str
     failure_id: str
+    failure_mode: str
+    failure_element: Optional[str]
+    failure_effect: Optional[str]
 
     failure_cause: str
     discipline: Optional[str]
