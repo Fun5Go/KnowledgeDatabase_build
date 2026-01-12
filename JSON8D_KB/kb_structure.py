@@ -175,7 +175,41 @@ class SentenceKB:
                 )
             )
         return sentences
+    
+    def search(
+        self,
+        *,
+        query: str,
+        failure_id: str | None = None,
+        cause_id: str | None = None,
+        roles: list[str] | None = None,
+        k: int = 5,
+    ):
+        filters = []
 
+        if failure_id:
+            filters.append({"failure_id": failure_id})
+
+        if cause_id is not None:
+            # Optional filter
+            filters.append({"cause_id": cause_id})
+
+        if roles:
+            filters.append({"sentence_role": {"$in": roles}})
+
+        if not filters:
+            where = None
+        elif len(filters) == 1:
+            where = filters[0]
+        else:
+            where = {"$and": filters}
+
+        return self.collection.query(
+            query_texts=[query],
+            n_results=k,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
 
 # =========================================================
 # Failure KB (entry gate)

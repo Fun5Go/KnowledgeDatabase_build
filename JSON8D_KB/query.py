@@ -2,7 +2,22 @@
 from kb_structure import FailureKB, CauseKB, SentenceKB
 from pathlib import Path
 
+def print_sentence_hits(sentence_hits):
+    if not sentence_hits or not sentence_hits["documents"]:
+        print("\n→ SENTENCE SIMILARITY CHECK: no hits")
+        return
 
+    print("\n→ SENTENCE SIMILARITY CHECK (INSURANCE)")
+    for doc, meta, dist in zip(
+        sentence_hits["documents"][0],
+        sentence_hits["metadatas"][0],
+        sentence_hits["distances"][0],
+    ):
+        sim = 1 - dist
+        print(
+            f"- sim={sim:.3f} | role={meta.get('sentence_role')} | "
+            f"section={meta.get('source_section')} | {doc}"
+        )
 
 def retrieve_failures(
     *,
@@ -62,6 +77,13 @@ def failure_to_cause_pipeline(
         failure = failure_kb.store.get(fid)
         if not failure:
             continue
+
+        sentence_hits = sentence_kb.search(
+            query=cause_query,
+            failure_id=fid,
+            roles=["cause_sentence", "other"],
+            k=5,
+        )
 
         # -----------------------------
         # 2) Cause (WHY it broke)
@@ -153,6 +175,10 @@ def main():
     failure_kb = FailureKB(failure_dir)
     cause_kb = CauseKB(cause_dir)
 
+    failure_mode = "motor fails to restart"
+    cause_query = "incorrect start-up state machine"
+
+    
     results = failure_to_cause_pipeline(
         failure_mode="motor fails to restart",
         failure_element="",
@@ -165,6 +191,16 @@ def main():
         k_cause=3,
     )
     detail_print_results(results)
+
+    if results:
+        fid = results[0]["failure"]["failure_id"]
+        hits = sentence_kb.search(
+            query=failure_mode,
+            failure_id=fid,
+            roles=[],
+            k=5,
+        )
+        print_sentence_hits(hits)
 
     # for r in results:
     #     f = r["failure"]

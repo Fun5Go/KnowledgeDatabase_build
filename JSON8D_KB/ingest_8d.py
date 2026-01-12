@@ -63,6 +63,36 @@ def ingest_8d_json(
         )
         failure_sentence_ids.append(s.id)
 
+    used_sentence_ids = set()
+
+    for ent in failure.get("supporting_entities", []):
+        used_sentence_ids.add(ent["sentence_id"])
+
+    for cause in failure.get("root_causes", []):
+        for ent in cause.get("supporting_entities", []):
+            used_sentence_ids.add(ent["sentence_id"])
+
+    for ent in data.get("selected_sentences", []):
+        sid = ent["sentence_id"]
+
+        if sid in used_sentence_ids:
+            continue  # Exclude failure / cause support sentence
+
+        s = Sentence(
+            id=sid,
+            text=ent["text"],
+            source_section=ent.get("source_section", ""),
+            case_id=case_id,
+            annotations=ent.get("annotations", {}),
+        )
+
+        sentence_kb.add(
+            sentence=s,
+            failure_id=failure["failure_ID"],
+            sentence_role="other",
+            cause_id=None,
+        )
+
     # =====================================================
     #  Failure KB（入口）
     # =====================================================
