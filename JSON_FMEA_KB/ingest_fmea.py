@@ -3,6 +3,7 @@ from kb_structure import FMEAFailureKB, FMEACauseKB, FMEAFailure, FMEACause
 import json
 from pathlib import Path
 from collections import defaultdict
+import re
 
 
 
@@ -11,8 +12,13 @@ from collections import defaultdict
 # Helpers
 # =========================================================
 
-def normalize(x: str | None) -> str:
-    return (x or "").strip().lower()
+def normalize(s: str | None) -> str:
+    if not s:
+        return ""
+    s = s.lower().strip()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
 
 
 def parse_number(value):
@@ -132,6 +138,60 @@ def build_failure_signature(row: dict) -> tuple:
             normalize(row.get("failure_effect")),   
         )
 
+#====================================
+#===== Duplicate checking ===========
+def is_duplicate_failure(
+    failure_kb: FMEAFailureKB,
+    system,
+    element,
+    function,
+    failure_mode,
+    failure_effect,
+) -> str | None:
+    """
+    If duplicate found, return existing failure_id
+    Else return None
+    """
+    nm = normalize(failure_mode)
+    ne = normalize(failure_effect)
+    nel = normalize(element)
+    ns = normalize(system)
+
+    for fid, f in failure_kb.store.items():
+        if (
+            normalize(f.get("failure_mode")) == nm
+            and normalize(f.get("failure_effect")) == ne
+            and normalize(f.get("failure_element")) == nel
+            and normalize(f.get("system")) == ns
+        ):
+            return fid
+
+    return None
+
+def is_duplicate_cause(
+    cause_kb: FMEACauseKB,
+    failure_id: str,
+    cause_text: str,
+) -> str | None:
+    """
+    Only deduplicate causes under the same failure
+    """
+    nc = normalize(cause_text)
+
+    for cid, c in cause_kb.store.items():
+        if c.get("failure_id") != failure_id:
+            continue
+        if normalize(c.get("failure_cause")) == nc:
+            return cid
+
+    return None
+
+
+
+
+# =========================================================
+# Ingest
+# =========================================================
 
 # =========================================================
 # Ingest
@@ -139,8 +199,8 @@ def build_failure_signature(row: dict) -> tuple:
 
 def ingest_fmea_json(
     json_path: Path,
-    failure_kb: FMEAFailureKB,
-    cause_kb: FMEACauseKB,
+    failure_kb,
+    cause_kb,
 ):
     rows = json.loads(json_path.read_text(encoding="utf-8"))
     if isinstance(rows, dict):
@@ -148,111 +208,128 @@ def ingest_fmea_json(
 
     file_name = rows[0].get("file_name", json_path.stem)
 
-    # -------------------------------------------------
-    # Regroup rows by failure signature
-    # -------------------------------------------------
-    grouped: dict[tuple, list[dict]] = defaultdict(list)
+    print(f"[INGEST] {json_path.name}")
 
+    # -------------------------------------------------
+    # Group by file-internal failure signature
+    # -------------------------------------------------
+    grouped = defaultdict(list)
     for row in rows:
         sig = build_failure_signature(row)
         grouped[sig].append(row)
 
-    # -------------------------------------------------
-    # Sequential Failure IDs: F1, F2, ...
-    # -------------------------------------------------
     failure_counter = 1
 
-    for sig, group in grouped.items():
+    for _, group in grouped.items():
         first = group[0]
         source_type = first.get("source_type")
 
-        failure_id = f"{file_name}__F{failure_counter}"
-        failure_counter += 1
-
-        # ---------- Failure fields ----------
+        # -------------------------------------------------
+        # Build failure semantic fields FIRST (important)
+        # -------------------------------------------------
         if source_type == "new_fmea":
             system = first.get("system_name")
             element = first.get("system_element")
             function = first.get("function")
-            inferred_discipline = None
-
-        else:  # old_fmea
+        else:
             system = None
             ft = first.get("failure_type")
 
-            # Priority 1: specific element
             if is_failure_element_term(ft):
                 element = ft
-                inferred_discipline = None
-
-            # Priority 2: discipline inference
             else:
-                inferred_discipline = infer_discipline_from_failure_type(ft)
-                element = None if inferred_discipline else ft
+                inferred = infer_discipline_from_failure_type(ft)
+                element = None if inferred else ft
 
             function = None
 
         failure_mode = first.get("failure_mode")
         failure_effect = first.get("failure_effect")
 
-        severity_values = [
+        severity_vals = [
             parse_number(r.get("severity"))
             for r in group
             if parse_number(r.get("severity")) is not None
         ]
+        severity = max(severity_vals) if severity_vals else None
 
-        severity = max(severity_values) if severity_values else None
-
-        rpn_values = [
+        rpn_vals = [
             parse_number(r.get("rpn"))
             for r in group
             if parse_number(r.get("rpn")) is not None
         ]
+        rpn = max(rpn_vals) if rpn_vals else None
 
-        rpn = max(rpn_values) if rpn_values else None
-
-        failure_obj = FMEAFailure(
-            failure_id=failure_id,
-            failure_mode=failure_mode,
-            failure_element=element,
-            failure_effect=failure_effect,
+        # -------------------------------------------------
+        # FAILURE DEDUPLICATION (KB-level)
+        # -------------------------------------------------
+        existing_failure_id = is_duplicate_failure(
+            failure_kb,
             system=system,
+            element=element,
             function=function,
-            severity=severity,
-            rpn=rpn,
-            cause_ids=[],
-            source_type=source_type,
+            failure_mode=failure_mode,
+            failure_effect=failure_effect,
         )
 
-        # ---------- Write Failure KB ----------
-        if failure_id not in failure_kb.store:
+        if existing_failure_id:
+            failure_id = existing_failure_id
+            failure_obj = None
+        else:
+            failure_id = f"{file_name}__F{failure_counter}"
+            failure_counter += 1
+
+            failure_obj = FMEAFailure(
+                failure_id=failure_id,
+                failure_mode=failure_mode,
+                failure_element=element,
+                failure_effect=failure_effect,
+                system=system,
+                function=function,
+                severity=severity,
+                rpn=rpn,
+                cause_ids=[],
+                source_type=source_type,
+            )
             failure_kb.add(failure_obj)
 
+        # If reused, load existing failure object
+        if failure_obj is None:
+            failure_obj = FMEAFailure(**failure_kb.store[failure_id])
+
         # -------------------------------------------------
-        # Causes under this failure: C1, C2, ...
+        # Causes under this failure
         # -------------------------------------------------
-        cause_counter = 1
+        cause_counter = len(failure_obj.cause_ids) + 1
 
         for row in group:
             cause_text = row.get("failure_cause")
             if not cause_text:
                 continue
 
+            existing_cause_id = is_duplicate_cause(
+                cause_kb,
+                failure_id=failure_id,
+                cause_text=cause_text,
+            )
+
+            if existing_cause_id:
+                if existing_cause_id not in failure_obj.cause_ids:
+                    failure_obj.cause_ids.append(existing_cause_id)
+                continue
+
             cause_id = f"{failure_id}_C{cause_counter}"
             cause_counter += 1
 
             if source_type == "new_fmea":
-                discipline = row.get("cause_discipline")
                 cause_obj = FMEACause(
                     cause_id=cause_id,
                     failure_id=failure_id,
-                    failure_mode= failure_mode,
+                    failure_mode=failure_mode,
                     failure_element=element,
                     failure_effect=failure_effect,
-                    
-                    failure_cause=row.get("failure_cause"),
+                    failure_cause=cause_text,
                     discipline=row.get("cause_discipline"),
-
                     prevention=row.get("controls_prevention"),
                     detection=row.get("current_detection"),
                     detection_value=parse_number(row.get("detection")),
@@ -260,32 +337,27 @@ def ingest_fmea_json(
                     recommended_action=row.get("recommended_action"),
                 )
             else:
-                discipline = None
-
-            if source_type == "old_fmea":
                 cause_obj = FMEACause(
                     cause_id=cause_id,
                     failure_id=failure_id,
-                    failure_mode= failure_mode,
+                    failure_mode=failure_mode,
                     failure_element=element,
                     failure_effect=failure_effect,
-
-                    failure_cause=row.get("failure_cause"),
+                    failure_cause=cause_text,
                     discipline=None,
-
-                    prevention=None,  
+                    prevention=None,
                     detection=row.get("current_detection") or row.get("detection"),
                     detection_value=parse_number(row.get("detection")),
                     occurrence=parse_number(row.get("occurrence")),
                     recommended_action=row.get("recommended_action"),
-
                 )
-
 
             cause_kb.add(cause_obj)
             failure_obj.cause_ids.append(cause_id)
 
-        # ---------- Back-write failure → causes ----------
+        # -------------------------------------------------
+        # Back-write failure → causes
+        # -------------------------------------------------
         failure_kb.store[failure_id]["cause_ids"] = failure_obj.cause_ids
 
     # -------------------------------------------------
@@ -295,4 +367,6 @@ def ingest_fmea_json(
         json.dumps(failure_kb.store, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+    print(f"[OK] {json_path.name} ingested")
 
