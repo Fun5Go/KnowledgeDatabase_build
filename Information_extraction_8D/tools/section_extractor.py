@@ -108,16 +108,20 @@ def extract_failure_d234(data: dict) -> dict:
 
 @tool
 def extract_iteration_1(data: dict) -> dict:
-    """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
+    """Analyze D2, D3, D4 sections to extract sentences """
+    # Input from each section
     d2_text = data.get("d2_raw", "")
     d3_text = data.get("d3_raw", "")
     d4_text = data.get("d4_raw", "")
+    # Initialize LLM
     llm = get_llm_backend(
-        backend="openai",
-        model="azure/gpt-4.1",
-        json_mode=True,
-        temperature=0,
+        backend="openai",# / "local"
+        model="azure/gpt-4.1", # local: llama
+        json_mode=True, #  Force the model to return valid JSON output
+        temperature=0,  # Controls randomness: 0 = fully deterministic and repeatable responses
     )
+
+    # System prompt to control how the model should behave
     iteration1_system_prompt= """
     You are an expert quality and reliability engineer specializing in 8D problem solving, FMEA, and failure analysis.
     Your task is STRICTLY LIMITED to selecting HIGH VALUE sentences from the input text D2,D3,D4
@@ -125,17 +129,20 @@ def extract_iteration_1(data: dict) -> dict:
 
     iteration_prompt_1 = ChatPromptTemplate.from_messages([
         ("system", iteration1_system_prompt),
-        ("user", iter_prompt_1),  
+        ("user", iter_prompt_1),   # User input: the actual task from the user (sentence selection)
     ])
+    # Integrate the prompt tempate and the actual text content
     prompt = iteration_prompt_1.invoke({
             "d2": d2_text,
             "d3": d3_text,
             "d4": d4_text
     })
+    # Call LLM with the input (prompt + specific text)
     resp = llm.invoke(prompt.to_messages())
+    # Parse the response into a Python dictionary
     parsed = JsonOutputParser().parse(resp.content)
 
-    # Optional: strict validation
+    # strict validation
     validated = Iteration1Output(**parsed)
     return validated
 
