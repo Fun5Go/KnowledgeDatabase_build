@@ -40,7 +40,7 @@ def load_failure_embeddings(
         embedding_function=embedder,
     )
 
-    # ✅ "ids" must NOT be in include; ids are always returned
+    # "ids" must NOT be in include; ids are always returned
     data = collection.get(include=["embeddings", "metadatas"])
 
     X = []

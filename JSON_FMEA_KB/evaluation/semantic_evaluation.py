@@ -147,14 +147,10 @@ class SemanticEvaluator:
     # -----------------------------------------------------
 
     def evaluate_role_confusion_all(
-        self,
-        k: int = 3,
-        margin: float = 0.2,
-    ) -> Dict[str, Any]:
-        """
-        Scan all failure embeddings and detect role confusion.
-        margin: how much better the best role must be than current role
-        """
+    self,
+    k: int = 3,
+    margin: float = 0.1, #10%
+) -> Dict[str, Any]:
 
         # 1) load all items
         all_items = []
@@ -173,27 +169,44 @@ class SemanticEvaluator:
 
         confusions = []
 
-        # 2) for each item, check best role
+        # 2) evaluate each item
         for it in all_items:
             text = it["text"]
             if not isinstance(text, str) or not text.strip():
                 continue
 
             scores = {}
+
             for role in ROLES:
+
+                # Exclude self
+                where_clause = {
+                    "$and": [
+                        {"role": role},
+                        {"id": {"$ne": it["id"]}},
+                    ]
+                }
+
                 q = self.collection.query(
                     query_texts=[text],
                     n_results=k,
-                    where={"role": role},
+                    where=where_clause,
                 )
-                if q["distances"] and q["distances"][0]:
-                    scores[role] = float(min(q["distances"][0]))
+
+                if q.get("distances") and q["distances"][0]:
+                    dists = sorted(float(d) for d in q["distances"][0])
+
+                    # Use k or less
+                    use_k = min(k, len(dists))
+                    score = sum(dists[:use_k]) / use_k
+                    scores[role] = score
                 else:
                     scores[role] = None
 
-            # find best role
+            # find best role and compare with current role
             best_role = None
             best_dist = float("inf")
+
             for r, d in scores.items():
                 if d is not None and d < best_dist:
                     best_dist = d
@@ -202,12 +215,16 @@ class SemanticEvaluator:
             cur_role = it["current_role"]
             cur_dist = scores.get(cur_role)
 
-            if (
-                best_role
-                and best_role != cur_role
-                and cur_dist is not None
-                and (cur_dist - best_dist) > margin
-            ):
+            if not best_role or best_role == cur_role:
+                continue
+
+            if cur_dist is None or cur_dist <= 0:
+                continue
+
+            # relative gain
+            relative_gain = (cur_dist - best_dist) / cur_dist
+
+            if relative_gain > margin:
                 confusions.append({
                     "id": it["id"],
                     "failure_id": it["failure_id"],
@@ -471,7 +488,7 @@ def run_semantic_evaluation(
     # ---- Failure SD2 ----
     report["failure"]["role_confusion"] = evaluator.evaluate_role_confusion_all(
         k=3,
-        margin=0.2,
+        # margin=0.2,
     )
 
     near_failures = evaluator.find_near_duplicate_failures(
