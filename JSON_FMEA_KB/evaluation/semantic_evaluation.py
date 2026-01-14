@@ -10,6 +10,7 @@ import chromadb
 from chromadb.utils import embedding_functions
 
 
+
 # =========================================================
 # Config
 # =========================================================
@@ -148,7 +149,7 @@ class SemanticEvaluator:
     def evaluate_role_confusion_all(
         self,
         k: int = 3,
-        margin: float = 0.05,
+        margin: float = 0.2,
     ) -> Dict[str, Any]:
         """
         Scan all failure embeddings and detect role confusion.
@@ -470,7 +471,7 @@ def run_semantic_evaluation(
     # ---- Failure SD2 ----
     report["failure"]["role_confusion"] = evaluator.evaluate_role_confusion_all(
         k=3,
-        margin=0.05,
+        margin=0.2,
     )
 
     near_failures = evaluator.find_near_duplicate_failures(

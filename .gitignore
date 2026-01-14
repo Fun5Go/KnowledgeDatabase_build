@@ -10,6 +10,7 @@ env*/
 *.json
 *.jsonl
 *.csv
+*.png
 
 chroma*/
 
