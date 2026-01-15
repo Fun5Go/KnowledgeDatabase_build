@@ -6,7 +6,33 @@ from collections import defaultdict
 import re
 
 
+GENERIC_RIGHT_TOKENS = {
+    "general",
+    "specification",
+    "specifications",
+    "approval",
+    "approbation",
+}
 
+ELEMENT_RIGHT_TOKENS = {
+    "filter",
+    "switch",
+    "switches",
+    "capacitor",
+    "capacitors",
+    "inductor",
+    "inductors",
+    "sensor",
+    "sensors",
+    "connector",
+    "connectors",
+    "isolation",
+    "backcover",
+    "input",
+    "output",
+    "limiter",
+    "protection",
+}
 
 # =========================================================
 # Helpers
@@ -67,6 +93,12 @@ def is_failure_element_term(failure_type: str | None) -> bool:
         "regulator",
         "transceiver",
         "communication",
+        "support electronics",
+        "startup",
+        "buck",
+        "DC",
+        "cooling",
+
     ]
 
     return any(token in ft for token in specific_tokens)
@@ -82,7 +114,7 @@ def infer_discipline_from_failure_type(failure_type: str | None) -> str | None:
 
     electronics_tokens = {
         "electronics", "electronic", "electrical",
-        "hw", "hardware", "esw", 
+        "hw", "hardware",  
     }
     mechanics_tokens = {
         "mechanics", "mechanical", "mech", "mch"
@@ -109,7 +141,7 @@ def infer_discipline_from_failure_type(failure_type: str | None) -> str | None:
         return "MCH"
     if ft in software_tokens:
         return "ESW"
-    if ft in process_tokens:
+    if any(token in ft for token in process_tokens):
         return "process"
     if ft in design_tokens:
         return "design"
@@ -117,6 +149,42 @@ def infer_discipline_from_failure_type(failure_type: str | None) -> str | None:
         return "other"
 
     return None
+
+def parse_failure_type_semantics(failure_type: str | None):
+    """
+    Returns:
+        discipline: str | None
+        element: str | None
+    """
+    if not failure_type:
+        return None, None
+
+    # ft = normalize(failure_type)
+    ft = failure_type
+    print(ft)
+
+    if "/" not in ft:
+        return None, None
+
+    left_raw, right_raw = [p.strip() for p in ft.split("/", 1)]
+
+    left = normalize(left_raw)
+    right = normalize(right_raw)
+
+    # debug
+    print("DEBUG left:", left, "right:", right)
+
+    # discipline-only
+    if any(tok in right for tok in GENERIC_RIGHT_TOKENS):
+        return left, None
+
+    # concrete element
+    if any(tok in right for tok in ELEMENT_RIGHT_TOKENS):
+        return None, f"{left} / {right}"
+
+    # fallback
+    return left, None
+
 
 def build_failure_signature(row: dict) -> tuple:
     """
@@ -137,6 +205,7 @@ def build_failure_signature(row: dict) -> tuple:
             normalize(row.get("failure_mode")),
             normalize(row.get("failure_effect")),   
         )
+    
 
 #====================================
 #===== Duplicate checking ===========
@@ -234,12 +303,13 @@ def ingest_fmea_json(
         else:
             system = None
             ft = first.get("failure_type")
+            print(ft)
 
-            if is_failure_element_term(ft):
-                element = ft
-            else:
-                inferred = infer_discipline_from_failure_type(ft)
-                element = None if inferred else ft
+            discipline, element = parse_failure_type_semantics(ft)
+
+            print("discipline:", discipline)
+            print("element:", element)
+
 
             function = None
 
@@ -344,7 +414,7 @@ def ingest_fmea_json(
                     failure_element=element,
                     failure_effect=failure_effect,
                     failure_cause=cause_text,
-                    discipline=None,
+                    discipline=discipline,
                     prevention=None,
                     detection=row.get("current_detection") or row.get("detection"),
                     detection_value=parse_number(row.get("detection")),

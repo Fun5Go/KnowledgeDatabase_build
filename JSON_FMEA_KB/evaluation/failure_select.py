@@ -6,9 +6,9 @@ from pathlib import Path
 
 def main(
     causes_json_path: str,
-    n: int = 20,
+    n: int = 40,
     seed: int = 42,
-    out_path: str = "sample_20_failure_symptom_cause.jsonl",
+    out_path: str = "sample_40_failure_symptom_cause.jsonl",
 ):
     random.seed(seed)
 
@@ -48,4 +48,4 @@ if __name__ == "__main__":
     BASE_DIR = Path(__file__).resolve().parent
     KB_DATA_ROOT = BASE_DIR.parent / "kb_data"
     CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"/"fmea_cause_store.json"
-    main(causes_json_path=CAUSE_KB_DIR, n=20, seed=42)
+    main(causes_json_path=CAUSE_KB_DIR, n=40, seed=42)
