@@ -111,7 +111,7 @@ def infer_discipline_from_failure_type(failure_type: str | None) -> str | None:
     ft = normalize(failure_type)
     if not ft:
         return None
-
+    tokens = set(re.findall(r"[a-z0-9]+", ft))
     electronics_tokens = {
         "electronics", "electronic", "electrical",
         "hw", "hardware",  
@@ -135,17 +135,22 @@ def infer_discipline_from_failure_type(failure_type: str | None) -> str | None:
         "system", "subsystem", "overall", "general"
     }
 
-    if ft in electronics_tokens:
+    if tokens & electronics_tokens:
         return "HW"
-    if ft in mechanics_tokens:
+
+    if tokens & mechanics_tokens:
         return "MCH"
-    if ft in software_tokens:
+
+    if tokens & software_tokens:
         return "ESW"
-    if any(token in ft for token in process_tokens):
+
+    if tokens & process_tokens:
         return "process"
-    if ft in design_tokens:
+
+    if tokens & design_tokens:
         return "design"
-    if ft in generic_tokens:
+
+    if tokens & generic_tokens:
         return "other"
 
     return None
@@ -156,34 +161,56 @@ def parse_failure_type_semantics(failure_type: str | None):
         discipline: str | None
         element: str | None
     """
+
     if not failure_type:
         return None, None
 
-    # ft = normalize(failure_type)
-    ft = failure_type
-    print(ft)
+    ft_raw = failure_type.strip()
+    if "/" not in ft_raw:
+        # No structure → try infer discipline only
+        discipline = infer_discipline_from_failure_type(ft_raw)
+        return discipline, None
 
-    if "/" not in ft:
-        return None, None
+    left_raw, right_raw = ft_raw.split("/", 1)
+    left = normalize(left_raw.strip())
+    right = normalize(right_raw.strip())
 
-    left_raw, right_raw = [p.strip() for p in ft.split("/", 1)]
+    print("DEBUG left:", repr(left), "right:", repr(right))
 
-    left = normalize(left_raw)
-    right = normalize(right_raw)
+    # -----------------------------
+    # Tokenize right safely (word level)
+    # -----------------------------
+    right_tokens = set(re.findall(r"[a-z0-9]+", right))
 
-    # debug
-    print("DEBUG left:", left, "right:", right)
+    # -----------------------------
+    # 1. Generic bucket → discipline
+    # -----------------------------
+    if right in GENERIC_RIGHT_TOKENS:
+        return infer_discipline_from_failure_type(left), None
 
-    # discipline-only
-    if any(tok in right for tok in GENERIC_RIGHT_TOKENS):
-        return left, None
-
-    # concrete element
-    if any(tok in right for tok in ELEMENT_RIGHT_TOKENS):
+    # -----------------------------
+    # 2. Explicit element tokens
+    # -----------------------------
+    if right_tokens & ELEMENT_RIGHT_TOKENS:
         return None, f"{left} / {right}"
 
-    # fallback
-    return left, None
+    # -----------------------------
+    # 3. Heuristic element detection
+    # -----------------------------
+    if is_failure_element_term(right):
+        return None, f"{left} / {right}"
+
+    # -----------------------------
+    # 4. Discipline inference fallback
+    # -----------------------------
+    inferred = infer_discipline_from_failure_type(left)
+    if inferred:
+        return inferred, None
+
+    # -----------------------------
+    # 5. Default: treat as element
+    # -----------------------------
+    return None, f"{left} / {right}"
 
 
 def build_failure_signature(row: dict) -> tuple:

@@ -19,7 +19,7 @@ def resolve_paths():
 def main():
     failure_dir, cause_dir, json_root = resolve_paths()
 
-    json_path = json_root / "FMEA6022160004R03.json"
+    json_path = json_root / "FMEA6318200021R03.json"
     if not json_path.exists():
         raise FileNotFoundError(f"JSON not found: {json_path}")
 
