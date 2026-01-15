@@ -61,8 +61,9 @@ Fields:
     One of:system | sub_system | process
 
 Failure supporting_entities:
-- MUST reference symptom or occurrence in D2 signals
-- MUST NOT reference investigation-only signals
+- MUST reference signals from section D2 or D3
+- MUST describe observed failure behavior
+- MUST NOT reference D4-only signals
 
 ====================
 ROOT CAUSE RULES (D4 focused, FMEA-aligned)
@@ -117,9 +118,12 @@ For each root cause:
   - low | medium | high
 
 Confidence guidance:
-- high: confirmed signals, strong evidence, no contradictions
-- medium: observed findings or multiple suspected signals
-- low: single suspected signal or hypothesis only
+- high:
+    Confirmed findings, strong evidence, no contradictions
+- medium:
+    Observed findings or multiple suspected signals
+- low:
+    Single suspected signal or hypothesis only
 
 Root cause supporting_entities:
 - MUST reference D4 investigation or root_cause_evidence signals

@@ -188,15 +188,23 @@ def evaluate_text_compression(
 
 BASE_DIR = Path(__file__).resolve().parent
 
+# RAW_TEXT_PATH = Path(
+#     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification\8D6318110147R01.json"
+# )
+
+# SELECTED_SENTENCES_PATH = Path(
+#     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected\8D6318110147R01_sentences.json"
+# )
+
 RAW_TEXT_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification\8D6318110147R01.json"
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D620721025401.json"
 )
 
 SELECTED_SENTENCES_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected\8D6318110147R01_sentences.json"
+ r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D620721025401_iter1.json"
 )
 
-OUTPUT_PATH = BASE_DIR / "coverage_evaluation_8D6318110147R01.json"
+OUTPUT_PATH = BASE_DIR / "coverage_evaluation_8D620721025401_ini.json"
 
 
 def load_raw_text_d2_d3_d4(path: Path):

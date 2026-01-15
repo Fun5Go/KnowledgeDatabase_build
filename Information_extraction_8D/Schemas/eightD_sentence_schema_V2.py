@@ -3,25 +3,25 @@ from pydantic import BaseModel, Field
 
 
 class AnnotationItem(BaseModel):
-    entity_type: Literal[
-        "symptom",
-        "condition",
-        "occurrence",
-        "investigation",
-        "root_cause_evidence"
-    ] = Field(
-        ...,
-        description="Type of factual signal represented by the sentence"
-    )
-    assertion_level: Literal[
-        "observed",
-        "confirmed",
-        "ruled_out",
-        "suspected"
-    ] = Field(
-        ...,
-        description="How strongly the fact is asserted in the source text"
-    )
+    # entity_type: Literal[
+    #     "symptom",
+    #     "condition",
+    #     "occurrence",
+    #     "investigation",
+    #     "root_cause_evidence"
+    # ] = Field(
+    #     ...,
+    #     description="Type of factual signal represented by the sentence"
+    # )
+    # assertion_level: Literal[
+    #     "observed",
+    #     "confirmed",
+    #     "ruled_out",
+    #     "suspected"
+    # ] = Field(
+    #     ...,
+    #     description="How strongly the fact is asserted in the source text"
+    # )
     faithful_score: Optional[int] = None
     faithful_type: Literal["exact","partial","fuzzy","hallucinated"] = None
 

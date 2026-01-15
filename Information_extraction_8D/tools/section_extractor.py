@@ -178,8 +178,8 @@ def extract_iteration_2(data: dict) -> dict:
     signals_bullets = "\n".join(
         f"- [id:{s.get('sentence_id','')}]"
         f"[{s.get('source_section','?')}]"
-        f"[{s.get('entity_type','?')}]"
-        f"[{s.get('assertion_level','?')}] "
+        # f"[{s.get('entity_type','?')}]"
+        # f"[{s.get('assertion_level','?')}] "
         f"{s.get('text','')} "
         f"(faithful_score={s.get('faithful_score','?')}, "
         f"type={s.get('faithful_type','?')})"

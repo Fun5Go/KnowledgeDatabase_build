@@ -45,8 +45,8 @@ def build_iteration2_input(iter1_output) -> dict:
             {
                 "sentence_id": s.sentence_id,
                 "text": s.text,
-                "entity_type": s.annotations.entity_type,
-                "assertion_level": s.annotations.assertion_level,
+                # "entity_type": s.annotations.entity_type,
+                # "assertion_level": s.annotations.assertion_level,
                 "source_section": s.source_section,
                 "faithful_score": s.annotations.faithful_score,
                 "faithful_type": s.annotations.faithful_type
@@ -139,7 +139,7 @@ def resolve_supporting_entities(id_refs, sentence_index):
     return resolved
 
 
-@traceable(name="8d-extraction-batch(11-18)")
+@traceable(name="8d-extraction-withoutAnnotaion")
 def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
     # 1) Parse document sections using the parse_8d_doc tool

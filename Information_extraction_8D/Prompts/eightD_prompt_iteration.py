@@ -6,65 +6,19 @@ These sentences will be used for a failure knowledge base construction.
 WHAT TO SELECT
 --------------------------------------------------
 
-Select atomic factual sentences and assign ONE entity_type per sentence:
+From the following 8D sections (D2,D3,D4), select sentences that contain
+high engineering value.
+High-value signals include:
+- failure symptoms or abnormal behavior: 
+    Example: "current trip", "motor swapped", "broken down", "board damage", "unable to start", 
+              "endless loop", "phase fails"
+- failure modes or effects
+- Failure happened condition (external operational or environmental state)
+- Occurrence information (frequency, intermittency, quantity)
+- validated or suspected root causes
+- containment
+- verification or diagnostic evidence
 
-1. "symptom" 
-   - Observable failure behavior
-   - What does not work or behaves incorrectly
-   - Focus on RESULTS, not actions
-
-2.  "condition" 
-   - MUST describe an external operational or environmental state
-   - Temperature, humidity, stress, usage state.
-   - MUST describe an external state, not software logic or system behavior
-     NOT condition if:
-   - caused by misconfiguration, assembly error, or deviation
-   - part of a test setup or procedure
-   - implies a causal mechanism
-
-3.  "occurrence" 
-   - Frequency, probability, or repetition pattern of failure
-   - Ratios, counts, intermittent vs permanent behavior
-
-4.  "investigation" 
-   - Diagnostic findings
-   - What was investigated and confirmed working
-   - What was ruled out as a cause
-   - e.g.: "test", "investigate", "check"
-
-5. "root_cause_evidence" 
-   - Physical or logical evidence of a cause
-   - Electronics components linked to failure
-   - Process deviations linked to failure
-
-Disambiguation rules:
-- "symptom" = what is wrong or abnormal (failure behavior), not why.
-- "investigation" = actions or checks performed, including findings that something is OK or not the cause.
-- "root_cause_evidence" = physical or logical evidence pointing to a cause .
-- Do NOT classify checks or tests as root_cause_evidence unless they directly reveal damage or defects.
-
---------------------------------------------------
-ASSERTION LEVEL
---------------------------------------------------
-
-For each sentence, assign ONE assertion_level:
-
-- observed
-  - Directly seen or measured
-  - Default for physical findings
-
-- confirmed
-  - Explicitly stated as confirmed, verified or concluded
-
-
-- ruled_out
-  - Explicitly stated as NOT being the cause
-
-- suspected
-  - Hypothesis, assumption, or correlation
-  - Words like: "suspected", "may be", "possible", "likely"
-
-Do NOT infer assertion strength.
 
 
 --------------------------------------------------
@@ -95,8 +49,6 @@ Each item must follow this schema exactly:
       "text": "Concise factual sentence",
       "source_section": "D2 | D3 | D4",
       "annotations":{{
-      "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-      "assertion_level": "observed | confirmed | ruled_out | suspected",
       }}
     }}
   ]
@@ -112,13 +64,6 @@ D3: Provide a quick fix / Interim Containment Plan
 {d3}
 
 D4:Analyze root cause
-- In D4, subsection headers (e.g. "2.4.1") define an analysis topic
-  (potential component or failure cause).
-
-- Do NOT select subsection headers as sentences.
-
-- Select factual sentences under each subsection and associate them
-  with the nearest preceding subsection header as context.
 {d4}
 """
 
@@ -131,7 +76,7 @@ From the input signals:
 3. Extract failure mode, effect, and root cause ONLY if explicitly supported by signals
 
 ====================
-FAILURE RULES (D2/D3 focused)
+FAILURE RULES (D2 / D3 focused)
 ====================
 - system_name:
     ONE global system name (string or "")
@@ -142,44 +87,44 @@ FAILURE RULES (D2/D3 focused)
     Operational malfunction during use
     (e.g. "short circuit", "no start", "intermittent operation")
 - failure_effect:
-    Observable consequence of the failure (or null)
+    Observable consequence of the failure (or "")
 - failure_level:
     One of: "system", "sub_system", "process"
 
 Rules:
-- failure-related information must be supported mainly by signals with entity_type = symptom or occurrence
-- Do NOT infer failure mode or effect beyond what is explicitly stated
+- Failure-related information MUST be inferred mainly from D2/D3 signals
+- Do NOT infer failure effect beyond what is explicitly stated
 
 ====================
 ROOT CAUSE RULES (D4 focused)
 ====================
-!Multiple root causes are allowed.!
+! Multiple root causes are allowed !
 
 For each root cause:
 - cause_level:
-    One of: 'design', 'process', 'test' or 'component'
+    One of: "design", "process", "component", "software", "test_condition", "unknown"
 - failure_cause:
-    Should be specific electronics, software or mechanical engineering terms
-    Root cause directly leads to the failure mode
+    Specific electronics, software, or mechanical engineering term
+    The cause must directly lead to the failure mode
 - discipline_type:
     One of: "HW", "ESW", "MCH", "Other"
 - inferred_insight:
-    MAY summarize relationships between signals
+    MAY summarize relationships between provided signals
     MUST NOT introduce new facts
 - confidence:
     low | medium | high
 
 Rules:
-- Root causes must be supported mainly by signals with entity_type = root_cause_evidence or investigation
-- Signals with assertion_level = suspected indicate hypotheses, not confirmed causes
-- Do NOT upgrade suspected causes to confirmed without explicit support
+- Root causes MUST be inferred mainly from D4 signals
+- Signals with assertion_level = suspected indicate hypotheses only
+- Do NOT upgrade suspected causes to confirmed without explicit confirmation
 
 ====================
 OUTPUT REFINEMENT RULES (MANDATORY)
 ====================
 - failure_mode, failure_effect, and failure_cause MUST be short engineering labels
 - Use noun phrases, NOT full sentences
-- Length: typically 2–6 words
+- Typical length: 2–6 words
 - Do NOT restate evidence text
 
 ====================
@@ -188,8 +133,7 @@ SUPPORTING ENTITIES RULES
 - Every failure and every root cause MUST be supported by one or more signals
 - text MUST be copied EXACTLY from the selected sentence text
 - id MUST reference the original sentence id
-- source_section MUST match the original sentence
-- annotations information keep the original one
+- source_section MUST match the original section (D2 | D3 | D4)
 
 ====================
 INPUT SIGNAL FORMAT
@@ -198,8 +142,7 @@ Each signal contains:
 - id
 - text
 - source_section (D2 | D3 | D4)
-- entity_type (symptom | condition | occurrence | investigation | root_cause_evidence)
-- assertion_level (observed | confirmed | ruled_out | suspected)
+- failthness
 
 Input signals:
 {signals}
@@ -218,13 +161,7 @@ OUTPUT (STRICT JSON)
     {{
       "id": "",
       "text": "",
-      "source_section": "D2 | D3 | D4",
-      "annotations":{{
-      "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-      "assertion_level": "observed | confirmed | ruled_out | suspected"
-      "faithful_score": 
-      "faithful_type": 
-      }}
+      "source_section": "D2 | D3 | D4"
     }}
   ],
   "root_causes": [
@@ -236,13 +173,7 @@ OUTPUT (STRICT JSON)
         {{
           "id": "",
           "text": "",
-          "source_section": "D2 | D3 | D4",
-          "annotations":{{
-          "entity_type": "symptom | condition | occurrence | investigation | root_cause_evidence",
-          "assertion_level": "observed | confirmed | ruled_out | suspected"
-          "faithful_score": ""
-          "faithful_type": ""
-          }}
+          "source_section": "D4"
         }}
       ],
       "inferred_insight": "",
