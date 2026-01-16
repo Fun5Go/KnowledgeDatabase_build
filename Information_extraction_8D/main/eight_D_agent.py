@@ -139,7 +139,7 @@ def resolve_supporting_entities(id_refs, sentence_index):
     return resolved
 
 
-@traceable(name="8d-extraction-withoutAnnotaion")
+@traceable(name="8d-extraction-withoutAnnotaion-promptV2")
 def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
     # 1) Parse document sections using the parse_8d_doc tool

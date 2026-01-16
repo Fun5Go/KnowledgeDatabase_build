@@ -185,12 +185,20 @@ def extract_iteration_2(data: dict) -> dict:
         f"type={s.get('faithful_type','?')})"
         for s in data.get("signals", [])
     )
+    # D2_sentence = 
+    # D3_sentence = 
+    # D4_sentence = 
+
     iteration_prompt_2 = ChatPromptTemplate.from_messages([
         ("system", iteration_system_2),
         ("user", iter_prompt_2),  
     ])
     prompt = iteration_prompt_2.invoke({
-        "signals": signals_bullets
+        "signals": signals_bullets,
+        # "D2": D2_sentence,
+        # "D3": D3_sentence,
+        # "D4": D4_sentence,
+
     })
     resp = llm.invoke(prompt.to_messages())
     parser = JsonOutputParser()

@@ -68,6 +68,16 @@ Failure supporting_entities:
 ====================
 ROOT CAUSE RULES (D4 focused, FMEA-aligned)
 ====================
+IMPORTANT:
+For D4-derived causes, your task is NOT to analyze technical correctness.
+
+You MUST:
+- Reflect suspected or investigated cause mechanisms as written
+- Treat long investigations or reasoning chains as a single cause candidate
+- Avoid decomposing complex investigations into multiple causes unless explicitly stated
+
+If a cause requires deep technical interpretation, keep it coarse and mark confidence = low or medium.
+
 
 Definition:
 Root causes are POTENTIAL cause mechanisms or contributing factors,
@@ -102,13 +112,11 @@ For each root cause:
     One of: "HW", "ESW", "MCH", "Other"
 
 - cause_parent:
-  - ID of parent cause IF a causal chain is explicit
-  - Use ONLY when a sequential relationship is clear
-  - Use cause_parent ONLY if:
-    - one cause clearly leads to another in the text
-    - the relationship is explicitly or logically sequential
-      (e.g. test condition → electrical stress → component damage)
-      Otherwise leave cause_parent empty.
+  - Use ONLY if the text EXPLICITLY states a sequential cause relationship
+    using causal language such as:
+    "leads to", "results in", "causes", "due to", "as a consequence of"
+  - Do NOT infer or construct causal chains based on engineering logic
+  - If not explicitly stated, leave cause_parent empty
 
 - inferred_insight:(OPTIONAL)
     May summarize relationships between causes or signals
@@ -119,11 +127,11 @@ For each root cause:
 
 Confidence guidance:
 - high:
-    Confirmed findings, strong evidence, no contradictions
+    Supported by confirmed or ruled_out investigation signals
 - medium:
-    Observed findings or multiple suspected signals
+    Supported by multiple suspected or observed investigation signals
 - low:
-    Single suspected signal or hypothesis only
+    Supported by a single suspected signal or hypothesis
 
 Root cause supporting_entities:
 - MUST reference D4 investigation or root_cause_evidence signals
