@@ -22,7 +22,8 @@ class AnnotationItem(BaseModel):
     #     ...,
     #     description="How strongly the fact is asserted in the source text"
     # )
-    #subject: Optional [str] = None # The unique item for D4 section
+    status: Literal["support", "exclude", "suspect"]
+    subject: Optional [str] = None # The unique item for D4 section
     faithful_score: Optional[int] = None
     faithful_type: Literal["exact","partial","fuzzy","hallucinated"] = None
 

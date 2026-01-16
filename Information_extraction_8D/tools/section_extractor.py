@@ -146,13 +146,37 @@ def extract_iteration_1(data: dict) -> dict:
     validated = Iteration1Output(**parsed)
     return validated
 
+def format_signals(signals, include_subject: bool = False) -> str:
+    def _fmt_one(s: dict) -> str:
+        sid = s.get("sentence_id", "")
+        text = s.get("text", "")
+        faithful_score = s.get("faithful_score", "?")
+        faithful_type = s.get("faithful_type", "?")
+        status = s.get("status", "?")  # e.g. support/exclude/unknown
+
+        parts = [
+            f"- [id:{sid}]",
+        ]
+
+        # Only for D4 (or when you explicitly enable it)
+        if include_subject:
+            subject = s.get("subject", "")
+            if subject:
+                parts.append(f"[subject:{subject}]")
+
+        parts.append(text)
+
+        # Keep metadata compact to reduce token noise
+        parts.append(f"(status={status}, faithful_score={faithful_score}, type={faithful_type})")
+
+        return " ".join(parts)
+
+    return "\n".join(_fmt_one(s) for s in signals) if signals else "- (none)"
+
 @tool
 def extract_iteration_2(data: dict) -> dict:
-    """Analyze D2, D3, D4 sections to extract failures by LLM iteration """
+    """Analyze D2, D3, D4 selected sentences to extract failures by LLM iteration """
     llm = get_llm_backend(
-        # backend="local",
-        # model="llama3.1:8b",
-        # temperature=0,
         backend="openai",
         model="azure/gpt-4.1",
         json_mode=True,
@@ -173,36 +197,38 @@ def extract_iteration_2(data: dict) -> dict:
     - Use ONLY the provided signals.
     - Do NOT invent or infer facts beyond the signals.
     - Output STRICT JSON only.
-"""
+    """
 
-    signals_bullets = "\n".join(
-        f"- [id:{s.get('sentence_id','')}]"
-        f"[{s.get('source_section','?')}]"
-        # f"[{s.get('entity_type','?')}]"
-        # f"[{s.get('assertion_level','?')}] "
-        f"{s.get('text','')} "
-        f"(faithful_score={s.get('faithful_score','?')}, "
-        f"type={s.get('faithful_type','?')})"
-        for s in data.get("signals", [])
-    )
-    # D2_sentence = 
-    # D3_sentence = 
-    # D4_sentence = 
+    # --- split signals ---
+    d2_signals, d3_signals, d4_signals = [], [], []
+    for s in data.get("signals", []):
+        if s.get("source_section") == "D2":
+            d2_signals.append(s)
+        elif s.get("source_section") == "D3":
+            d3_signals.append(s)
+        elif s.get("source_section") == "D4":
+            d4_signals.append(s)
+
+
+    d2_sentence = format_signals(d2_signals, include_subject=False)
+    d3_sentence = format_signals(d3_signals, include_subject=False)
+    d4_sentence = format_signals(d4_signals, include_subject=True)
 
     iteration_prompt_2 = ChatPromptTemplate.from_messages([
         ("system", iteration_system_2),
-        ("user", iter_prompt_2),  
+        ("user", iter_prompt_2),
     ])
-    prompt = iteration_prompt_2.invoke({
-        "signals": signals_bullets,
-        # "D2": D2_sentence,
-        # "D3": D3_sentence,
-        # "D4": D4_sentence,
 
+    prompt = iteration_prompt_2.invoke({
+        "D2": d2_sentence,
+        "D3": d3_sentence,
+        "D4": d4_sentence,
     })
+
     resp = llm.invoke(prompt.to_messages())
     parser = JsonOutputParser()
     return parser.parse(resp.content)
+
 
 
 @tool

@@ -40,20 +40,25 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 def build_iteration2_input(iter1_output) -> dict:
-    return {
-        "signals": [
-            {
-                "sentence_id": s.sentence_id,
-                "text": s.text,
-                # "entity_type": s.annotations.entity_type,
-                # "assertion_level": s.annotations.assertion_level,
-                "source_section": s.source_section,
-                "faithful_score": s.annotations.faithful_score,
-                "faithful_type": s.annotations.faithful_type
-            }
-            for s in iter1_output.selected_sentences
-        ],
-    }
+    signals = []
+
+    for s in iter1_output.selected_sentences:
+        signal = {
+            "sentence_id": s.sentence_id,
+            "text": s.text,
+            "status": s.annotations.status,
+            "source_section": s.source_section,
+            "faithful_score": s.annotations.faithful_score,
+            "faithful_type": s.annotations.faithful_type,
+        }
+
+        # Only add subject if it exists (typically for D4)
+        if getattr(s.annotations, "subject", None):
+            signal["subject"] = s.annotations.subject
+
+        signals.append(signal)
+
+    return {"signals": signals}
 
 
 def assign_sentence_ids(items: List[Dict[str, Any]], doc_prefix: str) -> List[Dict[str, Any]]:

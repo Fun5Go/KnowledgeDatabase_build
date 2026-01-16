@@ -82,6 +82,7 @@ If a cause requires deep technical interpretation, keep it coarse and mark confi
 Definition:
 Root causes are POTENTIAL cause mechanisms or contributing factors,
 not final conclusions.
+Physical damage descriptions (e.g. bondwire evaporation, cracks, explosions, burned areas) MUST NOT be classified as root causes.
 
 They answer: "What could have led to the failure?"
 
@@ -165,8 +166,15 @@ Each signal contains:
 - entity_type (symptom | condition | occurrence | investigation | root_cause_evidence)
 - assertion_level (observed | confirmed | ruled_out | suspected)
 
-Input signals:
-{signals}
+Input sentences:
+D2:Define problem and symptoms
+{D2}
+
+D3: Provide a quick fix / Interim Containment Plan
+{D3}
+
+D4:Analyze root cause
+{D4}
 
 ====================
 OUTPUT (STRICT JSON)
