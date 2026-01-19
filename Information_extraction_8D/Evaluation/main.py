@@ -8,11 +8,11 @@ from Information_extraction_8D.Evaluation.evaluation_tool import evaluate_iter1,
 BASE_DIR = Path(__file__).resolve().parent
 
 RAW_TEXT_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification\8D6298110111R01.json"
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_V2\8D620721025401.json"
 )
 
 SELECTED_SENTENCES_PATH = Path(
-     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected\8D6298110111R01_sentences.json" 
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_V2\8D620721025401_iter1.json"
 )
 
 
@@ -21,7 +21,7 @@ SELECTED_SENTENCES_PATH = Path(
 #     r"iter1_evaluation_result_8D6298190081R02.json"
 # )
 
-OUTPUT_PATH = BASE_DIR / "sentence_evaluation_8D6298110111R01.json"
+OUTPUT_PATH = BASE_DIR / "sentence_evaluation_8D620721025401.json"
 # =========================================================
 # IO helpers
 # =========================================================

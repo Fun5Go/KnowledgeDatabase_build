@@ -89,8 +89,14 @@ def check_faithfulness(
     coverage = _token_coverage(sent_tokens, src_tokens)
     coverage_score = int(coverage * 100)
 
-    # Final score = strongest signal
-    final_score = max(fuzzy_score, coverage_score)
+    # hard gate： hallucination prevention
+    if coverage_score < 60:
+        final_score = coverage_score   
+    else:
+        final_score = int(
+            0.7 * fuzzy_score +
+            0.3 * coverage_score
+        )
 
     if final_score >= fuzzy_threshold:
         return {
@@ -162,25 +168,24 @@ ENTITY_RULES: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
-ASSERTION_MARKERS: Dict[str, List[str]] = {
-    "confirmed": ["confirmed", "verified", "reproduced"],
-    "observed": ["observed", "found", "visible", "measured"],
-    "ruled_out": ["ruled out", "excluded", "not the cause","disregarded", "no evidence", "be not"],
-    "suspected": ["suspected", "may", "likely", "possible","might"],
+STATUS_MARKERS: Dict[str, List[str]] = {
+    "support": ["confirmed", "verified", "reproduced","observed", "found", "visible", "measured"],
+    "exclude": ["ruled out", "excluded", "not the cause","disregarded", "no evidence", "be not", "do not"],
+    "suspect": ["suspected", "may", "likely", "possible","might", "could", "possibily"],
 }
 
-def validate_assertion(sentence: SelectedSentence) -> bool:
+def validate_status(sentence: SelectedSentence) -> bool:
     """
     - observed: we accept even if no marker is present (because many observed facts are plain statements)
     - other levels: require a marker substring match
     """
-    level = _get_annotation(sentence, "assertion_level")
+    level = _get_annotation(sentence, "status")
     if not level:
         return False
-    if level == "observed":
+    if level == "support":
         return True
 
-    markers = ASSERTION_MARKERS.get(level, [])
+    markers = STATUS_MARKERS.get(level, [])
     if not markers:
         return False
 
@@ -258,9 +263,9 @@ def evaluate_iter1(
         "weak_faithful": 0,
         "hallucinated": 0,
         "atomic": 0,
-        "entity_valid": 0,
-        "assertion_valid": 0,
-        "confirmed_count": 0,
+        # "entity_valid": 0,
+        "status_valid": 0,
+        "support_count": 0,
         "exact_count": 0,
         "fuzzy_count": 0,
         "partial_count": 0,
@@ -270,10 +275,8 @@ def evaluate_iter1(
 
     for idx, s in enumerate(sentences, start=1):
         text = getattr(s, "text", "") or ""
-        entity_type = _get_annotation(s, "entity_type")
-        assertion_level = _get_annotation(s, "assertion_level")
-
-        assertion_level = getattr(s, "assertion_level", None)
+        # entity_type = _get_annotation(s, "entity_type")
+        status = _get_annotation(s, "status")
         source_section = getattr(s, "source_section", None)
         sid = getattr(s, "id", None) or f"S{idx}"
 
@@ -297,16 +300,16 @@ def evaluate_iter1(
         if atomic_ok:
             counts["atomic"] += 1
 
-        entity_ok = validate_entity_type(s)
-        if entity_ok:
-            counts["entity_valid"] += 1
+        # entity_ok = validate_entity_type(s)
+        # if entity_ok:
+        #     counts["entity_valid"] += 1
 
-        assertion_ok = validate_assertion(s)
-        if assertion_ok:
-            counts["assertion_valid"] += 1
+        status_ok = validate_status(s)
+        if status_ok:
+            counts["status_valid"] += 1
 
-        if assertion_level == "confirmed":
-            counts["confirmed_count"] += 1
+        if status == "support":
+            counts["support_count"] += 1
 
         if include_per_sentence:
             per_sentence.append(
@@ -314,12 +317,12 @@ def evaluate_iter1(
                     "id": sid,
                     "source_section": source_section,
                     "text": text,
-                    "entity_type": entity_type,
-                    "assertion_level": assertion_level,
+                    # "entity_type": entity_type,
+                    "status": status,
                     "faithfulness": faith,     # includes type + score
                     "atomic": atomic_ok,
-                    "entity_rule_pass": entity_ok,
-                    "assertion_rule_pass": assertion_ok,
+                    # "entity_rule_pass": entity_ok,
+                    "status_rule_pass": status_ok,
                 }
             )
 
@@ -330,9 +333,9 @@ def evaluate_iter1(
         "weak_faithfulness_rate": _safe_float(counts["weak_faithful"], total),
         "hallucination_rate": _safe_float(counts["hallucinated"], total),
         "atomicity_rate": _safe_float(counts["atomic"], total),
-        "entity_rule_pass_rate": _safe_float(counts["entity_valid"], total),
-        "assertion_rule_pass_rate": _safe_float(counts["assertion_valid"], total),
-        "confirmed_ratio": _safe_float(counts["confirmed_count"], total),
+        # "entity_rule_pass_rate": _safe_float(counts["entity_valid"], total),
+        "status_rule_pass_rate": _safe_float(counts["status_valid"], total),
+        "support_ratio": _safe_float(counts["support_count"], total),
         "exact_ratio": _safe_float(counts["exact_count"], total),
         "fuzzy_ratio": _safe_float(counts["fuzzy_count"], total),
         "partial_ratio": _safe_float(counts["partial_count"], total),
@@ -358,9 +361,9 @@ def summarize_eval(eval_result: Dict[str, Any]) -> str:
         f"Faithful: {c.get('faithful', 0)} (exact={c.get('exact_count', 0)}, fuzzy={c.get('fuzzy_count', 0)})",
         f"Hallucinated: {c.get('hallucinated', 0)}",
         f"Atomic: {c.get('atomic', 0)}",
-        f"Entity rule pass: {c.get('entity_valid', 0)}",
-        f"Assertion rule pass: {c.get('assertion_valid', 0)}",
-        f"Confirmed: {c.get('confirmed_count', 0)}",
+        # f"Entity rule pass: {c.get('entity_valid', 0)}",
+        f"Status rule pass: {c.get('status_valid', 0)}",
+        f"Support: {c.get('support_count', 0)}",
         f"Coverage has_symptom={cov.get('has_symptom')}, has_root_or_investigation={cov.get('has_root_or_investigation')}",
         f"Type counts: {cov.get('type_counts')}",
     ]

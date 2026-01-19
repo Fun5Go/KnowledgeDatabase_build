@@ -17,10 +17,8 @@ class CauseItem(BaseModel):
     cause_ID: Optional[str] = None
     cause_level: Literal[
     "design",
+    "system",
     "process",
-    "component",
-    "software",
-    "test_condition",
     "unknown"
 ]
     failure_cause: Optional[str]  # WHY it happened

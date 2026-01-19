@@ -15,14 +15,14 @@ def resolve_paths():
         p.mkdir(parents=True, exist_ok=True)
 
     
-    json_root = base.parent / "eightD_json_raw"
+    json_root = base.parent / "eightD_json_V2"
     return sentence_dir, failure_dir, cause_dir, json_root
 
 
 def main():
     sentence_dir, failure_dir, cause_dir, json_root = resolve_paths()
 
-    json_path = json_root / "8D6016160115R01.json"
+    json_path = json_root / "8D620721025401.json"
     if not json_path.exists():
         raise FileNotFoundError(f"JSON not found: {json_path}")
 

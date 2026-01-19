@@ -133,7 +133,7 @@ class SentenceKB:
         sentence_role: str,
         cause_id: Optional[str] = None,
     ):
-        self.collection.add(
+        self.collection.upsert(
             ids=[sentence.id],
             documents=[sentence.text],
             metadatas=[{
@@ -142,8 +142,8 @@ class SentenceKB:
                 "cause_id": cause_id or "",
                 "sentence_role": sentence_role,
                 "source_section": sentence.source_section,
-                "entity_type": sentence.annotations.get("entity_type"),
-                "assertion_level": sentence.annotations.get("assertion_level"),
+                "status": sentence.annotations.get("status"),
+                "subject": sentence.annotations.get("subject"),
                 "faithful_score": int(sentence.annotations.get("faithful_score", 0)),
             }],
         )
@@ -168,8 +168,8 @@ class SentenceKB:
                     source_section=meta.get("source_section", ""),
                     case_id=meta.get("case_id", ""),
                     annotations={
-                        "entity_type": meta.get("entity_type"),
-                        "assertion_level": meta.get("assertion_level"),
+                        "status": meta.get("status"),
+                        "subject": meta.get("subject"),
                         "faithful_score": meta.get("faithful_score"),
                     },
                 )
@@ -243,6 +243,18 @@ class FailureKB:
     # =========================================================
     def add(self, failure):
         # ---- structured store ----
+        # new_data = asdict(failure)
+        # old_data = self.store.get(failure.failure_id)
+        
+
+        # if old_data == new_data:
+        #     print(f"The case {failure.failure_id} already exists in the KB")
+        #     if operation == "add"
+        #     print()     
+        #     return 
+
+            
+
         self.store[failure.failure_id] = asdict(failure)
         with open(self.store_path, "w", encoding="utf-8") as f:
             json.dump(self.store, f, indent=2, ensure_ascii=False)

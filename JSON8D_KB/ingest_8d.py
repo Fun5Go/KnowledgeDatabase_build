@@ -29,6 +29,7 @@ def ingest_8d_json(
     failure_kb: FailureKB,
     cause_kb: CauseKB,
     sentence_kb: SentenceKB,
+    operation: str = "replace",
 ):
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -92,35 +93,10 @@ def ingest_8d_json(
             sentence_role="other",
             cause_id=None,
         )
-
-    # =====================================================
-    #  Failure KB（入口）
-    # =====================================================
-    status = evaluate_failure(sentence_kb.get_by_ids(failure_sentence_ids))
-    failure_maintenance = parse_maintenance_tag(
-        failure.get("maintenance_tag")
-    )
-    
-
-    cause_ids: List[str] = []
-
-    failure_obj = Failure(
-        failure_id=failure["failure_ID"],
-        failure_mode=failure.get("failure_mode", ""),
-        failure_element=failure.get("failure_element", ""),
-        failure_effect=failure.get("failure_effect"),
-        product=product,
-        status=status,
-        supporting_sentence_ids=failure_sentence_ids,
-        cause_ids=[],
-        maintenance=failure_maintenance,
-    )
-
-    failure_kb.add(failure_obj)
-
     # =====================================================
     #  Cause KB
     # =====================================================
+    cause_ids: List[str] = []
     for cause in failure.get("root_causes", []):
         cause_id = cause["cause_ID"]
         cause_sentence_ids: List[str] = []
@@ -158,9 +134,28 @@ def ingest_8d_json(
             supporting_sentence_ids=cause_sentence_ids,
             maintenance=cause_maintenance
         )
-
         cause_kb.add(cause_obj)
         cause_ids.append(cause_id)
 
-    # cause_ids
-    failure_kb.store[failure["failure_ID"]]["cause_ids"] = cause_ids
+    # =====================================================
+    #  Failure KB
+    # =====================================================
+    status = evaluate_failure(sentence_kb.get_by_ids(failure_sentence_ids))
+    failure_maintenance = parse_maintenance_tag(
+        failure.get("maintenance_tag")
+    )
+    
+
+    failure_obj = Failure(
+        failure_id=failure["failure_ID"],
+        failure_mode=failure.get("failure_mode", ""),
+        failure_element=failure.get("failure_element", ""),
+        failure_effect=failure.get("failure_effect"),
+        product=product,
+        status=status,
+        supporting_sentence_ids=failure_sentence_ids,
+        cause_ids=cause_ids,
+        maintenance=failure_maintenance,
+    )
+
+    failure_kb.add(failure_obj)

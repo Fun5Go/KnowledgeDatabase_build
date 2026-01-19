@@ -93,12 +93,10 @@ General rules:
 For each root cause:
 - cause_level:
     One of:
-        "design"         (architecture, protection concept, margins)
-        "component"      (parts, materials, electronics)
-        "process"        (manufacturing, assembly, configuration)
-        "software"       (logic, timing, control,algorithm)
-        "test_condition" (stress, misuse, environment, deviations)
-        "unknown"
+        "system"   (system integration / requirements / interfaces / usage environment / vehicle- or product-level interactions)
+        "design"   (component or software design: architecture, protection concept, margins, parameter selection, algorithms)
+        "process"  (manufacturing / assembly / calibration / configuration / supplier variation / workmanship / test process)
+        "unknown"  (insufficient evidence to classify)
 
 - failure_cause:
     Short engineering noun phrase describing the suspected cause mechanism
@@ -109,8 +107,11 @@ For each root cause:
         - "Pre-charge active device failes - HW"
         - "Magnet alignment / magnetization - MCH"
 
-- discipline_type:
-    One of: "HW", "ESW", "MCH", "Other"
+- discipline_type: 
+    One of: "HW", (hardware)
+            "ESW", (embedded software)
+           "MCH", (Mechanical)
+           "Other"
 
 - cause_parent:
   - Use ONLY if the text EXPLICITLY states a sequential cause relationship

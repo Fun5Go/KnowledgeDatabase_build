@@ -57,11 +57,19 @@ def sentence_similarity_metrics(
 
     fuzzy_score = fuzz.token_set_ratio(sent_norm, ref_norm) / 100.0
     coverage = token_coverage(sent_tokens, ref_tokens)
-
+    
+        # hard gate： hallucination prevention
+    if coverage < 60:
+        final_score = coverage   
+    else:
+        final_score = int(
+            0.7 * fuzzy_score +
+            0.3 * coverage
+        )
     return {
         "fuzzy_similarity": fuzzy_score,
         "token_coverage": coverage,
-        "max_similarity": max(fuzzy_score, coverage),
+        "similarity": final_score,
     }
 
 
@@ -87,7 +95,7 @@ def compute_source_coverage(
 
         for sent in summary_sentences:
             metrics = sentence_similarity_metrics(unit, sent)
-            per_sentence_scores.append(metrics["max_similarity"])
+            per_sentence_scores.append(metrics["similarity"])
 
         best_score = max(per_sentence_scores) if per_sentence_scores else 0.0
         unit_scores.append(best_score)
@@ -114,7 +122,7 @@ def compute_summary_faithfulness(
 
     for sent in summary_sentences:
         metrics = sentence_similarity_metrics(sent, source_text)
-        scores.append(metrics["max_similarity"])
+        scores.append(metrics["similarity"])
         per_sentence.append({
             "sentence": sent,
             **metrics,
@@ -197,14 +205,14 @@ BASE_DIR = Path(__file__).resolve().parent
 # )
 
 RAW_TEXT_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D620721025401.json"
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_V2\8D620721025401.json"
 )
 
 SELECTED_SENTENCES_PATH = Path(
- r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_raw\8D620721025401_iter1.json"
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\eightD_json_V2\8D620721025401_iter1.json"
 )
 
-OUTPUT_PATH = BASE_DIR / "coverage_evaluation_8D620721025401_ini.json"
+OUTPUT_PATH = BASE_DIR / "coverage_evaluation_8D620721025401_ini2.json"
 
 
 def load_raw_text_d2_d3_d4(path: Path):

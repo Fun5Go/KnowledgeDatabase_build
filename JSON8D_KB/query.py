@@ -175,15 +175,15 @@ def main():
     failure_kb = FailureKB(failure_dir)
     cause_kb = CauseKB(cause_dir)
 
-    failure_mode = "motor fails to restart"
-    cause_query = "incorrect start-up state machine"
+    failure_mode = "intermittent boot failure"
+    cause_query = "LPDDR4 chip soldering defect"
 
     
     results = failure_to_cause_pipeline(
-        failure_mode="motor fails to restart",
+        failure_mode=failure_mode,
         failure_element="",
         failure_effect="",
-        cause_query="incorrect start-up state machine",
+        cause_query=cause_query,
         failure_kb=failure_kb,
         cause_kb=cause_kb,
         sentence_kb=sentence_kb,
@@ -195,7 +195,7 @@ def main():
     if results:
         fid = results[0]["failure"]["failure_id"]
         hits = sentence_kb.search(
-            query=failure_mode,
+            query=cause_query,
             failure_id=fid,
             roles=[],
             k=5,

@@ -73,10 +73,11 @@ Subject naming rules (priority order):
    (e.g. "eMMC", "PMIC power supplies", "SCFW software versions"),
    use that label as subject for all related sentences.
 
-2. If no explicit header exists, choose ONE generic component-level, process-level
-   name and reuse it consistently.
+2. If no explicit header exists, infer implicit one from the context.
 
-3. Prefer shorter, generic names over detailed or derived names.
+3. If no clear subject can be inferred, use "unknown
+
+4. Prefer shorter, generic names over detailed or derived names.
 
 For D2 and D3 sentences:
 - Do NOT add subject (leave it empty)
