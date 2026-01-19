@@ -52,9 +52,9 @@ For EACH selected sentence, assign annotations as follows:
 Status must reflect ONLY what is stated in the sentence.
 Do NOT upgrade or downgrade certainty.
 
-2) subject (ONLY for D4 sentences):
+2) subject (ONLY for D4 sentences): It aims to group the sentences
 
-- subject represents the INVESTIGATION OBJECT,
+- subject represents the INVESTIGATION OBJECT and POTENTIAL CAUSES,
   not the individual sentence topic.
 
 - All D4 sentences that belong to the same investigation
@@ -73,11 +73,15 @@ Subject naming rules (priority order):
    (e.g. "eMMC", "PMIC power supplies", "SCFW software versions"),
    use that label as subject for all related sentences.
 
-2. If no explicit header exists, infer implicit one from the context.
+2. If no explicit header exists, infer an implicit subject ONLY IF
+   multiple D4 sentences clearly and consistently refer to the same
+   hardware block, software component, or process.
 
-3. If no clear subject can be inferred, use "unknown
+3. If no clear and consistent investigation object can be identified,
+   use "unknown".
 
-4. Prefer shorter, generic names over detailed or derived names.
+4. Should represent a technical domain, component,
+or subsystem, not a failure behavior, symptom, or root cause.
 
 For D2 and D3 sentences:
 - Do NOT add subject (leave it empty)

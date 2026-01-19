@@ -68,8 +68,8 @@ def query_fmea_demo():
     # -------------------------
     failure_ids, failure_kb = retrieve_failures(
         failure_element="",
-        failure_mode="Current measurement damaged",
-        failure_effect="Motor drive damaged", 
+        failure_mode="unexpected motor stop",
+        failure_effect="", 
         top_k=3,
     )
 

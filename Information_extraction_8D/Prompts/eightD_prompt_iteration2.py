@@ -58,7 +58,7 @@ Fields:
     Do NOT infer system impact.
 
 - failure_level:
-    One of:system | sub_system | process
+    One of:system | sub_system | process | component
 
 Failure supporting_entities:
 - MUST reference signals from section D2 or D3
@@ -195,7 +195,7 @@ OUTPUT (STRICT JSON)
   ],
   "root_causes": [
     {{
-      "cause_level": "design | process | component | software | test_condition | unknown",
+      "cause_level": "design | process | system | unknown",
       "failure_cause": "",
       "discipline_type": "HW | ESW | MCH | Other",
       "cause_parent": "",

@@ -89,7 +89,7 @@ class Cause:
 def evaluate_failure(
     sentences: List[Sentence],
     min_faithful: int = 95,
-    allow_levels=("observed", "confirmed"),
+    allow_levels=("support", "suspect"),
 ) -> str:
     """
     Decide whether a failure is supported or hypothesis
@@ -433,6 +433,12 @@ class CauseKB:
             where={"failure_id": failure_id},
         )
         return res["ids"][0] if res["ids"] else []
+    
+    def get_all_vectors(self): 
+        res = self.collection.get(
+            include=["embeddings", "metadatas", "ids"]
+        )
+        return res
 
 
 

@@ -167,6 +167,58 @@ def resolve_paths():
 
     return sentence_dir, failure_dir, cause_dir
 
+def query_by_failure_id_metadata_only(
+    *,
+    failure_id: str,
+    failure_kb: FailureKB,
+    cause_kb: CauseKB,
+    sentence_kb: SentenceKB,
+):
+    result = {
+        "failure": None,
+        "causes": [],
+        "sentences": [],
+    }
+
+    # -----------------------------
+    # 1) Failure
+    # -----------------------------
+    failure = failure_kb.store.get(failure_id)
+    if not failure:
+        return result
+
+    result["failure"] = failure
+
+    # -----------------------------
+    # 2) Causes (filter store)
+    # -----------------------------
+    causes = []
+
+    for cid, c in cause_kb.store.items():
+        if c.get("failure_id") == failure_id:
+            causes.append(c)
+
+    result["causes"] = causes
+
+    # -----------------------------
+    # 3) Sentences (metadata search)
+    # -----------------------------
+    hits = sentence_kb.collection.get(
+        where={"failure_id": failure_id},
+        include=["documents", "metadatas"],
+    )
+
+    for _id, text, meta in zip(
+        hits["ids"], hits["documents"], hits["metadatas"]
+    ):
+        result["sentences"].append({
+            "sentence_id": _id,
+            "text": text,
+            "metadata": meta,
+        })
+
+    return result
+
 
 def main():
     sentence_dir, failure_dir, cause_dir = resolve_paths()
@@ -179,28 +231,36 @@ def main():
     cause_query = "LPDDR4 chip soldering defect"
 
     
-    results = failure_to_cause_pipeline(
-        failure_mode=failure_mode,
-        failure_element="",
-        failure_effect="",
-        cause_query=cause_query,
-        failure_kb=failure_kb,
-        cause_kb=cause_kb,
-        sentence_kb=sentence_kb,
-        k_failure=3,
-        k_cause=3,
-    )
-    detail_print_results(results)
+    # results = failure_to_cause_pipeline(
+    #     failure_mode=failure_mode,
+    #     failure_element="",
+    #     failure_effect="",
+    #     cause_query=cause_query,
+    #     failure_kb=failure_kb,
+    #     cause_kb=cause_kb,
+    #     sentence_kb=sentence_kb,
+    #     k_failure=3,
+    #     k_cause=3,
+    # )
+    # detail_print_results(results)
 
-    if results:
-        fid = results[0]["failure"]["failure_id"]
-        hits = sentence_kb.search(
-            query=cause_query,
-            failure_id=fid,
-            roles=[],
-            k=5,
+    # if results:
+    #     fid = results[0]["failure"]["failure_id"]
+    #     hits = sentence_kb.search(
+    #         query=cause_query,
+    #         failure_id=fid,
+    #         roles=[],
+    #         k=5,
+    #     )
+    #     print_sentence_hits(hits)
+    failure_id = "8D6298170245R02_F1"
+    case_result = query_by_failure_id_metadata_only(
+            failure_id = failure_id,
+            failure_kb=failure_kb,
+            cause_kb=cause_kb,
+            sentence_kb=sentence_kb,
         )
-        print_sentence_hits(hits)
+    print(case_result)
 
     # for r in results:
     #     f = r["failure"]

@@ -39,7 +39,7 @@ class DocumentInfo(BaseModel):
 
 class FailureChain(BaseModel):
     failure_ID: Optional[str]
-    failure_level: Literal["system","sub_system","component"]
+    failure_level: Literal["system","sub_system","component", "process"]
     failure_element: Optional[str]  # e.g. PFC stage, DC-link
     failure_mode: Optional[str]     # functional failure (e.g. "no output", "overcurrent")
     failure_effect: Optional[str]   # observable impact or damage (e.g. "MOSFET destroyed")

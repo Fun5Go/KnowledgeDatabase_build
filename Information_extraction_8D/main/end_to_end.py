@@ -5,8 +5,8 @@ from Information_extraction_8D.main.eight_D_agent import build_8d_case_from_docx
 from typing import List
 
 # ===== directories =====
-SENTENCE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected"
-FAILURE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification"
+SENTENCE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test_v2\sentence_selected"
+FAILURE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test_v2\failure_identification"
 
 # =============================
 # Core run function (single file)
@@ -61,7 +61,7 @@ def batch_run(folder_path: str) -> None:
 
     print(f"Found {len(docx_files)} docx files.")
 
-    for i, doc_path in enumerate(docx_files[10:]):
+    for i, doc_path in enumerate(docx_files[:]):
         try:
             print(f"Processing {i+1}/{len(docx_files)}: {os.path.basename(doc_path)}")
             run(doc_path)

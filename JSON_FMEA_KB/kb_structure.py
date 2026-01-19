@@ -264,3 +264,9 @@ class FMEACauseKB:
             where={"failure_id": failure_id},
         )
         return res["ids"][0] if res["ids"] else []
+    
+    def get_all_vectors(self): 
+        res = self.collection.get(
+            include=["embeddings", "metadatas", "ids"]
+        )
+        return res

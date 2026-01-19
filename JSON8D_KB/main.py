@@ -11,7 +11,7 @@ from ingest_8d import ingest_8d_json
 BASE_DIR = Path(__file__).resolve().parent
 
 # JSON_ROOT = BASE_DIR.parent / "eightD_json_raw"
-JSON_ROOT = Path(r'C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\failure_identification').resolve()
+JSON_ROOT = Path(r'C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test_v2\failure_identification').resolve()
 # if not JSON_ROOT.exists():
 #     JSON_ROOT = BASE_DIR.parent / "eightD_json_raw"
 
