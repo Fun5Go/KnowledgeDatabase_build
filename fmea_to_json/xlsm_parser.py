@@ -50,6 +50,7 @@ def extract_discipline(cause_raw):
     return "", strip_prefix(cause_raw)
 
 
+
 ###############################################################################
 # Step 1: Extract system name
 ###############################################################################
@@ -164,11 +165,11 @@ def find_context_for_row(context, excel_row):
 
 def build_flat_failures(
     system_name,
-    fmea_date,
     project_description,
     dfmea,
     context,
-    file_name
+    file_name,
+    metadata
 ):
 
     records = []
@@ -188,8 +189,13 @@ def build_flat_failures(
 
         record = {
             "source_type": "new_fmea",
-            "fmea_date": fmea_date,
+
+            # ===== metadata =====
             "project_description": project_description,
+            "released": metadata.get("released"),
+            "productId": metadata.get("productId"),
+            "productPnId": metadata.get("productPnId"),
+            "productName": metadata.get("productName"),
 
             "system_name": system_name,
             "system_element": system_element,
@@ -219,7 +225,6 @@ def build_flat_failures(
 
             "file_name": file_name
         }
-
         records.append(record)
 
     return records
@@ -230,8 +235,7 @@ def build_flat_failures(
 # Step 4: Main entry
 ###############################################################################
 
-def dfmea_to_json_xlsm(path, output_json, sheet_index=1):
-
+def process_dfmea_xlsm(path, output_json, sheet_index=1,fmea_index=None):
     file_name = os.path.splitext(os.path.basename(path))[0]
     system_name = extract_system_name(path, sheet_index)
 
@@ -242,8 +246,21 @@ def dfmea_to_json_xlsm(path, output_json, sheet_index=1):
         date_cell="T4",
         date_fallback_cell=None
     )
-
     fmea_date = meta.get("fmea_date", "")
+
+    # ===== 从 fmea_index 补 metadata =====
+    idx = {}
+    if fmea_index and file_name in fmea_index:
+        idx = fmea_index.get(file_name, {})
+
+
+    meta.update({
+        "released": idx.get("released") or fmea_date or None,
+        "productId": idx.get("productId"),
+        "productPnId": idx.get("productPnId"),
+        "productName": idx.get("productName"),
+    })
+
     project_description = meta.get("project_description", "")
 
     context = extract_structure_context(path, sheet_index)
@@ -251,11 +268,11 @@ def dfmea_to_json_xlsm(path, output_json, sheet_index=1):
 
     flat_records = build_flat_failures(
         system_name=system_name,
-        fmea_date=fmea_date,
         project_description=project_description,
         dfmea=dfmea,
         context=context,
-        file_name=file_name
+        file_name=file_name,
+        metadata=meta
     )
 
     with open(output_json, "w", encoding="utf-8") as f:
@@ -263,6 +280,3 @@ def dfmea_to_json_xlsm(path, output_json, sheet_index=1):
 
     print("JSON saved to:", output_json)
 
-
-def process_dfmea_xlsm(path, output_json, sheet_index=1):
-    dfmea_to_json_xlsm(path, output_json, sheet_index)

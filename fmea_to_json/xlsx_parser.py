@@ -38,7 +38,6 @@ def get_cell(row, col_map, *header_names, default_idx=None):
 
     return ""
 
-
 def get_int_cell(row, col_map, *header_names, default_idx=None):
     """
     Same as get_cell, but ensures numeric-like value.
@@ -53,9 +52,7 @@ def get_int_cell(row, col_map, *header_names, default_idx=None):
 def extract_old_fmea_failures(df, metadata, file_name):
     records = []
 
-    # ------------------------------------------------------------
     # 1. Locate header row
-    # ------------------------------------------------------------
     header_idx = -1
     for i in range(min(20, len(df))):
         row_text = " ".join(df.iloc[i].astype(str).str.lower())
@@ -63,18 +60,12 @@ def extract_old_fmea_failures(df, metadata, file_name):
             header_idx = i
             break
 
-    if header_idx == -1:
-        return records
-
     header_row = df.iloc[header_idx]
     col_map = build_col_map(header_row)
-
     df_data = df.iloc[header_idx + 1:].dropna(how="all")
 
-    # ------------------------------------------------------------
     # 2. Iterate rows
-    # ------------------------------------------------------------
-    for _, row in df_data.iterrows():
+    for row_idx, row in df_data.iterrows():
 
         failure_cause = get_cell(
             row, col_map,
@@ -85,28 +76,15 @@ def extract_old_fmea_failures(df, metadata, file_name):
         if not failure_cause:
             continue
 
-        failure_type = get_cell(
-            row, col_map,
-            "process step",
-            default_idx=1
-        )
 
-        failure_mode = get_cell(
-            row, col_map,
-            "potential failure mode",
-            default_idx=2
-        )
-
-        failure_effect = get_cell(
-            row, col_map,
-            "potential effect(s) of failure",
-            default_idx=3
-        )
+        process_step = get_cell(row, col_map, "process step", default_idx=1)
+        failure_mode = get_cell(row, col_map, "potential failure mode", default_idx=2)
+        failure_effect = get_cell(row, col_map, "potential effect(s) of failure", default_idx=3)
 
         severity = get_int_cell(
-            row, col_map,
-            "severity",
-            default_idx=4
+                    row, col_map,
+                    "severity",
+                    default_idx=4
         )
 
         occurrence = get_int_cell(
@@ -126,13 +104,7 @@ def extract_old_fmea_failures(df, metadata, file_name):
             "rpn", "so",
             default_idx=10
         )
-
-        current_detection = get_cell(
-            row, col_map,
-            "current controls",
-            default_idx=8
-        )
-
+        current_detection = get_cell(row, col_map, "current controls", default_idx=8)
         recommended_action = get_cell(
             row, col_map,
             "recommended actions",
@@ -140,17 +112,18 @@ def extract_old_fmea_failures(df, metadata, file_name):
             default_idx=11
         )
 
-        # ------------------------------------------------------------
-        # 3. Build record (JSON schema UNCHANGED)
-        # ------------------------------------------------------------
         record = {
             "source_type": "old_fmea",
             "file_name": file_name,
 
-            "project_description": metadata["project_description"],
-            "fmea_date": metadata["fmea_date"],
+            # ===== metadata 扩展 =====
+            "project_description": metadata.get("project_description"),
+            "released": metadata.get("released"),
+            "productId": metadata.get("productId"),
+            "productPnId": metadata.get("productPnId"),
+            "productName": metadata.get("productName"),
 
-            "failure_type": failure_type,
+            "process_step": process_step,
             "failure_mode": failure_mode,
             "failure_effect": failure_effect,
 
@@ -162,27 +135,16 @@ def extract_old_fmea_failures(df, metadata, file_name):
             "failure_cause": failure_cause,
             "current_detection": current_detection,
             "recommended_action": recommended_action,
-
-            "text": (
-                f"Failure mode {failure_mode}. "
-                f"Cause {failure_cause} leads to effect {failure_effect}. "
-                f"Severity {severity}, "
-                f"Occurrence {occurrence}, "
-                f"Detection {detection}, "
-                f"RPN {rpn}. "
-                f"Action {recommended_action}."
-            )
         }
 
         records.append(record)
 
     return records
 
-
 ###############################################################################
 # Main entry
 ###############################################################################
-def process_old_fmea_xlsx(path, output_json):
+def process_old_fmea_xlsx(path, output_json, fmea_index):
     file_name = os.path.splitext(os.path.basename(path))[0]
 
     df = pd.read_excel(
@@ -199,10 +161,26 @@ def process_old_fmea_xlsx(path, output_json):
         date_cell="J4",
         date_fallback_cell="J3"
     )
+    fmea_date = meta.get("fmea_date", "")
+
+
+    # ===== Add metadata from json list=====
+    idx = {}
+    if fmea_index and file_name in fmea_index:
+        if isinstance(fmea_index[file_name], dict):
+            idx = fmea_index.get(file_name, {})
+        else:
+            print(f"⚠ fmea_index[{file_name}] is not dict:", fmea_index[file_name])
+    meta.update({
+        "released": idx.get("released") or fmea_date or None,
+        "productId": idx.get("productId"),
+        "productPnId": idx.get("productPnId"),
+        "productName": idx.get("productName"),
+    })
 
     records = extract_old_fmea_failures(df, meta, file_name)
 
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
 
-    print("Old FMEA JSON saved to:", output_json)
+    print("✅ Old FMEA JSON saved to:", output_json)

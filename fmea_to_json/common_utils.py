@@ -3,6 +3,8 @@ import numpy as np
 import math
 import re
 from datetime import datetime, date
+import os
+import json
 
 ###############################################################################
 # Type Conversion
@@ -143,3 +145,25 @@ def is_numeric_like(value):
         return True
     except:
         return False
+
+def load_fmea_index(index_path):
+    with open(index_path, "r", encoding="utf-8") as f:
+        fmea_json = json.load(f)
+
+    index = {}
+
+    for item in fmea_json:
+        fname = item.get("copiedFileName")
+        if not fname:
+            continue
+
+        key = os.path.splitext(fname)[0]
+
+        index[key] = {
+            "released": item.get("released"),
+            "productId": item.get("productId"),
+            "productPnId": item.get("productPnId"),
+            "productName": item.get("productName"),
+        }
+
+    return index

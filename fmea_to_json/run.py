@@ -1,9 +1,12 @@
 import os
 from fmea_to_json.xlsm_parser import process_dfmea_xlsm
 from fmea_to_json.xlsx_parser import process_old_fmea_xlsx
+from fmea_to_json.common_utils import load_fmea_index
+INPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\FMEA"
+OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_sample"
+FMEA_INDEX_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\DATA_collection_process\fmea_with_filename.json"
+FMEA_INDEX = load_fmea_index(FMEA_INDEX_PATH)
 
-INPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA\Motor"
-OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\fmea_json_raw"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -19,9 +22,9 @@ for file in os.listdir(INPUT_DIR):
 
     try:
         if ext.lower() == ".xlsm":
-            process_dfmea_xlsm(path, output_json)
+            process_dfmea_xlsm(path, output_json,sheet_index=1, fmea_index=FMEA_INDEX)
         else:
-            process_old_fmea_xlsx(path, output_json)
+            process_old_fmea_xlsx(path, output_json,fmea_index=FMEA_INDEX)
 
         print("  ✔ Done")
 
