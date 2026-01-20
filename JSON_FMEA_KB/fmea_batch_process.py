@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kb_structure import FMEAFailureKB, FMEACauseKB
+from kb_structure import FMEAFailureKB, FMEACauseKB, FileMetaStore
 from ingest_fmea import ingest_fmea_json
 
 
@@ -10,9 +10,10 @@ from ingest_fmea import ingest_fmea_json
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Root folder containing many FMEA JSON files
-JSON_ROOT = BASE_DIR.parent / "fmea_json_raw"
-JSON_ROOT = JSON_ROOT.resolve()
+# # Root folder containing many FMEA JSON files
+# JSON_ROOT = BASE_DIR.parent / "fmea_json_raw"
+# JSON_ROOT = JSON_ROOT.resolve()
+JSON_ROOT = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_sample")
 
 if not JSON_ROOT.exists():
     raise FileNotFoundError(f"Cannot find fmea_json_raw folder at: {JSON_ROOT}")
@@ -32,6 +33,7 @@ for p in [FAILURE_KB_DIR, CAUSE_KB_DIR]:
 
 failure_kb = FMEAFailureKB(persist_dir=FAILURE_KB_DIR)
 cause_kb = FMEACauseKB(persist_dir=CAUSE_KB_DIR)
+meta_kb = FileMetaStore (persist_dir= KB_DATA_ROOT)
 
 
 # =========================================================
@@ -43,7 +45,7 @@ json_files = sorted(JSON_ROOT.glob("*.json"))
 print(f"[INFO] JSON_ROOT = {JSON_ROOT}")
 print(f"[INFO] Found {len(json_files)} FMEA JSON files")
 
-for jp in json_files[:]:
+for jp in json_files[:10]:
     print(f"[INGEST] {jp.name}")
 
     try:

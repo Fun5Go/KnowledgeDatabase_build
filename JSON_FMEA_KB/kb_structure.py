@@ -24,6 +24,18 @@ def is_valid_embed_text(text: Optional[str]) -> bool:
         return False
     return True
 
+@dataclass
+class FileMeta: #General metadata for a FMEA worksheet
+    source_type: str #new_fmea/ old_fmea/ 8D
+    released: Optional[str] #released date
+    # productId: Optional[int] 
+    # productPnId: Optional[int]
+    productName: Optional[str]
+    project_description: Optional[str]
+    file_name: str
+
+    # fmea_type: Optional[str] # system/ design/ process
+    # failure_id: str #FMEA61843..._F1
 
 @dataclass
 class Sentence:
@@ -46,12 +58,15 @@ class FMEAFailure:
     system: Optional[str]
     function: Optional[str]
 
-    severity: Optional[int]
+    severity: Optional[float]
     rpn: Optional[float]
 
     cause_ids: List[str]
 
     source_type: str # Old/New FMEA
+
+    fmea_type: Optional[str] = None
+    process_step: Optional[str] = None
 
 
 @dataclass
@@ -73,6 +88,27 @@ class FMEACause:
     occurrence: Optional[float]         # occurrence (number)
     recommended_action: Optional[str]   # recommended_action
 
+
+class FileMetaStore:
+    def __init__(self, persist_dir: Path):
+        self.persist_dir = Path(persist_dir)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        self.store_path = self.persist_dir / "file_meta_store.json"
+        self.store: dict[str, dict] = {}
+
+        if self.store_path.exists():
+            self.store = json.loads(self.store_path.read_text(encoding="utf-8"))
+
+    def add(self, meta: FileMeta):
+        self.store[meta.file_name] = asdict(meta)
+        self.store_path.write_text(
+            json.dumps(self.store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def get(self, file_name: str) -> dict | None:
+        return self.store.get(file_name)
 
 class FMEAFailureKB:
     def __init__(self, persist_dir: Path):
@@ -120,9 +156,7 @@ class FMEAFailureKB:
                 "failure_id": failure.failure_id,
                 "role": role,
                 "system": failure.system or "",
-                "severity": failure.severity or 0,
-                "rpn": failure.rpn or 0,
-                "type": failure.source_type,
+                "FMEA_type": failure.fmea_type or "",
             })
 
         # ---------- split embedding by role ----------
@@ -253,7 +287,8 @@ class FMEACauseKB:
             documents=[embed_text],
             metadatas=[{
                 "failure_id": cause.failure_id,
-                "discipline": cause.discipline or "",
+                "cause_id" :cause.cause_id,
+                "dicipline": cause.discipline,
             }],
         )
 

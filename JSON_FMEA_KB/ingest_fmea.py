@@ -1,4 +1,4 @@
-from kb_structure import FMEAFailureKB, FMEACauseKB, FMEAFailure, FMEACause
+from kb_structure import FMEAFailureKB, FMEACauseKB, FMEAFailure, FMEACause, FileMeta, FileMetaStore
 
 import json
 from pathlib import Path
@@ -132,7 +132,7 @@ def infer_discipline_from_failure_type(failure_type: str | None) -> str | None:
         "dimensioning", "tolerance"
     }
     generic_tokens = {
-        "system", "subsystem", "overall", "general"
+        "system", "subsystem", "overall", "general","emission", 
     }
 
     if tokens & electronics_tokens:
@@ -175,7 +175,7 @@ def parse_failure_type_semantics(failure_type: str | None):
     left = normalize(left_raw.strip())
     right = normalize(right_raw.strip())
 
-    print("DEBUG left:", repr(left), "right:", repr(right))
+    # print("DEBUG left:", repr(left), "right:", repr(right))
 
     # -----------------------------
     # Tokenize right safely (word level)
@@ -212,6 +212,25 @@ def parse_failure_type_semantics(failure_type: str | None):
     # -----------------------------
     return None, f"{left} / {right}"
 
+def map_discipline_to_fmea_type(
+    discipline: str | None,
+) -> str | None:
+    if not discipline:
+        return None
+
+    discipline = discipline.lower()
+
+    if discipline == "process":
+        return "process"
+
+    if discipline in {"hw", "mch", "esw", "design"}:
+        return "design"
+
+    if discipline in {"other", "system"}:
+        return "system"
+
+    return None
+
 
 def build_failure_signature(row: dict) -> tuple:
     """
@@ -228,7 +247,7 @@ def build_failure_signature(row: dict) -> tuple:
         )
     else:  # old_fmea
         return (
-            normalize(row.get("failure_type")),
+            normalize(row.get("process_type")),
             normalize(row.get("failure_mode")),
             normalize(row.get("failure_effect")),   
         )
@@ -289,14 +308,11 @@ def is_duplicate_cause(
 # Ingest
 # =========================================================
 
-# =========================================================
-# Ingest
-# =========================================================
-
 def ingest_fmea_json(
     json_path: Path,
     failure_kb,
     cause_kb,
+    meta_kb,
 ):
     rows = json.loads(json_path.read_text(encoding="utf-8"))
     if isinstance(rows, dict):
@@ -306,6 +322,14 @@ def ingest_fmea_json(
 
     print(f"[INGEST] {json_path.name}")
 
+    file_meta = FileMeta(
+    source_type=rows[0].get("source_type"),
+    released=rows[0].get("released"),
+    productName=rows[0].get("productName"),
+    project_description=rows[0].get("project_description"),
+    file_name=file_name,
+)
+    meta_kb.add(file_meta)
     # -------------------------------------------------
     # Group by file-internal failure signature
     # -------------------------------------------------
@@ -329,17 +353,12 @@ def ingest_fmea_json(
             function = first.get("function")
         else:
             system = None
-            ft = first.get("failure_type")
-            print(ft)
+            process_step = first.get("process_step")
 
-            discipline, element = parse_failure_type_semantics(ft)
-
-            print("discipline:", discipline)
-            print("element:", element)
-
+            discipline, element = parse_failure_type_semantics(process_step)
 
             function = None
-
+        fmea_type =  map_discipline_to_fmea_type(discipline)
         failure_mode = first.get("failure_mode")
         failure_effect = first.get("failure_effect")
 
@@ -380,7 +399,9 @@ def ingest_fmea_json(
                 failure_id=failure_id,
                 failure_mode=failure_mode,
                 failure_element=element,
+                fmea_type=fmea_type,
                 failure_effect=failure_effect,
+                process_step=process_step,
                 system=system,
                 function=function,
                 severity=severity,
@@ -437,6 +458,7 @@ def ingest_fmea_json(
                 cause_obj = FMEACause(
                     cause_id=cause_id,
                     failure_id=failure_id,
+                    # fmea_type=fmea_type,
                     failure_mode=failure_mode,
                     failure_element=element,
                     failure_effect=failure_effect,
