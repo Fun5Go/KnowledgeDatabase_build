@@ -3,10 +3,10 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
 
-KEYWORDS = {"atpm", "genesis", "converter", "yess"}
+KEYWORDS = {"atpm", "genesis", "yess"}
 PROCESS_WORDS = ("process", "pfmea", "solder", "coating", "assembly")
 
-INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D.json"
+INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA.json"
 
 
 def normalize(s) -> str:
@@ -19,7 +19,7 @@ def keyword_hit(parent_name: str, product_name: str) -> bool:
     return any(k in pn or k in pr for k in KEYWORDS)
 
 def load_json_smart(path: Path):
-    # 先用 utf-8-sig（兼容 UTF-8 BOM）
+    
     try:
         with path.open("r", encoding="utf-8-sig") as f:
             return json.load(f)
@@ -41,19 +41,20 @@ def load_json_smart(path: Path):
 def process_fmea(fmea_list: List[Dict[str, Any]]):
     rejected = []
 
-    # Step 1 + 2: 基础过滤
     stage12_pass = []
-    for r in fmea_list:
-        name_raw = r.get("name", "")
-        name = normalize(name_raw)
 
-        # Rule 1: exclude the name containing process-related words
+    for r in fmea_list:
+        name = normalize(r.get("name", ""))
+
+        # Rule 1
         hit = next((w for w in PROCESS_WORDS if w in name), None)
         if hit:
-            rejected.append({
-                **r,
-                "_reject_reason": f'name contains process-related word: "{hit}"'
-            })
+            rejected.append({**r, "_reject_reason": f'name contains process-related word: "{hit}"'})
+            continue
+
+        # Rule 2
+        if not keyword_hit(r.get("parentName"), r.get("productName")):
+            rejected.append({**r, "_reject_reason": "keyword not found in parentName/productName"})
             continue
 
         stage12_pass.append(r)
@@ -65,7 +66,7 @@ def process_fmea(fmea_list: List[Dict[str, Any]]):
 
         stage12_pass.append(r)
 
-    # Step 3: (id, name) 去重：isCopy==True 且 releaseNo 最大
+    # Step 3: deduplicate (id + name), latest release, not copy file
     grouped = defaultdict(list)
     for r in stage12_pass:
         key = (r.get("id"), r.get("name"))
@@ -96,10 +97,10 @@ def process_fmea(fmea_list: List[Dict[str, Any]]):
 
 def main():
     in_path = Path(INPUT_PATH)
-    out_selected = in_path.with_name("8D_selected.json")
-    out_rejected = in_path.with_name("8D_rejected.json")
+    out_selected = in_path.with_name("FMEA_selected.json")
+    out_rejected = in_path.with_name("FMEA_rejected.json")
 
-    # 读取输入 JSON（支持：list 或 {"items":[...]} 两种常见结构）
+    
     with in_path.open("r", encoding="utf-8") as f:
         data = load_json_smart(in_path)
     
