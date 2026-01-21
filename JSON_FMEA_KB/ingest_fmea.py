@@ -233,25 +233,20 @@ def map_discipline_to_fmea_type(
 
 
 def build_failure_signature(row: dict) -> tuple:
-    """
-    Regroup rule:
-    failure_effect is now part of the signature
-    """
     if row.get("source_type") == "new_fmea":
         return (
             normalize(row.get("system_name")),
             normalize(row.get("system_element")),
             normalize(row.get("function")),
             normalize(row.get("failure_mode")),
-            normalize(row.get("failure_effect")),   
+            normalize(row.get("failure_effect")),
         )
     else:  # old_fmea
-        return (
-            normalize(row.get("process_type")),
+        return (       
+            normalize(row.get("process_step")),       
             normalize(row.get("failure_mode")),
-            normalize(row.get("failure_effect")),   
+            normalize(row.get("failure_effect")),
         )
-    
 
 #====================================
 #===== Duplicate checking ===========
@@ -351,6 +346,9 @@ def ingest_fmea_json(
             system = first.get("system_name")
             element = first.get("system_element")
             function = first.get("function")
+            discipline = first.get("cause_discipline") 
+            process_step = None 
+            fmea_type = "design"
         else:
             system = None
             process_step = first.get("process_step")
@@ -358,7 +356,7 @@ def ingest_fmea_json(
             discipline, element = parse_failure_type_semantics(process_step)
 
             function = None
-        fmea_type =  map_discipline_to_fmea_type(discipline)
+            fmea_type =  map_discipline_to_fmea_type(discipline)
         failure_mode = first.get("failure_mode")
         failure_effect = first.get("failure_effect")
 

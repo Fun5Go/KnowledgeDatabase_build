@@ -45,7 +45,7 @@ json_files = sorted(JSON_ROOT.glob("*.json"))
 print(f"[INFO] JSON_ROOT = {JSON_ROOT}")
 print(f"[INFO] Found {len(json_files)} FMEA JSON files")
 
-for jp in json_files[:10]:
+for jp in json_files[:]:
     print(f"[INGEST] {jp.name}")
 
     try:
@@ -53,6 +53,7 @@ for jp in json_files[:10]:
             json_path=jp,
             failure_kb=failure_kb,
             cause_kb=cause_kb,
+            meta_kb=meta_kb,
         )
     except Exception as e:
         print(f"[ERROR] Failed to ingest {jp.name}: {e}")

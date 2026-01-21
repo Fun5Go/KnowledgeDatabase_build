@@ -128,15 +128,22 @@ For each root cause:
   - low | medium | high
 
 Confidence guidance:
-- high:
-    Supported by confirmed or ruled_out investigation signals
-- medium:
-    Supported by multiple suspected or observed investigation signals
-- low:
-    Supported by a single suspected signal or hypothesis
+Confidence reflects the strength of evidence supporting the identified failure or cause
+
+- High confidence:
+    The subject is supported by multiple D4 signals with status = "support",
+    and no strong contradicting ("exclude") signals exist.
+
+- Medium confidence:
+    The subject has a mix of "support" and "suspect" signals,
+    or multiple "suspect" signals without confirmation.
+
+- Low confidence:
+    The subject is supported only by a single "suspect" signal,
+    or evidence is weak, incomplete, or conflicting.
 
 Root cause supporting_entities:
-- MUST reference D4 investigation or root_cause_evidence signals
+- MUST reference D4 signals
 - Do NOT reference  D2 symptom-only signals
 
 ====================

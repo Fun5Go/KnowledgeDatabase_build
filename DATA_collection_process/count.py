@@ -15,27 +15,32 @@ def classify_product(item: dict, keywords: set[str]) -> set[str]:
             matched.add(kw)
     return matched
 
-def count_by_product_only_copied(data: list[dict], keywords: set[str]) -> Counter:
+def count_by_product_only_copied_and_formatted(data: list[dict], keywords: set[str]) -> Counter:
     counter = Counter()
-    for item in data:
-        #filter: must have copiedFileName
-        copied_name = item.get("copiedFileName", "")
+    for entry in data:
+        # filter 0: must have copiedFileName
+        copied_name = entry.get("copiedFileName", "")
         if not isinstance(copied_name, str) or not copied_name.strip():
             continue
 
-        matched = classify_product(item, keywords)
+        # # filter 1: must have entry["item"]["format"] == True
+        # inner = entry.get("item", {})
+        # if not isinstance(inner, dict) or inner.get("format") is not True:
+        #     continue
+
+        matched = classify_product(entry, keywords)
         for kw in matched:
             counter[kw] += 1
     return counter
 
 
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_JSON = BASE_DIR / "fmea_with_filename.json"
+OUTPUT_JSON = BASE_DIR / "8d_with_filename.json"
 with open(OUTPUT_JSON, "r", encoding="utf-8") as f:
     data = json.load(f)
 
-product_counter = count_by_product_only_copied(data, KEYWORDS)
+product_counter = count_by_product_only_copied_and_formatted(data, KEYWORDS)
 
-print("Product document count:")
+print("Product document count (copiedFileName present + item.format == true):")
 for k in sorted(KEYWORDS):
     print(f"{k.upper():8s}: {product_counter.get(k, 0)}")
