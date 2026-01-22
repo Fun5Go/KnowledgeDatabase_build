@@ -36,7 +36,7 @@ Light rephrasing is allowed ONLY to:
 - simplify wording without adding or removing facts
 
 --------------------------------------------------
-ANNOTATION RULES (IMPORTANT)
+ANNOTATION RULES
 --------------------------------------------------
 
 For EACH selected sentence, assign annotations as follows:
@@ -77,8 +77,7 @@ Subject naming rules (priority order):
    multiple D4 sentences clearly and consistently refer to the same
    hardware block, software component, or process.
 
-3. If no clear and consistent investigation object can be identified,
-   use "unknown".
+3. If no clear and consistent investigation object can be identified, use "unknown".
 
 4. Should represent a technical domain, component,
 or subsystem, not a failure behavior, symptom, or root cause.
