@@ -199,7 +199,7 @@ def batch_process(doc_dir_path, json_output_path, store_path, batch_size: Option
         return
 
     print(f"Found {len(docx_files)} docx files.")
-    for i, doc_path in enumerate(docx_files[100:200]):
+    for i, doc_path in enumerate(docx_files[400:]):
         try:
             print(f"Processing {i+1}/{len(docx_files)}: {os.path.basename(doc_path)}")
             label_item,raw_context = domain_identification_from_docx(doc_path)
