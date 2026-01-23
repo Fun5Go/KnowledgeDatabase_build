@@ -9,9 +9,10 @@ from pathlib import Path
 # CONFIG
 # ===============================
 BASE_DIR = Path(__file__).resolve().parent
-INPUT_JSON = BASE_DIR/"8D_selected.json"
-OUTPUT_JSON = BASE_DIR/"8d_with_filename.json"
-OUTPUT_8D_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\8D"
+INPUT_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\8D\8D_deduplicated_sd.json"
+# OUTPUT_JSON = BASE_DIR/"8d_with_filename.json"
+OUTPUT_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\8D\8D_with_filename.json"
+OUTPUT_8D_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\8D_ALL"
 
 KEYWORDS_MARK_PROCESS = [
     "housing",
@@ -51,8 +52,8 @@ def mark_is_process_by_name(item: dict) -> None:
             return
 
 
-def is_8d(item: dict) -> bool:
-    return item.get("type", "").upper() == "8D"
+def is_8d_4d(item: dict) -> bool:
+    return item.get("type", "").upper() in {"8D", "4D"}
 
 
 def is_allowed_to_copy(item: dict) -> bool:
@@ -109,18 +110,18 @@ with open(INPUT_JSON, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 for item in data:
-    # ---- Step 1: auto-mark process by name ----
-    mark_is_process_by_name(item)
 
-    # ---- Step 2: filter ----
-    if not is_allowed_to_copy(item):
-        if not is_8d(item):
-            item.setdefault("_copyStatus", "skipped: not 8D")
-        elif item.get("isProcess"):
-            item.setdefault("_copyStatus", "skipped: isProcess true")
+    # Step 1: filter by type
+    if not is_8d_4d(item):
+        item.setdefault("_copyStatus", "skipped: not 8D/4D")
         continue
 
+    # Step 2: validate path
     folder = item.get("path")
+    if not folder or not isinstance(folder, str):
+        item["_copyStatus"] = "failed: missing or invalid path"
+        continue
+
     pn = item.get("pn", "")
     prefix = build_8d_prefix(pn)
 
@@ -137,7 +138,6 @@ for item in data:
             item["_copyStatus"] = f"failed: no 8D file for prefix {prefix}"
         print(f"[NOT FOUND] {folder} | {prefix}")
         continue
-
     # ---- Step 3: copy + write back ----
     if safe_copy(src, OUTPUT_8D_DIR):
         item["copiedFileName"] = os.path.basename(src)

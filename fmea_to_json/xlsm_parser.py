@@ -186,11 +186,34 @@ def build_flat_failures(
         discipline, failure_cause = extract_discipline(
             to_scalar(row.get("failure_cause", ""))
         )
+        controls_prevention = str(to_scalar(row.get("controls_prevention", ""))).strip()
+        current_detection = str(to_scalar(row.get("current_detection", ""))).strip()
+        recommended_action = str(to_scalar(row.get("recommended_action", ""))).strip()
+        def safe_str(x):
+            if x is None:
+                return ""
+            s = str(x).strip()
+            return s
+        text = (
+            f"Product: {safe_str(metadata.get('productName'))}. "
+            f"System name: {safe_str(system_name)}. "
+            f"System element: {safe_str(system_element)}. "
+            f"Function: {safe_str(function)}. "
+            f"Failure mode: {safe_str(failure_mode)}. "
+            f"Failure cause: {safe_str(failure_cause)}. "
+            f"Failure effect: {safe_str(failure_effect)}. "
+            f"Cause discipline: {safe_str(discipline)}. "
+            f"Controls (prevention): {safe_str(controls_prevention)}. "
+            f"Controls (detection): {safe_str(current_detection)}. "
+            f"Recommended action: {safe_str(recommended_action)}."
+)
 
         record = {
             "source_type": "new_fmea",
 
             # ===== metadata =====
+            
+            "file_name": file_name,
             "project_description": project_description,
             "released": metadata.get("released"),
             "productId": metadata.get("productId"),
@@ -211,19 +234,11 @@ def build_flat_failures(
             "detection": to_scalar(row.get("detection", "")),
             "rpn": to_scalar(row.get("rpn", "")),
 
-            "controls_prevention": str(
-                to_scalar(row.get("controls_prevention", ""))
-            ).strip(),
+            "controls_prevention": controls_prevention,
+            "current_detection": current_detection,
+            "recommended_action": recommended_action,
 
-            "current_detection": str(
-                to_scalar(row.get("current_detection", ""))
-            ).strip(),
-
-            "recommended_action": str(
-                to_scalar(row.get("recommended_action", ""))
-            ).strip(),
-
-            "file_name": file_name
+            "text": text
         }
         records.append(record)
 

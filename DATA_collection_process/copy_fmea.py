@@ -7,10 +7,16 @@ from pathlib import Path
 # ===============================
 # CONFIG
 # ===============================
+# BASE_DIR = Path(__file__).resolve().parent
+# INPUT_JSON = BASE_DIR / "FMEA_selected.json"
+# OUTPUT_JSON = BASE_DIR / "fmea_with_filename.json"
+# OUTPUT_FMEA_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\FMEA"
+
 BASE_DIR = Path(__file__).resolve().parent
-INPUT_JSON = BASE_DIR / "FMEA_selected.json"
-OUTPUT_JSON = BASE_DIR / "fmea_with_filename.json"
-OUTPUT_FMEA_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\FMEA"
+INPUT_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\FMEA\FMEA_deduplicated_sd.json"
+# OUTPUT_JSON = BASE_DIR/"8d_with_filename.json"
+OUTPUT_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\FMEA\FMEA_with_filename.json"
+OUTPUT_FMEA_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\FMEA_ALL"
 
 # ===============================
 # UTILS

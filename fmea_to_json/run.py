@@ -2,9 +2,9 @@ import os
 from fmea_to_json.xlsm_parser import process_dfmea_xlsm
 from fmea_to_json.xlsx_parser import process_old_fmea_xlsx
 from fmea_to_json.common_utils import load_fmea_index
-INPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\FMEA"
-OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_sample"
-FMEA_INDEX_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\DATA_collection_process\fmea_with_filename.json"
+INPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\RAW\FMEA_ALL"
+OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_JSON_ALL"
+FMEA_INDEX_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\FMEA\FMEA_with_filename.json"
 FMEA_INDEX = load_fmea_index(FMEA_INDEX_PATH)
 
 

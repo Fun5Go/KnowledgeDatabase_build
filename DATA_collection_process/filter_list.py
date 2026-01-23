@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 KEYWORDS = {"atpm", "genesis", "yess"}
 PROCESS_WORDS = ("process", "pfmea", "solder", "coating", "assembly")
 
+
 INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\FMEA.json"
 
 

@@ -111,6 +111,18 @@ def extract_old_fmea_failures(df, metadata, file_name):
             "recommended action",
             default_idx=11
         )
+        def safe_str(x):
+            return x.strip() if isinstance(x, str) and x.strip() else ""
+
+        text = (
+            f"Product: {safe_str(metadata.get('productName'))}. "
+            f"Process step: {safe_str(process_step)}. "
+            f"Failure mode: {safe_str(failure_mode)}. "
+            f"Failure cause: {safe_str(failure_cause)}. "
+            f"Failure effect: {safe_str(failure_effect)}. "
+            f"Current controls: {safe_str(current_detection)}. "
+            f"Recommended action: {safe_str(recommended_action)}."
+        )
 
         record = {
             "source_type": "old_fmea",
@@ -135,6 +147,8 @@ def extract_old_fmea_failures(df, metadata, file_name):
             "failure_cause": failure_cause,
             "current_detection": current_detection,
             "recommended_action": recommended_action,
+
+            "text" : text,
         }
 
         records.append(record)
