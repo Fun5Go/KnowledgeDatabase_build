@@ -233,19 +233,21 @@ def map_discipline_to_fmea_type(
 
 
 def build_failure_signature(row: dict) -> tuple:
+    content = row.get("content", {})
+
     if row.get("source_type") == "new_fmea":
         return (
-            normalize(row.get("system_name")),
-            normalize(row.get("system_element")),
-            normalize(row.get("function")),
-            normalize(row.get("failure_mode")),
-            normalize(row.get("failure_effect")),
+            normalize(content.get("system_name")),
+            normalize(content.get("system_element")),
+            normalize(content.get("function")),
+            normalize(content.get("failure_mode")),
+            normalize(content.get("failure_effect")),
         )
     else:  # old_fmea
-        return (       
-            normalize(row.get("process_step")),       
-            normalize(row.get("failure_mode")),
-            normalize(row.get("failure_effect")),
+        return (
+            normalize(content.get("process_step")),
+            normalize(content.get("failure_mode")),
+            normalize(content.get("failure_effect")),
         )
 
 #====================================
@@ -317,14 +319,6 @@ def ingest_fmea_json(
 
     print(f"[INGEST] {json_path.name}")
 
-    file_meta = FileMeta(
-    source_type=rows[0].get("source_type"),
-    released=rows[0].get("released"),
-    productName=rows[0].get("productName"),
-    project_description=rows[0].get("project_description"),
-    file_name=file_name,
-)
-    meta_kb.add(file_meta)
     # -------------------------------------------------
     # Group by file-internal failure signature
     # -------------------------------------------------
@@ -487,3 +481,235 @@ def ingest_fmea_json(
 
     print(f"[OK] {json_path.name} ingested")
 
+def ingest_fmea_jsonl(
+    jsonl_path: Path,
+    failure_kb,
+    cause_kb,
+    meta_kb,
+):
+    # =================================================
+    # 0) Load JSONL / JSON
+    # =================================================
+    rows = []
+    with jsonl_path.open("r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON on line {line_no}: {e}") from e
+
+    print(f"[INGEST] {jsonl_path.name}")
+
+    # =================================================
+    # 1) PRIMARY GROUP: by file_name in each row
+    # =================================================
+    rows_by_file = defaultdict(list)
+    for row in rows:
+        file_name = row.get("file_name")
+        if not file_name:
+            raise ValueError("JSONL row missing file_name; cannot determine FMEA boundary")
+        rows_by_file[file_name].append(row)
+
+    # =================================================
+    # 2) FILE-LEVEL INGEST
+    # =================================================
+    for file_name, rows in rows_by_file.items():
+
+        # -------------------------------------------------
+        # META (PER FILE)
+        # -------------------------------------------------
+        first = rows[0]
+        metadata = first.get("metadata", {})
+        labels = first.get("labels", {})
+
+        file_meta = FileMeta(
+            source_type=first.get("source_type"),
+            released=metadata.get("released"),
+            productName=metadata.get("productName"),
+            # project_description=metadata.get("project_description"),
+            file_name=file_name,
+            product_domain=labels.get("domain"),
+        )
+        meta_kb.add(file_meta)
+
+        # -------------------------------------------------
+        # SECONDARY GROUP: file-internal failure signature
+        # -------------------------------------------------
+        grouped = defaultdict(list)
+        for row in rows:
+            sig = build_failure_signature(row)
+            grouped[sig].append(row)
+
+        failure_counter = 1
+
+        # =================================================
+        # 3) FAILURE INGEST (GROUP LEVEL)
+        # =================================================
+        for _, group in grouped.items():
+            first = group[0]
+            source_type = first.get("source_type")
+            content = first.get("content", {})
+
+            # ---------------------------------------------
+            # Restore new / old FMEA semantic logic
+            # ---------------------------------------------
+            if source_type == "new_fmea":
+                system = content.get("system_name")
+                element = content.get("system_element")
+                function = content.get("function")
+                discipline = content.get("cause_discipline")
+                process_step = None
+                fmea_type = "design"
+            else:
+                system = None
+                process_step = content.get("process_step")
+                discipline, element = parse_failure_type_semantics(process_step)
+                function = None
+                fmea_type = map_discipline_to_fmea_type(discipline)
+
+            failure_mode = content.get("failure_mode")
+            if isinstance(failure_mode, (int, float)):
+                print(f"Format error: failure_mode is numeric in {file_name}")
+                continue
+            failure_effect = content.get("failure_effect")
+
+            # ---------------------------------------------
+            # severity / rpn = MAX within failure group
+            # ---------------------------------------------
+            severity_vals = [
+                parse_number(r.get("RPN", {}).get("severity"))
+                for r in group
+                if parse_number(r.get("RPN", {}).get("severity")) is not None
+            ]
+            severity = max(severity_vals) if severity_vals else None
+
+            rpn_vals = [
+                parse_number(r.get("RPN", {}).get("RPN"))
+                for r in group
+                if parse_number(r.get("RPN", {}).get("RPN")) is not None
+            ]
+            rpn = max(rpn_vals) if rpn_vals else None
+
+            # ---------------------------------------------
+            # FAILURE DEDUP (KB-level)
+            # ---------------------------------------------
+            existing_failure_id = is_duplicate_failure(
+                failure_kb,
+                system=system,
+                element=element,
+                function=function,
+                failure_mode=failure_mode,
+                failure_effect=failure_effect,
+            )
+
+            if existing_failure_id:
+                failure_id = existing_failure_id
+                failure_obj = FMEAFailure(**failure_kb.store[failure_id])
+            else:
+                failure_id = f"{file_name}__F{failure_counter}"
+                failure_counter += 1
+
+                failure_obj = FMEAFailure(
+                    failure_id=failure_id,
+                    failure_mode=failure_mode,
+                    failure_element=element,
+                    fmea_type=fmea_type,
+                    failure_effect=failure_effect,
+                    process_step=process_step,
+                    system=system,
+                    function=function,
+                    severity=severity,
+                    rpn=rpn,
+                    cause_ids=[],
+                    source_type=source_type,
+                )
+                failure_kb.add(failure_obj)
+
+            # =================================================
+            # 4) CAUSE INGEST (ROW LEVEL UNDER FAILURE)
+            # =================================================
+            cause_counter = len(failure_obj.cause_ids) + 1
+
+            for row in group:
+                content = row.get("content", {})
+                rpn_block = row.get("RPN", {})
+
+                cause_text = content.get("failure_cause")
+
+
+                if not content.get("failure_mode") and not content.get("failure_cause"):
+                    print(f"[SKIP] Missing failure_mode/cause in {file_name}, row_index={row.get('row_index')}")
+                    continue
+
+                if isinstance(cause_text, str) and cause_text.strip() and cause_text.strip().replace(".", "", 1).isdigit():
+                    print(f"Format error: failure_cause is numeric-string in {file_name}, row_index={row.get('row_index')}")
+                    continue
+                if not cause_text:
+                    continue
+
+
+                existing_cause_id = is_duplicate_cause(
+                    cause_kb,
+                    failure_id=failure_id,
+                    cause_text=cause_text,
+                )
+
+                if existing_cause_id:
+                    if existing_cause_id not in failure_obj.cause_ids:
+                        failure_obj.cause_ids.append(existing_cause_id)
+                    continue
+
+                cause_id = f"{failure_id}_C{cause_counter}"
+                cause_counter += 1
+
+                if source_type == "new_fmea":
+                    cause_obj = FMEACause(
+                        cause_id=cause_id,
+                        failure_id=failure_id,
+                        failure_mode=failure_mode,
+                        failure_element=element,
+                        failure_effect=failure_effect,
+                        failure_cause=cause_text,
+                        discipline=content.get("cause_discipline"),
+                        prevention=content.get("controls_prevention"),
+                        detection=content.get("current_detection"),
+                        detection_value=parse_number(rpn_block.get("detection")),
+                        occurrence=parse_number(rpn_block.get("occurrence")),
+                        recommended_action=content.get("recommended_action"),
+                    )
+                else:
+                    cause_obj = FMEACause(
+                        cause_id=cause_id,
+                        failure_id=failure_id,
+                        failure_mode=failure_mode,
+                        failure_element=element,
+                        failure_effect=failure_effect,
+                        failure_cause=cause_text,
+                        discipline=discipline,
+                        prevention=None,
+                        detection=content.get("current_detection") or rpn_block.get("detection"),
+                        detection_value=parse_number(rpn_block.get("detection")),
+                        occurrence=parse_number(rpn_block.get("occurrence")),
+                        recommended_action=content.get("recommended_action"),
+                    )
+
+                cause_kb.add(cause_obj)
+                failure_obj.cause_ids.append(cause_id)
+
+            # ---------------------------------------------
+            # Back-write failure → causes
+            # ---------------------------------------------
+            failure_kb.store[failure_id]["cause_ids"] = failure_obj.cause_ids
+
+    # =================================================
+    # 5) Persist failure store
+    # =================================================
+    failure_kb.store_path.write_text(
+        json.dumps(failure_kb.store, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print(f"[OK] {jsonl_path.name} ingested")

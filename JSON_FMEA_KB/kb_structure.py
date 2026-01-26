@@ -9,6 +9,7 @@ from chromadb.utils import embedding_functions
 
 from dataclasses import asdict
 from collections import defaultdict
+from dataclasses import asdict, is_dataclass
 
 
 #======= Helper =========
@@ -31,10 +32,9 @@ class FileMeta: #General metadata for a FMEA worksheet
     # productId: Optional[int] 
     # productPnId: Optional[int]
     productName: Optional[str]
-    project_description: Optional[str]
+    # project_description: Optional[str]
     file_name: str
-
-    # fmea_type: Optional[str] # system/ design/ process
+    product_domain: Optional[str]
     # failure_id: str #FMEA61843..._F1
 
 @dataclass
@@ -101,14 +101,19 @@ class FileMetaStore:
             self.store = json.loads(self.store_path.read_text(encoding="utf-8"))
 
     def add(self, meta: FileMeta):
-        self.store[meta.file_name] = asdict(meta)
+        new_val = asdict(meta)
+        old_val = self.store.get(meta.file_name)
+
+        # 幂等：相同就不写盘
+        if old_val == new_val:
+            return
+
+        self.store[meta.file_name] = new_val
         self.store_path.write_text(
             json.dumps(self.store, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-
-    def get(self, file_name: str) -> dict | None:
-        return self.store.get(file_name)
+    
 
 class FMEAFailureKB:
     def __init__(self, persist_dir: Path):

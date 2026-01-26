@@ -56,10 +56,11 @@ def extract_old_fmea_failures(df, metadata, file_name):
     header_idx = -1
     for i in range(min(20, len(df))):
         row_text = " ".join(df.iloc[i].astype(str).str.lower())
-        if "process step" in row_text:
+        if ("process step" in row_text) or ("function" in row_text):
             header_idx = i
             break
-
+    if header_idx == -1:
+        raise ValueError("Header row not found (process step / function)")
     header_row = df.iloc[header_idx]
     col_map = build_col_map(header_row)
     df_data = df.iloc[header_idx + 1:].dropna(how="all")
@@ -70,16 +71,11 @@ def extract_old_fmea_failures(df, metadata, file_name):
         failure_cause = get_cell(
             row, col_map,
             "potential cause(s) of failure",
-            default_idx=5
         )
 
-        if not failure_cause:
-            continue
-
-
         process_step = get_cell(row, col_map, "process step", default_idx=1)
-        failure_mode = get_cell(row, col_map, "potential failure mode", default_idx=2)
-        failure_effect = get_cell(row, col_map, "potential effect(s) of failure", default_idx=3)
+        failure_mode = get_cell(row, col_map, "potential failure mode", )
+        failure_effect = get_cell(row, col_map, "potential effect(s) of failure",)
 
         severity = get_int_cell(
                     row, col_map,
