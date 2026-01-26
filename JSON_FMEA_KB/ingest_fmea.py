@@ -46,6 +46,12 @@ def normalize(s: str | None) -> str:
     s = re.sub(r"\s+", " ", s)
     return s
 
+def normalize_excel_text(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    s = s.replace("\u00A0", " ").replace("\u3000", " ")
+    s = s.strip()
+    return s
 
 def parse_number(value):
     """
@@ -350,7 +356,7 @@ def ingest_fmea_json(
             discipline, element = parse_failure_type_semantics(process_step)
 
             function = None
-            fmea_type =  map_discipline_to_fmea_type(discipline)
+            # fmea_type =  map_discipline_to_fmea_type(discipline)
         failure_mode = first.get("failure_mode")
         failure_effect = first.get("failure_effect")
 
@@ -529,11 +535,13 @@ def ingest_fmea_jsonl(
             source_type=first.get("source_type"),
             released=metadata.get("released"),
             productName=metadata.get("productName"),
+            productPnID= metadata.get("productPnId"),
             # project_description=metadata.get("project_description"),
             file_name=file_name,
             product_domain=labels.get("domain"),
         )
         meta_kb.add(file_meta)
+        fmea_type = labels.get("fmea_type") or "system"
 
         # -------------------------------------------------
         # SECONDARY GROUP: file-internal failure signature
@@ -562,17 +570,16 @@ def ingest_fmea_jsonl(
                 function = content.get("function")
                 discipline = content.get("cause_discipline")
                 process_step = None
-                fmea_type = "design"
             else:
                 system = None
                 process_step = content.get("process_step")
                 discipline, element = parse_failure_type_semantics(process_step)
                 function = None
-                fmea_type = map_discipline_to_fmea_type(discipline)
+                # fmea_type = map_discipline_to_fmea_type(discipline)
 
             failure_mode = content.get("failure_mode")
-            if isinstance(failure_mode, (int, float)):
-                print(f"Format error: failure_mode is numeric in {file_name}")
+            if isinstance(failure_mode, str) and failure_mode.strip() and failure_mode.strip().replace(".", "", 1).isdigit():
+                print(f"Format error: failure_mode is numeric-string in {file_name}, row_index={row.get('row_index')}")
                 continue
             failure_effect = content.get("failure_effect")
 
@@ -616,15 +623,22 @@ def ingest_fmea_jsonl(
                     failure_id=failure_id,
                     failure_mode=failure_mode,
                     failure_element=element,
-                    fmea_type=fmea_type,
                     failure_effect=failure_effect,
-                    process_step=process_step,
+
                     system=system,
                     function=function,
                     severity=severity,
                     rpn=rpn,
                     cause_ids=[],
                     source_type=source_type,
+
+                    # ===== 注入 file-level context =====
+                    productPnID=file_meta.productPnID,
+                    product_domain=file_meta.product_domain,
+                    file_name=file_name,
+
+                    fmea_type=fmea_type,
+                    process_step=process_step,
                 )
                 failure_kb.add(failure_obj)
 
@@ -637,7 +651,7 @@ def ingest_fmea_jsonl(
                 content = row.get("content", {})
                 rpn_block = row.get("RPN", {})
 
-                cause_text = content.get("failure_cause")
+                cause_text = normalize_excel_text(content.get("failure_cause"))
 
 
                 if not content.get("failure_mode") and not content.get("failure_cause"):

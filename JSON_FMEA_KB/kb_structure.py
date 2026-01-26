@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union, Literal
 
 from pathlib import Path
 import json
@@ -10,6 +10,9 @@ from chromadb.utils import embedding_functions
 from dataclasses import asdict
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
+
+FilterValue = Union[str, List[str]]
+DStage = Literal["D2", "D4"]
 
 
 #======= Helper =========
@@ -31,6 +34,7 @@ class FileMeta: #General metadata for a FMEA worksheet
     released: Optional[str] #released date
     # productId: Optional[int] 
     # productPnId: Optional[int]
+    productPnID: Optional[int]
     productName: Optional[str]
     # project_description: Optional[str]
     file_name: str
@@ -68,6 +72,10 @@ class FMEAFailure:
     fmea_type: Optional[str] = None
     process_step: Optional[str] = None
 
+    productPnID: Optional[int] = None
+    product_domain: Optional[str] = None
+    file_name: Optional[str] = None
+
 
 @dataclass
 class FMEACause:
@@ -104,7 +112,6 @@ class FileMetaStore:
         new_val = asdict(meta)
         old_val = self.store.get(meta.file_name)
 
-        # 幂等：相同就不写盘
         if old_val == new_val:
             return
 
@@ -151,17 +158,25 @@ class FMEAFailureKB:
         ids = []
         documents = []
         metadatas = []
+    
 
         def add_field(text: Optional[str], role: str):
-            if not  is_valid_embed_text(text):
+            if not is_valid_embed_text(text):
                 return
+
             ids.append(f"{failure.failure_id}::{role}")
             documents.append(text)
+
             metadatas.append({
                 "failure_id": failure.failure_id,
                 "role": role,
+
                 "system": failure.system or "",
-                "FMEA_type": failure.fmea_type or "",
+                "fmea_type": failure.fmea_type or "",   
+
+                "productPnID": failure.productPnID,     
+                "product_domain": failure.product_domain,
+                "file_name": failure.file_name,
             })
 
         # ---------- split embedding by role ----------
@@ -180,16 +195,48 @@ class FMEAFailureKB:
     # Low-level role-based search
     # =========================================================
     def search_by_role(
+            self,
+            query: str,
+            role: str,
+            k: int = 5,
+            where: Optional[Dict[str, Any]] = None,
+        ):
+            where = where or {"role": role}
+            if "role" not in where:
+                where = {**where, "role": role}
+
+            return self.collection.query(
+                query_texts=[query],
+                n_results=k,
+                where=where,
+            )
+    
+    def _build_where(
         self,
-        query: str,
         role: str,
-        k: int = 5,
+        productPnID: Optional[Union[str, List[str]]] = None,
+        fmea_type: Optional[Union[str, List[str]]] = None,
     ):
-        return self.collection.query(
-            query_texts=[query],
-            n_results=k,
-            where={"role": role},
-        )
+        filters = [{"role": role}]
+
+        if productPnID:
+            filters.append(
+                {"productPnID": {"$in": productPnID}}
+                if isinstance(productPnID, list)
+                else {"productPnID": productPnID}
+            )
+
+        if fmea_type:
+            filters.append(
+                {"fmea_type": {"$in": fmea_type}}
+                if isinstance(fmea_type, list)
+                else {"fmea_type": fmea_type}
+            )
+
+        if len(filters) == 1:
+            return filters[0]
+
+        return {"$and": filters}
 
     # =========================================================
     # High-level merged search (RAG entry point)
@@ -199,11 +246,15 @@ class FMEAFailureKB:
         failure_mode: Optional[str] = None,
         failure_element: Optional[str] = None,
         failure_effect: Optional[str] = None,
+        productPnID: Optional[FilterValue] = None,
+        fmea_type: Optional[FilterValue] = None,
         k: int = 5,
+        per_role_k: Optional[int] = None,  # Optional
     ) -> List[str]:
         """
         Return ranked failure_ids
         """
+        per_role_k = per_role_k or k
 
         merged = defaultdict(lambda: {
             "score": 0.0,
@@ -211,7 +262,7 @@ class FMEAFailureKB:
         })
 
         def merge_hits(res, role, weight):
-            if not res["ids"]:
+            if not res or not res.get("ids") or not res["ids"][0]:
                 return
             for meta, dist in zip(
                 res["metadatas"][0],
@@ -221,23 +272,20 @@ class FMEAFailureKB:
                 merged[fid]["score"] += weight * (1 - dist)
                 merged[fid]["roles"].add(role)
 
-        # ---------- role-specific retrieval ----------
+        # ---------- role-specific retrieval with filters ----------
         if failure_mode:
-            res = self.search_by_role(
-                failure_mode, "failure_mode", k
-            )
+            where = self._build_where("failure_mode", productPnID, fmea_type)
+            res = self.search_by_role(failure_mode, "failure_mode", per_role_k, where=where)
             merge_hits(res, "failure_mode", 0.5)
 
         if failure_element:
-            res = self.search_by_role(
-                failure_element, "failure_element", k
-            )
+            where = self._build_where("failure_element", productPnID, fmea_type)
+            res = self.search_by_role(failure_element, "failure_element", per_role_k, where=where)
             merge_hits(res, "failure_element", 0.4)
 
         if failure_effect:
-            res = self.search_by_role(
-                failure_effect, "failure_effect", k
-            )
+            where = self._build_where("failure_effect", productPnID, fmea_type)
+            res = self.search_by_role(failure_effect, "failure_effect", per_role_k, where=where)
             merge_hits(res, "failure_effect", 0.3)
 
         # ---------- rank ----------
@@ -310,3 +358,189 @@ class FMEACauseKB:
             include=["embeddings", "metadatas", "ids"]
         )
         return res
+    
+
+class FailureRetriever:
+    """
+    Retrieval layer for FMEA / 8D semantic matching
+    """
+
+    # ===============================
+    # Role base weights (global)
+    # ===============================
+
+    ROLE_WEIGHT = {
+        "failure_effect": 1.0,
+        "failure_mode": 1.0,
+        "failure_element": 0.9,
+        "failure_cause": 1.1,
+    }
+
+    # ===============================
+    # 8D stage → role bias
+    # ===============================
+    STAGE_ROLE_BIAS = {
+        "D2": {
+            "failure_effect": 1.2,
+            "failure_mode": 1.0,
+            "failure_element": 0.9,
+            "failure_cause": 0.6,
+        },
+        "D4": {
+            "failure_cause": 1.3,
+            "failure_mode": 0.9,
+            "failure_effect": 0.5,
+            "failure_element": 0.7,
+        },
+    }
+    def __init__(
+        self,
+        persist_dir,
+        collection_name: str,
+        store: Dict[str, dict],
+    ):
+        # ---------- vector store ----------
+        self.client = chromadb.PersistentClient(path=str(persist_dir))
+        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            embedding_function=self.embedder,
+        )
+
+        # ---------- structured failure store ----------
+        self.store = store
+
+    # =========================================================
+    # Build Chroma where filter
+    # =========================================================
+    def _build_where(
+        self,
+        productPnID: Optional[FilterValue] = None,
+        fmea_type: Optional[FilterValue] = None,
+    ) -> Optional[Dict]:
+        filters = []
+
+        if productPnID:
+            filters.append(
+                {"productPnID": {"$in": productPnID}}
+                if isinstance(productPnID, list)
+                else {"productPnID": productPnID}
+            )
+
+        if fmea_type:
+            filters.append(
+                {"fmea_type": {"$in": fmea_type}}
+                if isinstance(fmea_type, list)
+                else {"fmea_type": fmea_type}
+            )
+
+        if not filters:
+            return None
+        if len(filters) == 1:
+            return filters[0]
+
+        return {"$and": filters}
+
+    # =========================================================
+    # Role-agnostic vector search
+    # =========================================================
+    def search_free(
+        self,
+        query: str,
+        productPnID: Optional[FilterValue] = None,
+        fmea_type: Optional[FilterValue] = None,
+        k: int = 10,
+    ):
+        """
+        Do NOT constrain role.
+        Let embedding model see the full 8D sentence.
+        """
+        where = self._build_where(productPnID, fmea_type)
+
+        return self.collection.query(
+            query_texts=[query],
+            n_results=k,
+            where=where,
+        )
+
+    # =========================================================
+    # Merge with role + stage bias
+    # =========================================================
+    def merge_hits_with_bias(
+        self,
+        res,
+        d_stage: DStage,
+    ) -> Dict[str, dict]:
+        """
+        Merge vector hits into failure_id space
+        """
+        merged = defaultdict(lambda: {
+            "score": 0.0,
+            "roles": set(),
+        })
+
+        stage_bias = self.STAGE_ROLE_BIAS[d_stage]
+
+        if not res or not res.get("ids") or not res["ids"][0]:
+            return merged
+
+        for meta, dist in zip(
+            res["metadatas"][0],
+            res["distances"][0],
+        ):
+            failure_id = meta["failure_id"]
+            role = meta.get("role", "unknown")
+
+            base_weight = self.ROLE_WEIGHT.get(role, 0.7)
+            stage_weight = stage_bias.get(role, 0.7)
+
+            score = base_weight * stage_weight * (1 - dist)
+
+            merged[failure_id]["score"] += score
+            merged[failure_id]["roles"].add(role)
+
+        return merged
+
+    # =========================================================
+    # 8D entry point (recommended)
+    # =========================================================
+    def search_from_8d(
+        self,
+        text: str,
+        d_stage: DStage,
+        productPnID: Optional[FilterValue] = None,
+        fmea_type: Optional[FilterValue] = None,
+        k: int = 5,
+        raw_k: int = 15,
+    ) -> List[str]:
+        """
+        Main RAG entry for 8D input
+        """
+        # 1. role-agnostic vector search
+        res = self.search_free(
+            query=text,
+            productPnID=productPnID,
+            fmea_type=fmea_type,
+            k=raw_k,
+        )
+
+        # 2. merge with semantic bias
+        merged = self.merge_hits_with_bias(res, d_stage)
+
+        # 3. rank by score + role coverage
+        ranked = sorted(
+            merged.items(),
+            key=lambda x: (x[1]["score"], len(x[1]["roles"])),
+            reverse=True,
+        )
+
+        return [fid for fid, _ in ranked[:k]]
+
+    # =========================================================
+    # Get full structured failure
+    # =========================================================
+    def get(self, failure_id: str) -> Optional[dict]:
+        return self.store.get(failure_id)
