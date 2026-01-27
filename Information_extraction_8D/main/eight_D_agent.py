@@ -14,6 +14,9 @@ from Information_extraction_8D.Evaluation.evaluation_tool import check_faithfuln
 from datetime import datetime
 import unicodedata
 
+from JSON_FMEA_KB.query_fmea import eightD_fmea_search
+from pathlib import Path
+import json
 
 # Helper functions
 
@@ -112,6 +115,7 @@ def annotate_faithfulness_for_sentences(
 
     return selected_sentences
 
+#======= Build FMEA example text
 def default_maintenance_tag(
     review_status="pending",
     version="V1",
@@ -122,7 +126,6 @@ def default_maintenance_tag(
         last_updated=datetime.utcnow().isoformat(),
         supersedes=None,
     )
-
 
 
 def resolve_supporting_entities(id_refs, sentence_index):
@@ -144,78 +147,93 @@ def resolve_supporting_entities(id_refs, sentence_index):
     return resolved
 
 
-@traceable(name="8d-extraction-version2")
-def build_8d_case_from_docx(doc_path: str) -> EightDCase:
+def failures_to_fmea_style_text(failures: list[dict]) -> str:
+    blocks = []
 
-    # 1) Parse document sections using the parse_8d_doc tool
-    product_name = extract_product(doc_path)
-    print("Product name:", product_name)
+    for f in failures:
+        lines = []
 
-    # 2) Extract 8D ID from file name
-    base_name = os.path.splitext(os.path.basename(doc_path))[0]
-    # print("fileID:",base_name)
+        element = f.get("Failure element")
+        mode = f.get("Failure mode")
+        effect = f.get("Failure effect")
+
+        if element:
+            lines.append(f"Failure element: {element}")
+        if mode:
+            lines.append(f"Failure mode: {mode}")
+        if effect:
+            lines.append(f"Failure effect: {effect}")
+
+        causes = f.get("causes", [])
+        if causes:
+            if len(causes) == 1:
+                cause_text = causes[0].get("failure_cause")
+                if cause_text:
+                    lines.append(f"Failure cause: {cause_text}")
+            else:
+                lines.append("Failure cause:")
+                for c in causes:
+                    ct = c.get("failure_cause")
+                    if ct:
+                        lines.append(f"- {ct}")
+
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+@traceable(name="8d-extraction-json")
+def build_8d_case_from_json(json_path: str) -> EightDCase:
+
+    json_path = Path(json_path)
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+
+    raw_context = data.get("raw_context", {})
+    metadata = data.get("metadata", {})
+
+    # ---------- basic sanity check ----------
+    if not raw_context:
+        raise ValueError(f"Missing raw_context in {json_path.name}")
+    file_name = metadata.get("file_name")
     document_info = DocumentInfo(
-        file_name=base_name,
-        product_name=product_name,
+        file_name= file_name,
+        product_name=metadata.get("product_name"),
+        released_date=metadata.get("released_date"),
+        product_domain=metadata.get("product_domain"),
+        productPnId=metadata.get("productPnId"),
+        parent_PN=metadata.get("parent_PN"),
+        project_name=metadata.get("project_name"),
+        fmea_type=metadata.get("fmea_type"),
     )
-
-    run = get_current_run_tree()
-    if run:
-        run.metadata.update({
-            "filename": base_name,
-            # "doc_path": doc_path,
-            "product_name": product_name,
-        })
-    parsed = parse_8d_doc.invoke({"doc_path": doc_path})
-    sections = parsed["sections"]
+    # parsed = parse_8d_doc.invoke({"doc_path": doc_path})
+    # sections = parsed["sections"]
 
 
     # Initialization
-    d2_raw = None
-    d3_raw = None
-    d4_raw = None
+    d2_raw = raw_context.get("D2")
+    d3_raw = raw_context.get("D3")
+    d4_raw = raw_context.get("D4")
 
     print("Parsed sections")
     # 3) Loop through parsed sections
-    for sec in sections:
-        title = normalize_text(sec["title"])
-        content = normalize_text(sec["content"])
+    d2_section = D2Section(
+        raw_context=d2_raw
+    ) if d2_raw else None
 
-        # --------------------
-        # Extract D2 section
-        # --------------------
-        if title.startswith("D2"):
-            d2_raw = content
-            d2_section = D2Section(raw_context=d2_raw)
+    d3_section = D3Section(
+        raw_context=d3_raw
+    ) if d3_raw else None
 
-        # --------------------
-        # Extract D3 section
-        # --------------------
-        if title.startswith("D3"):
-            # print("Copying D3 section...")
-            d3_raw = content
-            d3_section = D3Section(raw_context=d3_raw)
-        # --------------------
-        # Extract D4 section
-        # --------------------
-        if title.startswith("D4"):
-            d4_raw = content
-            d4_section = D4Section(raw_context=d4_raw)
+    d4_section = D4Section(
+        raw_context=d4_raw
+    ) if d4_raw else None
 
-        # --------------------
-        # Extract D5 section
-        # --------------------
-        if title.startswith("D5"):
-            # print("Copying D5 section...")
-            d5_raw = content
-            d5_section = D5Section(raw_context=d5_raw)
-        # --------------------
-        # Extract D6 section
-        # --------------------
-        if title.startswith("D6"):
-            # print("Copying D6 section...")
-            d6_raw = content
-            d6_section = D6Section(raw_context=d6_raw)
+    d5_section = D5Section(
+        raw_context=raw_context.get("D5")
+    ) if raw_context.get("D5") else None
+
+    d6_section = D6Section(
+        raw_context=raw_context.get("D6")
+    ) if raw_context.get("D6") else None
 
     print("LLM iteration 1")
     output_iter1 =  extract_iteration_1.invoke({
@@ -233,7 +251,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     #Add ids to sentences
     output_iter1.selected_sentences = assign_sentence_ids(
     output_iter1.selected_sentences,
-    doc_prefix=base_name
+    doc_prefix=document_info.file_name
 )
     
     # ------ Faithfulness annotation ------
@@ -247,7 +265,21 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
 
 
     input_iter2 = build_iteration2_input(output_iter1)
+
+    results = eightD_fmea_search(
+    signals=input_iter2["signals"],
+    productPnID=document_info.productPnId,
+)
+    examples = failures_to_fmea_style_text(results)
+
+
     print("LLM iteration 2")
+    # output_iter2 = extract_iteration_2.invoke({
+    #     "data": {
+    #         "signals": input_iter2,
+    #         "examples": examples,
+    #     }
+    # })
     output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
 
     sentence_index = {s.sentence_id: s for s in output_iter1.selected_sentences}
@@ -263,7 +295,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
     failure_dict.get("supporting_entities", []),
     sentence_index)
 
-    failure_dict["failure_ID"] = f"{base_name}_F1"
+    failure_dict["failure_ID"] = f"{document_info.file_name}_F"
     failure_dict.setdefault("failure_level", "sub_system")
     failure_dict.setdefault("root_causes", [])
 
@@ -294,7 +326,7 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
         if not cause.get("failure_cause"):
             cause["failure_cause"] = "Unknown cause (LLM incomplete)"
 
-        cause["cause_ID"] = f"{base_name}_F1_C{c_idx + 1}"  # Add ID
+        cause["cause_ID"] = f"{file_name}_F1_C{c_idx + 1}"  # Add ID
 
         # Add surpporting text back
         cause["supporting_entities"] = resolve_supporting_entities(
@@ -330,3 +362,208 @@ def build_8d_case_from_docx(doc_path: str) -> EightDCase:
         
 
     return case,output_iter1
+
+
+def sentence_search_test():
+    output_iter1 = {
+  "selected_sentences": [
+    {
+      "sentence_id": "8D ECO bridge_D2_S001",
+      "text": "When the motor bridge (3900-0005-0023) used on the APTM 300W (6298-1900-0503) went obsolete, this was communicated to the customer later than desired.",
+      "source_section": "D2",
+      "annotations": {
+        "status": "support",
+        "subject": "",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D2_S002",
+      "text": "This resulted in preventable worry and potential supply issues.",
+      "source_section": "D2",
+      "annotations": {
+        "status": "support",
+        "subject": "",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D3_S001",
+      "text": "Communication has started with the customer.",
+      "source_section": "D3",
+      "annotations": {
+        "status": "support",
+        "subject": "",
+        "faithful_score": 100,
+        "faithful_type": "exact"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D3_S002",
+      "text": "A selection of solutions has been presented, both solutions with a shorter lead time for a temporary solution and structured solutions which should be more future proof.",
+      "source_section": "D3",
+      "annotations": {
+        "status": "support",
+        "subject": "",
+        "faithful_score": 92,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D3_S003",
+      "text": "Since this is a UL rated product, the final solution also needs to be UL certified.",
+      "source_section": "D3",
+      "annotations": {
+        "status": "support",
+        "subject": "",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D3_S004",
+      "text": "Since UL certification can take several months to complete, parallel paths are suggested which are only for markets other than the US market, where UL certification is not necessary.",
+      "source_section": "D3",
+      "annotations": {
+        "status": "support",
+        "subject": "",
+        "faithful_score": 100,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S001",
+      "text": "02-23: Shortage due to allocation noted.",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 93,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S002",
+      "text": "10-03-23: No significant free stock quantities of alternatives, no testing initiated.",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 87,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S003",
+      "text": "Original alternative options were FSB50660SFS (also end-of-life), NFA50460R47 (1-on-1, but no UL E number yet), IM241-M6S1J (requires redesign), and IM241-M6S1B (requires redesign).",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 88,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S004",
+      "text": "13-03-23: PCN received LTB for ordering 30-03-23.",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 91,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S005",
+      "text": "28-03-23: LTB placed by AME to cover known demand till 10-23.",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 95,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S006",
+      "text": "Requested UL E number for NFA50460R47 as that was least impactful option.",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 95,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S007",
+      "text": "20-06-23: UL E number for NFA50460R47 received after multiple reminders.",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 93,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S008",
+      "text": "05-07-23: Samples NFA50460R47 requested.",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 88,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S009",
+      "text": "20-07-23: Samples NFA50460R47 confirmed by OnSemi (1-2 week delivery).",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 93,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S010",
+      "text": "Testing NFA50460R47 planned after finalization testing of alternative for obsolete FFD08S60S-F085 (Diode on ATPM 300W).",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 97,
+        "faithful_type": "fuzzy"
+      }
+    },
+    {
+      "sentence_id": "8D ECO bridge_D4_S011",
+      "text": "23-10-23: First results testing NFA50460R47 for review (EMC and thermal testing).",
+      "source_section": "D4",
+      "annotations": {
+        "status": "support",
+        "subject": "motor bridge and alternatives",
+        "faithful_score": 95,
+        "faithful_type": "fuzzy"
+      }
+    }
+  ]
+}
+    output_iter1 = Iteration1Output(**output_iter1)
+    input_iter2 = build_iteration2_input(output_iter1)
+    results = eightD_fmea_search(
+    signals=input_iter2["signals"],
+    )
+    # print(results)
+    examples = failures_to_fmea_style_text(results)
+    print(examples)
+
+if __name__ == "__main__":
+    sentence_search_test()

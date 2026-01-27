@@ -31,10 +31,17 @@ class CauseItem(BaseModel):
     
 
 class DocumentInfo(BaseModel):
+
     file_name: str
     product_name: Optional[str] = None
-    date: Optional[str] = None
 
+    released_date: Optional[str] = None
+
+    product_domain: Optional[str] = None
+    productPnId: Optional[int] = None
+    parent_PN: Optional[str] = None
+    project_name: Optional[str] = None
+    fmea_type: Optional[str] = None
 
 
 class FailureChain(BaseModel):

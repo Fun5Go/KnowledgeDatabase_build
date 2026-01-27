@@ -223,6 +223,7 @@ def extract_iteration_2(data: dict) -> dict:
         "D2": d2_sentence,
         "D3": d3_sentence,
         "D4": d4_sentence,
+        # "Few-shot": data.get("FMEA_examples"),
     })
 
     resp = llm.invoke(prompt.to_messages())

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional, Union, Literal
+from typing import Dict, Any, List, Optional, Union, Literal,Iterable
 
 from pathlib import Path
 import json
@@ -472,20 +472,25 @@ class FailureRetriever:
     def merge_hits_with_bias(
         self,
         res,
-        d_stage: DStage,
+        d_stage: DStage | Iterable[DStage],
     ) -> Dict[str, dict]:
         """
         Merge vector hits into failure_id space
+        Supports single stage or multiple stages (e.g. D2 + D4)
         """
         merged = defaultdict(lambda: {
             "score": 0.0,
             "roles": set(),
         })
 
-        stage_bias = self.STAGE_ROLE_BIAS[d_stage]
-
         if not res or not res.get("ids") or not res["ids"][0]:
             return merged
+
+        # ---- normalize stages ----
+        if isinstance(d_stage, (list, tuple, set)):
+            stages = d_stage
+        else:
+            stages = [d_stage]
 
         for meta, dist in zip(
             res["metadatas"][0],
@@ -495,15 +500,17 @@ class FailureRetriever:
             role = meta.get("role", "unknown")
 
             base_weight = self.ROLE_WEIGHT.get(role, 0.7)
-            stage_weight = stage_bias.get(role, 0.7)
 
-            score = base_weight * stage_weight * (1 - dist)
+            for stage in stages:
+                stage_bias = self.STAGE_ROLE_BIAS.get(stage, {})
+                stage_weight = stage_bias.get(role, 0.7)
 
-            merged[failure_id]["score"] += score
-            merged[failure_id]["roles"].add(role)
+                score = base_weight * stage_weight * (1 - dist)
+
+                merged[failure_id]["score"] += score
+                merged[failure_id]["roles"].add(role)
 
         return merged
-
     # =========================================================
     # 8D entry point (recommended)
     # =========================================================
