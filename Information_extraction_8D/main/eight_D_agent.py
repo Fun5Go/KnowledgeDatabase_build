@@ -181,7 +181,7 @@ def failures_to_fmea_style_text(failures: list[dict]) -> str:
 
     return "\n\n".join(blocks)
 
-@traceable(name="8d-extraction-json")
+@traceable(name="8d-extraction-MD")
 def build_8d_case_from_json(json_path: str) -> EightDCase:
 
     json_path = Path(json_path)

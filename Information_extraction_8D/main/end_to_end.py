@@ -1,18 +1,18 @@
 import os
 import json
 import copy
-from Information_extraction_8D.main.eight_D_agent import build_8d_case_from_docx
+from Information_extraction_8D.main.eight_D_agent import build_8d_case_from_json
 from typing import List
 
 # ===== directories =====
-SENTENCE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test_v2\sentence_selected"
-FAILURE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test_v2\failure_identification"
+SENTENCE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_MD\sentence_selected"
+FAILURE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_MD\failure_identification"
 
 # =============================
 # Core run function (single file)
 # =============================
-def run(doc_path: str) -> None:
-    base_name = os.path.splitext(os.path.basename(doc_path))[0]
+def run(json_path: str) -> None:
+    base_name = os.path.splitext(os.path.basename(json_path))[0]
 
     # ---- ensure output dirs ----
     os.makedirs(SENTENCE_OUTPUT_DIR, exist_ok=True)
@@ -23,20 +23,30 @@ def run(doc_path: str) -> None:
         print(f"Skip (already processed): {base_name}")
         return
 
-    print(f"Star to process the file: {base_name}")
+    print(f"Start to process the file: {base_name}")
 
-    result, output_iter1 = build_8d_case_from_docx(doc_path)
+    result, output_iter1 = build_8d_case_from_json(json_path)
 
     # ---- save Iteration 1 (sentence selection) ----
     iter1_path = os.path.join(
         SENTENCE_OUTPUT_DIR, f"{base_name}_sentences.json"
     )
     with open(iter1_path, "w", encoding="utf-8") as f:
-        json.dump(output_iter1.model_dump(), f, indent=2, ensure_ascii=False)
+        json.dump(
+            output_iter1.model_dump(),
+            f,
+            indent=2,
+            ensure_ascii=False
+        )
 
     # ---- save final EightDCase (failure identification) ----
     with open(result_path, "w", encoding="utf-8") as f:
-        json.dump(result.model_dump(), f, indent=2, ensure_ascii=False)
+        json.dump(
+            result.model_dump(),
+            f,
+            indent=2,
+            ensure_ascii=False
+        )
 
     print(f"Processed: {base_name}")
 
@@ -45,37 +55,36 @@ def run(doc_path: str) -> None:
 # Batch processing
 # =============================
 def batch_run(folder_path: str) -> None:
-    docx_files: List[str] = sorted(
+    json_files: List[str] = sorted(
         [
             os.path.join(folder_path, f)
             for f in os.listdir(folder_path)
-            if f.lower().endswith(".docx")        
-            and not f.startswith("~$")        # Exclude locked file
-            and not f.startswith(".")         # 
+            if f.lower().endswith(".json")
+            and not f.startswith(".")
         ],
         key=lambda x: os.path.basename(x)
     )
-    if not docx_files:
-        print(" No .docx files found.")
+
+    if not json_files:
+        print("No .json files found.")
         return
 
-    print(f"Found {len(docx_files)} docx files.")
+    print(f"Found {len(json_files)} json files.")
 
-    for i, doc_path in enumerate(docx_files[:]):
+    for i, json_path in enumerate(json_files[:10]):
         try:
-            print(f"Processing {i+1}/{len(docx_files)}: {os.path.basename(doc_path)}")
-            run(doc_path)
-            print(f"✔ Success: {os.path.basename(doc_path)}")
+            print(f"Processing {i+1}/{len(json_files)}: {os.path.basename(json_path)}")
+            run(json_path)
+            print(f"✔ Success: {os.path.basename(json_path)}")
         except Exception as e:
-            print(f"✖ Failed: {os.path.basename(doc_path)}")
+            print(f"✖ Failed: {os.path.basename(json_path)}")
             print(f"  Reason: {e}")
-
 
 # =============================
 # Entry point
 # =============================
 if __name__ == "__main__":
     MOTOR_EXAMPLE_DIR = (
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D\Motor example"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_raw_meta\motor_drives"
     )
     batch_run(MOTOR_EXAMPLE_DIR)
