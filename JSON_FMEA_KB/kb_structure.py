@@ -381,8 +381,8 @@ class FailureRetriever:
     # ===============================
     STAGE_ROLE_BIAS = {
         "D2": {
-            "failure_effect": 1.2,
-            "failure_mode": 1.0,
+            "failure_effect": 0.8,
+            "failure_mode": 1.2,
             "failure_element": 0.9,
             "failure_cause": 0.6,
         },

@@ -28,5 +28,5 @@ def run(doc_path: str) -> str:
 
 
 if __name__ == "__main__":
-    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_raw_meta\motor_drives\8D ECO bridge.json"
+    path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_raw_meta\motor_drives\8D6001121516R01.json"
     run(path)

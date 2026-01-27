@@ -245,8 +245,7 @@ def build_8d_case_from_json(json_path: str) -> EightDCase:
     })
 
 
-
-    #output_iter1 = Iteration1Output(**output_iter1)
+    # output_iter1 = Iteration1Output(**output_iter1)
 
     #Add ids to sentences
     output_iter1.selected_sentences = assign_sentence_ids(
@@ -262,25 +261,26 @@ def build_8d_case_from_json(json_path: str) -> EightDCase:
     d4_raw=d4_raw,
 ) 
     # print(output_iter1)
-
+    
 
     input_iter2 = build_iteration2_input(output_iter1)
 
-    results = eightD_fmea_search(
+    results,failure_ids = eightD_fmea_search(
     signals=input_iter2["signals"],
     productPnID=document_info.productPnId,
 )
+    similar_fmea = failure_ids
     examples = failures_to_fmea_style_text(results)
 
 
     print("LLM iteration 2")
-    # output_iter2 = extract_iteration_2.invoke({
-    #     "data": {
-    #         "signals": input_iter2,
-    #         "examples": examples,
-    #     }
-    # })
-    output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
+    output_iter2 = extract_iteration_2.invoke({
+        "data": {
+            "signals": input_iter2["signals"],
+            "examples": examples,
+        }
+    })
+    # output_iter2 = extract_iteration_2.invoke({"data":input_iter2})
 
     sentence_index = {s.sentence_id: s for s in output_iter1.selected_sentences}
 
@@ -350,6 +350,7 @@ def build_8d_case_from_json(json_path: str) -> EightDCase:
         ),   # add extract_product() later if needed
         system_name=system_name,
         failure= failure,
+        fmea_connection = similar_fmea,
         sections=EightDSections(
                                 D2=d2_section,
                                 D3=d3_section,
@@ -364,206 +365,207 @@ def build_8d_case_from_json(json_path: str) -> EightDCase:
     return case,output_iter1
 
 
-def sentence_search_test():
-    output_iter1 = {
-  "selected_sentences": [
-    {
-      "sentence_id": "8D ECO bridge_D2_S001",
-      "text": "When the motor bridge (3900-0005-0023) used on the APTM 300W (6298-1900-0503) went obsolete, this was communicated to the customer later than desired.",
-      "source_section": "D2",
-      "annotations": {
-        "status": "support",
-        "subject": "",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D2_S002",
-      "text": "This resulted in preventable worry and potential supply issues.",
-      "source_section": "D2",
-      "annotations": {
-        "status": "support",
-        "subject": "",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D3_S001",
-      "text": "Communication has started with the customer.",
-      "source_section": "D3",
-      "annotations": {
-        "status": "support",
-        "subject": "",
-        "faithful_score": 100,
-        "faithful_type": "exact"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D3_S002",
-      "text": "A selection of solutions has been presented, both solutions with a shorter lead time for a temporary solution and structured solutions which should be more future proof.",
-      "source_section": "D3",
-      "annotations": {
-        "status": "support",
-        "subject": "",
-        "faithful_score": 92,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D3_S003",
-      "text": "Since this is a UL rated product, the final solution also needs to be UL certified.",
-      "source_section": "D3",
-      "annotations": {
-        "status": "support",
-        "subject": "",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D3_S004",
-      "text": "Since UL certification can take several months to complete, parallel paths are suggested which are only for markets other than the US market, where UL certification is not necessary.",
-      "source_section": "D3",
-      "annotations": {
-        "status": "support",
-        "subject": "",
-        "faithful_score": 100,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S001",
-      "text": "02-23: Shortage due to allocation noted.",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 93,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S002",
-      "text": "10-03-23: No significant free stock quantities of alternatives, no testing initiated.",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 87,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S003",
-      "text": "Original alternative options were FSB50660SFS (also end-of-life), NFA50460R47 (1-on-1, but no UL E number yet), IM241-M6S1J (requires redesign), and IM241-M6S1B (requires redesign).",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 88,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S004",
-      "text": "13-03-23: PCN received LTB for ordering 30-03-23.",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 91,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S005",
-      "text": "28-03-23: LTB placed by AME to cover known demand till 10-23.",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 95,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S006",
-      "text": "Requested UL E number for NFA50460R47 as that was least impactful option.",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 95,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S007",
-      "text": "20-06-23: UL E number for NFA50460R47 received after multiple reminders.",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 93,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S008",
-      "text": "05-07-23: Samples NFA50460R47 requested.",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 88,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S009",
-      "text": "20-07-23: Samples NFA50460R47 confirmed by OnSemi (1-2 week delivery).",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 93,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S010",
-      "text": "Testing NFA50460R47 planned after finalization testing of alternative for obsolete FFD08S60S-F085 (Diode on ATPM 300W).",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 97,
-        "faithful_type": "fuzzy"
-      }
-    },
-    {
-      "sentence_id": "8D ECO bridge_D4_S011",
-      "text": "23-10-23: First results testing NFA50460R47 for review (EMC and thermal testing).",
-      "source_section": "D4",
-      "annotations": {
-        "status": "support",
-        "subject": "motor bridge and alternatives",
-        "faithful_score": 95,
-        "faithful_type": "fuzzy"
-      }
-    }
-  ]
-}
-    output_iter1 = Iteration1Output(**output_iter1)
-    input_iter2 = build_iteration2_input(output_iter1)
-    results = eightD_fmea_search(
-    signals=input_iter2["signals"],
-    )
-    # print(results)
-    examples = failures_to_fmea_style_text(results)
-    print(examples)
+# def sentence_search_test():
+#     output_iter1 = {
+#   "selected_sentences": [
+#     {
+#       "sentence_id": "8D ECO bridge_D2_S001",
+#       "text": "When the motor bridge (3900-0005-0023) used on the APTM 300W (6298-1900-0503) went obsolete, this was communicated to the customer later than desired.",
+#       "source_section": "D2",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "",
+#         "faithful_score": 100,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D2_S002",
+#       "text": "This resulted in preventable worry and potential supply issues.",
+#       "source_section": "D2",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "",
+#         "faithful_score": 100,
+#         "faithful_type": "exact"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D3_S001",
+#       "text": "Communication has started with the customer.",
+#       "source_section": "D3",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "",
+#         "faithful_score": 100,
+#         "faithful_type": "exact"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D3_S002",
+#       "text": "A selection of solutions has been presented, both solutions with a shorter lead time for a temporary solution and structured solutions which should be more future proof.",
+#       "source_section": "D3",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "",
+#         "faithful_score": 92,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D3_S003",
+#       "text": "Since this is a UL rated product, the final solution also needs to be UL certified.",
+#       "source_section": "D3",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "",
+#         "faithful_score": 100,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D3_S004",
+#       "text": "Since UL certification can take several months to complete, parallel paths are suggested which are only for markets other than the US market, where UL certification is not necessary.",
+#       "source_section": "D3",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "",
+#         "faithful_score": 100,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S001",
+#       "text": "02-23: Shortage due to allocation noted.",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 93,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S002",
+#       "text": "10-03-23: No significant free stock quantities of alternatives, no testing initiated.",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 87,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S003",
+#       "text": "Original alternative options were FSB50660SFS (also end-of-life), NFA50460R47 (1-on-1, but no UL E number yet), IM241-M6S1J (requires redesign), and IM241-M6S1B (requires redesign).",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 88,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S004",
+#       "text": "13-03-23: PCN received LTB for ordering 30-03-23.",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 91,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S005",
+#       "text": "28-03-23: LTB placed by AME to cover known demand till 10-23.",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 95,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S006",
+#       "text": "Requested UL E number for NFA50460R47 as that was least impactful option.",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 95,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S007",
+#       "text": "20-06-23: UL E number for NFA50460R47 received after multiple reminders.",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 93,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S008",
+#       "text": "05-07-23: Samples NFA50460R47 requested.",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 88,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S009",
+#       "text": "20-07-23: Samples NFA50460R47 confirmed by OnSemi (1-2 week delivery).",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 93,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S010",
+#       "text": "Testing NFA50460R47 planned after finalization testing of alternative for obsolete FFD08S60S-F085 (Diode on ATPM 300W).",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 97,
+#         "faithful_type": "fuzzy"
+#       }
+#     },
+#     {
+#       "sentence_id": "8D ECO bridge_D4_S011",
+#       "text": "23-10-23: First results testing NFA50460R47 for review (EMC and thermal testing).",
+#       "source_section": "D4",
+#       "annotations": {
+#         "status": "support",
+#         "subject": "motor bridge and alternatives",
+#         "faithful_score": 95,
+#         "faithful_type": "fuzzy"
+#       }
+#     }
+#   ]
+# }
+#     output_iter1 = Iteration1Output(**output_iter1)
+#     input_iter2 = build_iteration2_input(output_iter1)
+#     results = eightD_fmea_search(
+#     signals=input_iter2["signals"],
+#     productPnID=57154
+#     )
+#     # print(results)
+#     examples = failures_to_fmea_style_text(results)
+#     print(examples)
 
-if __name__ == "__main__":
-    sentence_search_test()
+# if __name__ == "__main__":
+#     sentence_search_test()

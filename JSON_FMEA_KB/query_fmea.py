@@ -76,7 +76,12 @@ def eightD_fmea_search(
     failure_dir, cause_dir = resolve_paths_motor_drivesKB()
     failure_kb = FMEAFailureKB(persist_dir=failure_dir)
     cause_kb = FMEACauseKB(persist_dir=cause_dir)
-    
+    meta_kb_path  = BASE_DIR / "KB_motor_drives" / "file_meta_store.json"
+
+    meta = {}
+    if meta_kb_path.exists():
+        with meta_kb_path.open("r", encoding="utf-8") as f:
+            meta = json.load(f)    
 
     retriever = FailureRetriever(
         persist_dir=failure_dir,
@@ -84,6 +89,19 @@ def eightD_fmea_search(
         store=failure_kb.store,
     )
 
+    has_same_pn = False
+    if productPnID is not None:
+        for _, info in meta.items():
+            if info.get("productPnID") == productPnID:
+                has_same_pn = True
+                break
+
+    if has_same_pn:
+        matched_productPnID = productPnID
+        print(f"productPnID matched")
+    else:
+        matched_productPnID=None
+        print(f"No matchment, global search")
     # aggregate query
     aggregate_text = "\n".join(
         s["text"] for s in signals
@@ -93,7 +111,7 @@ def eightD_fmea_search(
     failure_ids = retriever.search_from_8d(
         text=aggregate_text,
         d_stage="D2+D4",
-        productPnID=productPnID,
+        productPnID=matched_productPnID,
         k=3,
     )
 
@@ -121,7 +139,7 @@ def eightD_fmea_search(
             "causes": causes,
         })
 
-    return results
+    return results,failure_ids
 
 
 # =========================================================

@@ -87,6 +87,7 @@ class EightDCase(BaseModel):
     maintenance_tag: Optional[MaintenaceTag] = None
     system_name: Optional[str] = None
     failure: FailureChain
+    fmea_connection: Optional[List[str]] = None
     sections: EightDSections
     selected_sentences: Optional[List[SelectedSentence]] = None
 

@@ -115,8 +115,9 @@ def extract_iteration_1(data: dict) -> dict:
     d4_text = data.get("d4_raw", "")
     # Initialize LLM
     llm = get_llm_backend(
-        backend="openai",# / "local"
+        backend="openai",# / "local"/"openai"
         model="azure/gpt-4.1", # local: llama
+        # model="llama3.1:8b",
         json_mode=True, #  Force the model to return valid JSON output
         temperature=0,  # Controls randomness: 0 = fully deterministic and repeatable responses
     )
@@ -179,6 +180,9 @@ def extract_iteration_2(data: dict) -> dict:
     llm = get_llm_backend(
         backend="openai",
         model="azure/gpt-4.1",
+        # backend="local",# / "local"/"openai"
+        # # model="azure/gpt-4.1", # local: llama
+        # model="llama3.1:8b",
         json_mode=True,
         temperature=0,
     )
@@ -209,7 +213,7 @@ def extract_iteration_2(data: dict) -> dict:
         elif s.get("source_section") == "D4":
             d4_signals.append(s)
 
-
+    examples = data.get("examples", "")
     d2_sentence = format_signals(d2_signals, include_subject=False)
     d3_sentence = format_signals(d3_signals, include_subject=False)
     d4_sentence = format_signals(d4_signals, include_subject=True)
@@ -223,7 +227,7 @@ def extract_iteration_2(data: dict) -> dict:
         "D2": d2_sentence,
         "D3": d3_sentence,
         "D4": d4_sentence,
-        # "Few-shot": data.get("FMEA_examples"),
+        "Examples": examples, 
     })
 
     resp = llm.invoke(prompt.to_messages())

@@ -18,6 +18,21 @@ GENERAL PRINCIPLES
 - Do NOT resolve contradictions
 
 ====================
+FMEA-SIMILAR REFERENCE EXAMPLES (STYLE ONLY)
+====================
+The following examples come from semantically similar FMEA records.
+They are provided to illustrate:
+- typical abstraction level
+- wording style
+- separation between failure mode, effect, and cause
+You may learn the OUTPUT FORMAT and abstraction pattern of failures
+from these examples.
+--------------------
+SIMILAR FMEA EXAMPLES
+--------------------
+{Examples}
+
+====================
 FAILURE RULES (D2 / D3 focused)
 ====================
 
@@ -183,6 +198,7 @@ D3: Provide a quick fix / Interim Containment Plan
 
 D4:Analyze root cause
 {D4}
+
 
 ====================
 OUTPUT (STRICT JSON)
