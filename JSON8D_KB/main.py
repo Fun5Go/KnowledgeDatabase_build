@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kb_structure import FailureKB, CauseKB, SentenceKB
+from kb_structure import FailureKB, CauseKB, SentenceKB, FileMetaStore
 from ingest_8d import ingest_8d_json
 
 
@@ -11,7 +11,7 @@ from ingest_8d import ingest_8d_json
 BASE_DIR = Path(__file__).resolve().parent
 
 # JSON_ROOT = BASE_DIR.parent / "eightD_json_raw"
-JSON_ROOT = Path(r'C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test_v2\failure_identification').resolve()
+JSON_ROOT = Path(r'C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_MD\failure_identification').resolve()
 # if not JSON_ROOT.exists():
 #     JSON_ROOT = BASE_DIR.parent / "eightD_json_raw"
 
@@ -19,10 +19,11 @@ if not JSON_ROOT.exists():
     raise FileNotFoundError(f"Cannot find eightD_json_raw folder at: {BASE_DIR} or {BASE_DIR.parent}")
 
 # Persist KB data folder
-KB_DATA_ROOT = BASE_DIR / "kb_data"
+KB_DATA_ROOT = BASE_DIR / "kb_data_motor_drives"
 SENTENCE_KB_DIR = KB_DATA_ROOT / "sentence_kb"
 FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
 CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
+META_KB_DIR = KB_DATA_ROOT / "meta_kb"
 
 for p in [SENTENCE_KB_DIR, FAILURE_KB_DIR, CAUSE_KB_DIR]:
     p.mkdir(parents=True, exist_ok=True)
@@ -34,7 +35,7 @@ for p in [SENTENCE_KB_DIR, FAILURE_KB_DIR, CAUSE_KB_DIR]:
 sentence_kb = SentenceKB(persist_dir=SENTENCE_KB_DIR)
 failure_kb = FailureKB(persist_dir=FAILURE_KB_DIR)
 cause_kb = CauseKB(persist_dir=CAUSE_KB_DIR)
-
+meta_kb = FileMetaStore(persist_dir=META_KB_DIR)
 
 # =========================================================
 # 3) Ingest all 8D JSON files
@@ -50,6 +51,7 @@ for jp in json_files:
         failure_kb=failure_kb,
         cause_kb=cause_kb,
         sentence_kb=sentence_kb,
+        meta_kb=meta_kb
     )
 
 print("[INFO] Ingest finished")

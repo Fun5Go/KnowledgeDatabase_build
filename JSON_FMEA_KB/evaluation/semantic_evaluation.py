@@ -530,7 +530,7 @@ def run_semantic_evaluation(
 if __name__ == "__main__":
     BASE_DIR = Path(__file__).resolve().parent
 
-    KB_DATA_ROOT = BASE_DIR.parent / "kb_data"
+    KB_DATA_ROOT = BASE_DIR.parent / "KB_motor_drives"
     FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
     CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
 

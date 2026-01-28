@@ -71,7 +71,7 @@ def batch_run(folder_path: str) -> None:
 
     print(f"Found {len(json_files)} json files.")
 
-    for i, json_path in enumerate(json_files[:10]):
+    for i, json_path in enumerate(json_files[100:]):
         try:
             print(f"Processing {i+1}/{len(json_files)}: {os.path.basename(json_path)}")
             run(json_path)

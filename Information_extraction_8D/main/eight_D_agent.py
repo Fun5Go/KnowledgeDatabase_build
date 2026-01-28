@@ -295,7 +295,7 @@ def build_8d_case_from_json(json_path: str) -> EightDCase:
     failure_dict.get("supporting_entities", []),
     sentence_index)
 
-    failure_dict["failure_ID"] = f"{document_info.file_name}_F"
+    failure_dict["failure_ID"] = f"{document_info.file_name}_F1"
     failure_dict.setdefault("failure_level", "sub_system")
     failure_dict.setdefault("root_causes", [])
 

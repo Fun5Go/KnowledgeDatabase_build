@@ -7,6 +7,7 @@ from kb_structure import (
     Cause, CauseKB,
     Sentence, SentenceKB,
     MaintenanceTag,
+    FileMeta, FileMetaStore,
     evaluate_failure
 )
 
@@ -29,6 +30,7 @@ def ingest_8d_json(
     failure_kb: FailureKB,
     cause_kb: CauseKB,
     sentence_kb: SentenceKB,
+    meta_kb : FileMetaStore,
     operation: str = "replace",
 ):
     with open(json_path, "r", encoding="utf-8") as f:
@@ -40,7 +42,21 @@ def ingest_8d_json(
 
     doc0 = docs[0]
     case_id = doc0.get("file_name")
-    product = doc0.get("product_name")
+    product_name = doc0.get("product_name")
+    product_pn_id = doc0.get("productPnId")
+    product_domain = doc0.get("product_domain")
+
+    file_meta = FileMeta(
+    file_name=case_id,
+    source_type="8D",
+    released=doc0.get("released_date"),
+    productPnID=product_pn_id,
+    productName=product_name,
+    product_domain=product_domain,
+    version=doc0.get("version"),
+)
+
+    meta_kb.add(file_meta)
 
     failure = data["failure"]
 
@@ -56,6 +72,9 @@ def ingest_8d_json(
             source_section=ent.get("source_section", ""),
             case_id=case_id,
             annotations=ent.get("annotations", {}),
+            failure_id=failure["failure_ID"],
+            cause_id=None,
+            sentence_role="failure_sentence",
         )
         sentence_kb.add(
             sentence=s,
@@ -87,11 +106,15 @@ def ingest_8d_json(
             annotations=ent.get("annotations", {}),
         )
 
-        sentence_kb.add(
-            sentence=s,
+        s = Sentence(
+            id=sid,
+            text=ent["text"],
+            source_section=ent.get("source_section", ""),
+            case_id=case_id,
+            annotations=ent.get("annotations", {}),
             failure_id=failure["failure_ID"],
-            sentence_role="other",
             cause_id=None,
+            sentence_role="other",
         )
     # =====================================================
     #  Cause KB
@@ -108,6 +131,9 @@ def ingest_8d_json(
                 source_section=ent.get("source_section", ""),
                 case_id=case_id,
                 annotations=ent.get("annotations", {}),
+                failure_id=failure["failure_ID"],
+                cause_id=cause_id,
+                sentence_role="cause_sentence",
             )
             sentence_kb.add(
                 sentence=s,
@@ -151,8 +177,11 @@ def ingest_8d_json(
         failure_mode=failure.get("failure_mode", ""),
         failure_element=failure.get("failure_element", ""),
         failure_effect=failure.get("failure_effect"),
-        product=product,
         status=status,
+
+        product_domain = product_domain,
+        productPnID = product_pn_id,
+
         supporting_sentence_ids=failure_sentence_ids,
         cause_ids=cause_ids,
         maintenance=failure_maintenance,

@@ -156,7 +156,7 @@ def detail_print_results(results: list[dict]):
 
 def resolve_paths():
     base = Path(__file__).resolve().parent
-    kb_data = base / "kb_data"
+    kb_data = base / "kb_data_motor_drives"
     sentence_dir = kb_data / "sentence_kb"
     failure_dir = kb_data / "failure_kb"
     cause_dir = kb_data / "cause_kb"
@@ -230,6 +230,12 @@ def main():
     failure_mode = "intermittent boot failure"
     cause_query = "LPDDR4 chip soldering defect"
 
+    recs = sentence_kb.list_by_failure(
+    failure_id="8D6001175615R01_F",
+    roles=["failure_sentence", "cause_sentence"]
+)
+    print(recs)
+
     
     # results = failure_to_cause_pipeline(
     #     failure_mode=failure_mode,
@@ -253,14 +259,15 @@ def main():
     #         k=5,
     #     )
     #     print_sentence_hits(hits)
-    failure_id = "8D6298170245R02_F1"
-    case_result = query_by_failure_id_metadata_only(
-            failure_id = failure_id,
-            failure_kb=failure_kb,
-            cause_kb=cause_kb,
-            sentence_kb=sentence_kb,
-        )
-    print(case_result)
+    # failure_id = "8D6298170245R02_F1"
+    # case_result = query_by_failure_id_metadata_only(
+    #         failure_id = failure_id,
+    #         failure_kb=failure_kb,
+    #         cause_kb=cause_kb,
+    #         sentence_kb=sentence_kb,
+    #     )
+    # print(case_result)
+
 
     # for r in results:
     #     f = r["failure"]

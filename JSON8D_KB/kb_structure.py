@@ -27,13 +27,28 @@ def is_valid_embed_text(text: Optional[str]) -> bool:
 # =========================================================
 # Data models
 # =========================================================
-
 @dataclass
 class MaintenanceTag:
     review_status: str        # reviewed | pending | rejected
     version: str              # e.g. V1
     last_updated: str
     supersedes: Optional[str] # previous ID
+
+
+@dataclass
+class FileMeta: #General metadata for a FMEA worksheet
+    source_type: str #new_fmea/ old_fmea/ 8D
+    released: Optional[str] #released date
+    # productId: Optional[int] 
+    # productPnId: Optional[int]
+    productPnID: Optional[int]
+    productName: Optional[str]
+    # project_description: Optional[str]
+    file_name: str
+    product_domain: Optional[str]
+    # failure_id: str #FMEA61843..._F1
+    version: Optional[int]
+
 
 @dataclass
 class Sentence:
@@ -43,6 +58,9 @@ class Sentence:
     case_id: str
     annotations: Dict[str, Any]
 
+    failure_id: str = ""
+    cause_id: Optional[str] = None
+    sentence_role: str = ""
     #is_activate: bool = True # Keep the invalid sentences
 
 
@@ -52,12 +70,16 @@ class Failure:
     failure_mode: str
     failure_element: str
     failure_effect: Optional[str]
-    product: Optional[str]
+    # product: Optional[str]
+
     status: str
     supporting_sentence_ids: List[str]
     cause_ids: List[str]
     maintenance: MaintenanceTag
 
+
+    productPnID: Optional[int] = None
+    product_domain: Optional[str] = None
     # Maintenance
     # revision: int
     # last_updated: str
@@ -110,10 +132,41 @@ def evaluate_failure(
 # Sentence KB (facts only)
 # =========================================================
 
+class FileMetaStore:
+    def __init__(self, persist_dir: Path):
+        self.persist_dir = Path(persist_dir)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        self.store_path = self.persist_dir / "file_meta_store.json"
+        self.store: dict[str, dict] = {}
+
+        if self.store_path.exists():
+            self.store = json.loads(self.store_path.read_text(encoding="utf-8"))
+
+    def add(self, meta: FileMeta):
+        new_val = asdict(meta)
+        old_val = self.store.get(meta.file_name)
+
+        if old_val == new_val:
+            return
+
+        self.store[meta.file_name] = new_val
+        self.store_path.write_text(
+            json.dumps(self.store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
 class SentenceKB:
     def __init__(self, persist_dir: Path):
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        self.store_path = self.persist_dir / "sentence_store.json"
+        self.store: dict[str, dict] = {}
+        if self.store_path.exists():
+            self.store = json.loads(
+                self.store_path.read_text(encoding="utf-8")
+            )
 
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
 
@@ -133,20 +186,48 @@ class SentenceKB:
         sentence_role: str,
         cause_id: Optional[str] = None,
     ):
+        meta = {
+            "case_id": sentence.case_id,
+            "failure_id": failure_id,
+            "cause_id": cause_id or "",
+            "sentence_role": sentence_role,
+            "source_section": sentence.source_section,
+            "status": sentence.annotations.get("status"),
+            "subject": sentence.annotations.get("subject"),
+            "faithful_score": int(sentence.annotations.get("faithful_score", 0)),
+        }
+
+        # -------------------------------
+        # 1) Chroma upsert
+        # -------------------------------
         self.collection.upsert(
             ids=[sentence.id],
             documents=[sentence.text],
-            metadatas=[{
-                "case_id": sentence.case_id,
-                "failure_id": failure_id,
-                "cause_id": cause_id or "",
-                "sentence_role": sentence_role,
-                "source_section": sentence.source_section,
-                "status": sentence.annotations.get("status"),
-                "subject": sentence.annotations.get("subject"),
-                "faithful_score": int(sentence.annotations.get("faithful_score", 0)),
-            }],
+            metadatas=[meta],
         )
+
+        # -------------------------------
+        # 2) JSON store upsert
+        # -------------------------------
+        record = {
+            "id": sentence.id,
+            "text": sentence.text,
+            "case_id": sentence.case_id,
+            "source_section": sentence.source_section,
+            "failure_id": failure_id,
+            "cause_id": cause_id,
+            "sentence_role": sentence_role,
+            "annotations": sentence.annotations or {},
+            "meta": meta,
+        }
+
+        old = self.store.get(sentence.id)
+        if old != record:
+            self.store[sentence.id] = record
+            self.store_path.write_text(
+                json.dumps(self.store, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
 
     def get_by_ids(self, ids: List[str]) -> List[Sentence]:
         if not ids:
@@ -172,6 +253,9 @@ class SentenceKB:
                         "subject": meta.get("subject"),
                         "faithful_score": meta.get("faithful_score"),
                     },
+                    failure_id=meta.get("failure_id", ""),
+                    cause_id=meta.get("cause_id") or None,
+                    sentence_role=meta.get("sentence_role", ""),
                 )
             )
         return sentences
@@ -210,6 +294,77 @@ class SentenceKB:
             where=where,
             include=["documents", "metadatas", "distances"],
         )
+        
+    def get_record(self, sentence_id: str) -> Optional[dict]:
+        return self.store.get(sentence_id) 
+    def list_records(self) -> list[dict]: 
+        return list(self.store.values())
+    
+    def list_by_failure(
+        self,
+        failure_id: str,
+        roles: Optional[list[str]] = None,
+        *,
+        include_cause_id: bool | None = None,
+    ) -> list[dict]:
+        """
+        List sentence records from JSON store by failure_id.
+
+        Args:
+            failure_id: target failure id
+            roles: optional role filter, e.g. ["failure_sentence", "cause_sentence"]
+            include_cause_id:
+                - True: only sentences that have cause_id
+                - False: only sentences that have no cause_id
+                - None: no filter
+        """
+        out: list[dict] = []
+        for rec in self.store.values():
+            if rec.get("failure_id") != failure_id:
+                continue
+
+            if roles is not None and rec.get("sentence_role") not in roles:
+                continue
+
+            cid = rec.get("cause_id")
+            has_cause = cid is not None and cid != ""
+            if include_cause_id is True and not has_cause:
+                continue
+            if include_cause_id is False and has_cause:
+                continue
+
+            out.append(rec)
+        return out
+
+    def list_by_case(
+        self,
+        case_id: str,
+        roles: Optional[list[str]] = None,
+        *,
+        failure_id: Optional[str] = None,
+    ) -> list[dict]:
+        """
+        List sentence records from JSON store by case_id.
+
+        Args:
+            case_id: target case id (your file_name)
+            roles: optional role filter
+            failure_id: optional extra filter within the case
+        """
+        out: list[dict] = []
+        for rec in self.store.values():
+            if rec.get("case_id") != case_id:
+                continue
+
+            if failure_id is not None and rec.get("failure_id") != failure_id:
+                continue
+
+            if roles is not None and rec.get("sentence_role") not in roles:
+                continue
+
+            out.append(rec)
+        return out
+
 
 # =========================================================
 # Failure KB (entry gate)
@@ -273,9 +428,9 @@ class FailureKB:
                 "role": role,
 
                 # keep your existing metadata
-                "failure_mode": failure.failure_mode,
-                "failure_element": failure.failure_element,
-                "product": failure.product or "",
+                "productPnID": failure.productPnID,     
+                "product_domain": failure.product_domain,
+
                 "review_status": failure.maintenance.review_status,
                 "version": failure.maintenance.version,
                 "last_updated": failure.maintenance.last_updated,
