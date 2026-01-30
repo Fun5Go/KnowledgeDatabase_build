@@ -64,29 +64,34 @@ def load_json_smart(path: Path):
 # OPERATION 1: DEDUPLICATE
 # ===============================
 def deduplicate_records(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    #Initialize the groups
     grouped: Dict[Tuple, List[Dict[str, Any]]] = defaultdict(list)
 
+    # Group the documents by id and name like "id": 29286 + "name": "DFMEA: Sewer Safety Chip"
     for r in data:
         key = (r.get("id"), r.get("name"))
         grouped[key].append(r)
 
     deduplicated = []
-
+    # Go through each group to get the latest one with existed folder path
     for (_, _), records in grouped.items():
+        # Count the duplicate number to measure
         occurrence_count = len(records)
 
+        # Get the valid items with existing folder path (isCopy = False)
         valid = [x for x in records if x.get("isCopy") is False]
         if not valid:
             continue
-
+        #Get the latest one (releaseNo max)
         chosen = max(
             valid,
             key=lambda x: (
                 x.get("releaseNo", 0),
+                # If releaseNo is the same, get the lagest listId
                 x.get("listId", 0)
             )
         )
-
+        #Rewrite into the deduplicated list with occurrenceCount
         deduplicated.append({
             **chosen,
             "occurrenceCount": occurrence_count
