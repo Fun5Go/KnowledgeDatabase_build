@@ -9,7 +9,7 @@ from chromadb.utils import embedding_functions
 
 from dataclasses import asdict
 from collections import defaultdict
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, field
 
 FilterValue = Union[str, List[str]]
 DStage = Literal["D2", "D4"]
@@ -54,27 +54,31 @@ class Sentence:
 
 @dataclass
 class FMEAFailure:
+    # ===== required =====
     failure_id: str
     failure_mode: str
-    failure_element: Optional[str]
-    failure_effect: Optional[str]
 
-    system: Optional[str]
-    function: Optional[str]
+    # ===== optional text fields =====
+    failure_element: Optional[str] = None
+    failure_effect: Optional[str] = None
 
-    severity: Optional[float]
-    rpn: Optional[float]
-
-    cause_ids: List[str]
-
-    source_type: str # Old/New FMEA
-
-    fmea_type: Optional[str] = None
     process_step: Optional[str] = None
+    system: Optional[str] = None
+    function: Optional[str] = None
+
+    # ===== ratings =====
+    severity: Optional[float] = None
+    rpn: Optional[float] = None
+
+    # ===== links: store cause id + text =====
+    cause_ids: List[Dict[str, Any]] = field(default_factory=list)
+
+    # ===== context =====
+    source_type: str = ""               # Old/New FMEA
+    fmea_type: Optional[str] = None
 
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
-    file_name: Optional[str] = None
 
 
 @dataclass
@@ -96,6 +100,11 @@ class FMEACause:
     occurrence: Optional[float]         # occurrence (number)
     recommended_action: Optional[str]   # recommended_action
 
+    source_type: str # Old/New FMEA
+    fmea_type: Optional[str] = None
+
+    productPnID: Optional[int] = None
+    product_domain: Optional[str] = None
 
 class FileMetaStore:
     def __init__(self, persist_dir: Path):
@@ -133,6 +142,13 @@ class FMEAFailureKB:
         if self.store_path.exists():
             self.store = json.loads(self.store_path.read_text(encoding="utf-8"))
 
+        self.cause_store_path = self.persist_dir / "fmea_cause_store.json"
+        self.cause_store: dict[str, dict] = {}
+        if self.cause_store_path.exists():
+            self.cause_store = json.loads(
+                self.cause_store_path.read_text(encoding="utf-8")
+            )
+
         # ---------- vector store ----------
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -144,6 +160,8 @@ class FMEAFailureKB:
             embedding_function=self.embedder,
         )
 
+
+    
     # =========================================================
     # Add failure (ROLE-AWARE embedding)
     # =========================================================
@@ -176,7 +194,7 @@ class FMEAFailureKB:
 
                 "productPnID": failure.productPnID,     
                 "product_domain": failure.product_domain,
-                "file_name": failure.file_name,
+                "source_type": failure.source_type,
             })
 
         # ---------- split embedding by role ----------
@@ -190,6 +208,35 @@ class FMEAFailureKB:
                 documents=documents,
                 metadatas=metadatas,
             )
+
+    def add_cause(self, cause: FMEACause):
+
+        self.cause_store[cause.cause_id] = asdict(cause)
+        self.cause_store_path.write_text(
+        json.dumps(self.cause_store, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+        embed_text = cause.failure_cause
+        if not is_valid_embed_text(embed_text):
+            return
+
+        self.collection.upsert(
+            ids=[cause.cause_id],
+            documents=[embed_text],
+            metadatas=[{
+                "failure_id": cause.failure_id,
+                "cause_id": cause.cause_id,
+                "role": "failure_cause",
+                "discipline": cause.discipline or "",
+
+                "productPnID": cause.productPnID,
+                "product_domain": cause.product_domain,
+                "fmea_type": cause.fmea_type,
+                "source_type": cause.source_type,
+
+            }],
+        )
+
 
     # =========================================================
     # Low-level role-based search
@@ -303,61 +350,20 @@ class FMEAFailureKB:
     def get(self, failure_id: str) -> Optional[dict]:
         return self.store.get(failure_id)
     
-class FMEACauseKB:
-    def __init__(self, persist_dir: Path):
-        self.persist_dir = Path(persist_dir)
-        self.persist_dir.mkdir(parents=True, exist_ok=True)
 
-        self.store_path = self.persist_dir / "fmea_cause_store.json"
-        self.store = {}
-        if self.store_path.exists():
-            self.store = json.loads(self.store_path.read_text(encoding="utf-8"))
-
-        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
-        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
-        self.collection = self.client.get_or_create_collection(
-            name="fmea_cause_kb",
-            embedding_function=self.embedder,
-        )
-
-    def add(self, cause: FMEACause):
-        self.store[cause.cause_id] = asdict(cause)
-        self.store_path.write_text(
-            json.dumps(self.store, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        embed_text = "\n".join([
-            # f"Failure ID: {cause.failure_id}",
-            # f"Failure element: {cause.failure_element}",
-            f"Failure cause: {cause.failure_cause}",
-        ])
-
-        self.collection.upsert(
-            ids=[cause.cause_id],
-            documents=[embed_text],
-            metadatas=[{
-                "failure_id": cause.failure_id,
-                "cause_id" :cause.cause_id,
-                "dicipline": cause.discipline,
-            }],
-        )
-
-    def search_under_failure(self, query: str, failure_id: str, k: int = 5):
-        res = self.collection.query(
-            query_texts=[query],
-            n_results=k,
-            where={"failure_id": failure_id},
-        )
-        return res["ids"][0] if res["ids"] else []
+    # def search_under_failure(self, query: str, failure_id: str, k: int = 5):
+    #     res = self.collection.query(
+    #         query_texts=[query],
+    #         n_results=k,
+    #         where={"failure_id": failure_id},
+    #     )
+    #     return res["ids"][0] if res["ids"] else []
     
-    def get_all_vectors(self): 
-        res = self.collection.get(
-            include=["embeddings", "metadatas", "ids"]
-        )
-        return res
+    # def get_all_vectors(self): 
+    #     res = self.collection.get(
+    #         include=["embeddings", "metadatas", "ids"]
+    #     )
+    #     return res
     
 
 class FailureRetriever:

@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-from kb_structure import FMEAFailureKB, FMEACauseKB, FileMetaStore
+from kb_structure import FMEAFailureKB, FileMetaStore
 from ingest_fmea import ingest_fmea_jsonl  
 
 
@@ -24,7 +24,7 @@ for p in [FAILURE_KB_DIR, CAUSE_KB_DIR]:
 # 2) Init KBs
 # =========================================================
 failure_kb = FMEAFailureKB(persist_dir=FAILURE_KB_DIR)
-cause_kb = FMEACauseKB(persist_dir=CAUSE_KB_DIR)
+# cause_kb = FMEACauseKB(persist_dir=CAUSE_KB_DIR)
 meta_kb = FileMetaStore(persist_dir=KB_DATA_ROOT)
 
 
@@ -32,14 +32,23 @@ meta_kb = FileMetaStore(persist_dir=KB_DATA_ROOT)
 # 3) Ingest all FMEA JSONL files (row by row)
 # =========================================================
 
-ingest_fmea_jsonl(
-    jsonl_path=JSONL_PATH,
-    failure_kb=failure_kb,
-    cause_kb=cause_kb,
-    meta_kb=meta_kb,
-)
+# ingest_fmea_jsonl(
+#     jsonl_path=JSONL_PATH,
+#     failure_kb=failure_kb,
+#     # cause_kb=cause_kb,
+#     meta_kb=meta_kb,
+# )
 
 
 print("[INFO] Ingest finished")
-print(f"Failure KB count : {failure_kb.collection.count()}")
-print(f"Cause KB count   : {cause_kb.collection.count()}")
+roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
+
+def count_by_where(col, where):
+    res = col.get(where=where, include=[])
+    return len(res["ids"])
+roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
+for r in roles:
+    n = count_by_where(failure_kb.collection, {"role": r})
+    print(f"{r} count: {n}")
+print(f"Total count: {failure_kb.collection.count()}")
+

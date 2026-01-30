@@ -49,13 +49,21 @@ for jp in json_files:
     ingest_8d_json(
         json_path=jp,
         failure_kb=failure_kb,
-        cause_kb=cause_kb,
+        # cause_kb=cause_kb,
         sentence_kb=sentence_kb,
         meta_kb=meta_kb
     )
 
 print("[INFO] Ingest finished")
-print(f"Sentence KB count : {sentence_kb.collection.count()}")
-print(f"Failure KB count  : {failure_kb.collection.count()}")
-print(f"Cause KB count    : {cause_kb.collection.count()}")
+roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
+
+def count_by_where(col, where):
+    res = col.get(where=where, include=[])
+    return len(res["ids"])
+roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
+for r in roles:
+    n = count_by_where(failure_kb.collection, {"role": r})
+    print(f"{r} count: {n}")
+print(f"Total count: {failure_kb.collection.count()}")
+
 

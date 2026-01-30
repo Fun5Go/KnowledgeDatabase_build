@@ -28,7 +28,7 @@ def parse_maintenance_tag(raw: dict | None) -> MaintenanceTag:
 def ingest_8d_json(
     json_path: Path,
     failure_kb: FailureKB,
-    cause_kb: CauseKB,
+    # cause_kb: CauseKB,
     sentence_kb: SentenceKB,
     meta_kb : FileMetaStore,
     operation: str = "replace",
@@ -119,7 +119,6 @@ def ingest_8d_json(
     # =====================================================
     #  Cause KB
     # =====================================================
-    cause_ids: List[str] = []
     for cause in failure.get("root_causes", []):
         cause_id = cause["cause_ID"]
         cause_sentence_ids: List[str] = []
@@ -143,35 +142,10 @@ def ingest_8d_json(
             )
             cause_sentence_ids.append(s.id)
 
-        cause_maintenance = parse_maintenance_tag(
-            cause.get("maintenance_tag")
-        )
-
-        cause_obj = Cause(
-            cause_id=cause_id,
-            failure_id=failure["failure_ID"],
-            failure_mode=failure.get("failure_mode", ""),
-            failure_element=failure.get("failure_element", ""),
-            failure_effect=failure.get("failure_effect"),
-            root_cause=cause.get("failure_cause", ""),
-            cause_level=cause.get("cause_level", ""),
-            discipline=cause.get("discipline_type", ""),
-            confidence=cause.get("confidence", ""),
-            supporting_sentence_ids=cause_sentence_ids,
-            maintenance=cause_maintenance
-        )
-        cause_kb.add(cause_obj)
-        cause_ids.append(cause_id)
-
-    # =====================================================
-    #  Failure KB
-    # =====================================================
     status = evaluate_failure(sentence_kb.get_by_ids(failure_sentence_ids))
     failure_maintenance = parse_maintenance_tag(
         failure.get("maintenance_tag")
     )
-    
-
     failure_obj = Failure(
         failure_id=failure["failure_ID"],
         failure_mode=failure.get("failure_mode", ""),
@@ -183,8 +157,63 @@ def ingest_8d_json(
         productPnID = product_pn_id,
 
         supporting_sentence_ids=failure_sentence_ids,
-        cause_ids=cause_ids,
+        cause_ids=[],
         maintenance=failure_maintenance,
+        
+        fmea_type = failure.get("failure_level"),
+        source_type= "8D"
     )
+    for cause in failure.get("root_causes", []) or []:
+        cause_id = cause.get("cause_ID") or cause.get("cause_id")
+        if not cause_id:
+            continue
 
+        cause_text = (cause.get("failure_cause") or "").strip()
+        if not cause_text:
+            continue
+
+        cause_sentence_ids = [
+            e.get("sentence_id")
+            for e in cause.get("supporting_entities", [])
+            if e.get("sentence_id")
+        ]
+
+        cause_maintenance = parse_maintenance_tag(
+            cause.get("maintenance_tag")
+        )
+
+        cause_obj = Cause(
+            cause_id=cause_id,
+            failure_id=failure["failure_ID"],
+
+            root_cause=cause_text,
+            
+            failure_mode=failure.get("failure_mode", ""),
+            failure_element=failure.get("failure_element", ""),
+            failure_effect=failure.get("failure_effect"),
+
+            fmea_type=cause.get("cause_level"),
+            discipline=cause.get("discipline_type"),
+            confidence=cause.get("confidence"),
+
+            supporting_sentence_ids=cause_sentence_ids,
+            maintenance=cause_maintenance,
+
+            source_type="8D",
+            product_domain=product_domain,
+            productPnID=product_pn_id,
+        )
+
+        failure_kb.add_cause(cause_obj)
+
+        # CauseID append
+        failure_obj.cause_ids.append({
+            "cause_id": cause_id,
+            "cause_text": cause_text,
+        })
+
+    # =====================================================
+    # Failure KB
+    # =====================================================
     failure_kb.add(failure_obj)
+

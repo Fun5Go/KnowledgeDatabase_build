@@ -6,7 +6,7 @@ from chromadb.utils import embedding_functions
 from pathlib import Path
 import json
 from typing import Optional
-from dataclasses import asdict
+from dataclasses import asdict,field
 from collections import defaultdict
 
 
@@ -66,18 +66,27 @@ class Sentence:
 
 @dataclass
 class Failure:
+    # ===== required =====
     failure_id: str
     failure_mode: str
     failure_element: str
-    failure_effect: Optional[str]
-    # product: Optional[str]
 
-    status: str
-    supporting_sentence_ids: List[str]
-    cause_ids: List[str]
-    maintenance: MaintenanceTag
+    # ===== optional text =====
+    failure_effect: Optional[str] = None
+    status: Optional[str] = None
 
+    # ===== context =====
+    fmea_type: Optional[str] = None
+    source_type: str = "8D"
 
+    # ===== evidence / links =====
+    supporting_sentence_ids: List[str] = field(default_factory=list)
+    cause_ids: List[Dict[str, Any]] = field(default_factory=list)
+
+    # ===== maintenance =====
+    maintenance: Optional[MaintenanceTag] = None
+
+    # ===== product =====
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
     # Maintenance
@@ -93,7 +102,9 @@ class Cause:
     failure_element: str
     failure_effect: Optional[str]
     root_cause: str
-    cause_level: str
+
+    fmea_type: str
+
     discipline: str
     confidence: str
     supporting_sentence_ids: List[str]
@@ -102,6 +113,9 @@ class Cause:
     maintenance: MaintenanceTag
     # revision: int
     # last_updated: str
+    source_type: str = "8D"      
+    productPnID: Optional[int] = None
+    product_domain: Optional[str] = None
 
 
 # =========================================================
@@ -382,6 +396,13 @@ class FailureKB:
             with open(self.store_path, "r", encoding="utf-8") as f:
                 self.store = json.load(f)
 
+        self.cause_store_path = self.persist_dir / "fmea_cause_store.json"
+        self.cause_store: dict[str, dict] = {}
+        if self.cause_store_path.exists():
+            self.cause_store = json.loads(
+                self.cause_store_path.read_text(encoding="utf-8")
+            )
+
         # -------- vector store --------
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -427,6 +448,9 @@ class FailureKB:
                 "failure_id": failure.failure_id,
                 "role": role,
 
+                "fmea_type": failure.fmea_type,
+                "source_type": failure.source_type,
+
                 # keep your existing metadata
                 "productPnID": failure.productPnID,     
                 "product_domain": failure.product_domain,
@@ -447,6 +471,34 @@ class FailureKB:
                 documents=documents,
                 metadatas=metadatas,
             )
+        
+    def add_cause(self, cause: Cause):
+
+        self.cause_store[cause.cause_id] = asdict(cause)
+        self.cause_store_path.write_text(
+        json.dumps(self.cause_store, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+        embed_text = cause.root_cause
+        if not is_valid_embed_text(embed_text):
+            return
+
+        self.collection.upsert(
+            ids=[cause.cause_id],
+            documents=[embed_text],
+            metadatas=[{
+                "failure_id": cause.failure_id,
+                "cause_id": cause.cause_id,
+                "role": "failure_cause",
+                "discipline": cause.discipline or "",
+
+                "productPnID": cause.productPnID,
+                "product_domain": cause.product_domain,
+                "fmea_type": cause.fmea_type,
+                "source_type": cause.source_type,
+
+            }],
+        )
 
     # =========================================================
     # Low-level role-based search

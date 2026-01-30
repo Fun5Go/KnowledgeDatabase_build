@@ -1,4 +1,4 @@
-from kb_structure import FMEAFailureKB, FMEACauseKB, FMEAFailure, FMEACause, FileMeta, FileMetaStore
+from kb_structure import FMEAFailureKB, FMEAFailure, FMEACause, FileMeta, FileMetaStore
 
 import json
 from pathlib import Path
@@ -287,23 +287,30 @@ def is_duplicate_failure(
     return None
 
 def is_duplicate_cause(
-    cause_kb: FMEACauseKB,
+    failure_kb: FMEAFailureKB,
     failure_id: str,
     cause_text: str,
 ) -> str | None:
     """
-    Only deduplicate causes under the same failure
+    Deduplicate causes under the same failure
     """
+    if not cause_text:
+        return None
+
     nc = normalize(cause_text)
 
-    for cid, c in cause_kb.store.items():
+    for cid, c in failure_kb.cause_store.items():
         if c.get("failure_id") != failure_id:
             continue
-        if normalize(c.get("failure_cause")) == nc:
+
+        existing_text = c.get("failure_cause")
+        if not existing_text:
+            continue
+
+        if normalize(existing_text) == nc:
             return cid
 
     return None
-
 
 
 
@@ -469,7 +476,7 @@ def ingest_fmea_json(
                     recommended_action=row.get("recommended_action"),
                 )
 
-            cause_kb.add(cause_obj)
+            failure_kb.add_cause(cause_obj)
             failure_obj.cause_ids.append(cause_id)
 
         # -------------------------------------------------
@@ -490,7 +497,7 @@ def ingest_fmea_json(
 def ingest_fmea_jsonl(
     jsonl_path: Path,
     failure_kb,
-    cause_kb,
+    # cause_kb,
     meta_kb,
 ):
     # =================================================
@@ -632,10 +639,9 @@ def ingest_fmea_jsonl(
                     cause_ids=[],
                     source_type=source_type,
 
-                    # ===== 注入 file-level context =====
+                    # =====  file-level context =====
                     productPnID=file_meta.productPnID,
                     product_domain=file_meta.product_domain,
-                    file_name=file_name,
 
                     fmea_type=fmea_type,
                     process_step=process_step,
@@ -666,14 +672,27 @@ def ingest_fmea_jsonl(
 
 
                 existing_cause_id = is_duplicate_cause(
-                    cause_kb,
+                    failure_kb,
                     failure_id=failure_id,
                     cause_text=cause_text,
                 )
 
                 if existing_cause_id:
-                    if existing_cause_id not in failure_obj.cause_ids:
-                        failure_obj.cause_ids.append(existing_cause_id)
+                    
+                    existing_cause = failure_kb.cause_store.get(existing_cause_id)
+
+                    if existing_cause:
+                        cause_ref = {
+                            "cause_id": existing_cause_id,
+                            "cause_text": existing_cause.get("failure_cause"),
+                        }
+
+                        if not any(
+                            c.get("cause_id") == existing_cause_id
+                            for c in failure_obj.cause_ids
+                        ):
+                            failure_obj.cause_ids.append(cause_ref)
+
                     continue
 
                 cause_id = f"{failure_id}_C{cause_counter}"
@@ -693,6 +712,12 @@ def ingest_fmea_jsonl(
                         detection_value=parse_number(rpn_block.get("detection")),
                         occurrence=parse_number(rpn_block.get("occurrence")),
                         recommended_action=content.get("recommended_action"),
+
+                        # =====  file-level context =====
+                        productPnID=file_meta.productPnID,
+                        product_domain=file_meta.product_domain,
+                        source_type=source_type,
+                        fmea_type=fmea_type,
                     )
                 else:
                     cause_obj = FMEACause(
@@ -708,10 +733,22 @@ def ingest_fmea_jsonl(
                         detection_value=parse_number(rpn_block.get("detection")),
                         occurrence=parse_number(rpn_block.get("occurrence")),
                         recommended_action=content.get("recommended_action"),
+
+                        # =====  file-level context =====
+                        productPnID=file_meta.productPnID,
+                        product_domain=file_meta.product_domain,
+                        source_type=source_type,
+                        fmea_type=fmea_type,
+
+  
                     )
 
-                cause_kb.add(cause_obj)
-                failure_obj.cause_ids.append(cause_id)
+                failure_kb.add_cause(cause_obj)
+                cause_ref = {
+                    "cause_id": cause_id,
+                    "cause_text": cause_text,
+                }
+                failure_obj.cause_ids.append(cause_ref)
 
             # ---------------------------------------------
             # Back-write failure → causes
