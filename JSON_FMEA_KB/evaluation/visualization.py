@@ -17,6 +17,7 @@ ROLES = {
     "failure_element": "tab:blue",
     "failure_mode": "tab:orange",
     "failure_effect": "tab:green",
+    "failure_cause": "tab:red",
 }
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"

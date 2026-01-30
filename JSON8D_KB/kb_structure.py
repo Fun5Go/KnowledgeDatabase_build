@@ -390,13 +390,13 @@ class FailureKB:
         self.persist_dir.mkdir(parents=True, exist_ok=True)
 
         # -------- persistent store --------
-        self.store_path = self.persist_dir / "failure_store.json"
+        self.store_path = self.persist_dir / "8d_failure_store.json"
         self.store: Dict[str, Dict[str, Any]] = {}
         if self.store_path.exists():
             with open(self.store_path, "r", encoding="utf-8") as f:
                 self.store = json.load(f)
 
-        self.cause_store_path = self.persist_dir / "fmea_cause_store.json"
+        self.cause_store_path = self.persist_dir / "8d_cause_store.json"
         self.cause_store: dict[str, dict] = {}
         if self.cause_store_path.exists():
             self.cause_store = json.loads(
@@ -410,7 +410,7 @@ class FailureKB:
         )
 
         self.collection = self.client.get_or_create_collection(
-            name="failure_kb",
+            name="all_failure_kb",
             embedding_function=self.embedder,
         )
 

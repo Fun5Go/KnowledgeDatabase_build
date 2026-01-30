@@ -156,7 +156,7 @@ class FMEAFailureKB:
         )
 
         self.collection = self.client.get_or_create_collection(
-            name="fmea_failure_kb",
+            name="all_failure_kb",
             embedding_function=self.embedder,
         )
 
