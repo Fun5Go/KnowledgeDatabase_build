@@ -75,6 +75,9 @@ def ingest_8d_json(
             failure_id=failure["failure_ID"],
             cause_id=None,
             sentence_role="failure_sentence",
+            product_domain = product_domain,
+            productPnID = product_pn_id,
+
         )
         sentence_kb.add(
             sentence=s,
@@ -116,8 +119,13 @@ def ingest_8d_json(
             cause_id=None,
             sentence_role="other",
         )
+        sentence_kb.add(
+            sentence=s,
+            failure_id=failure["failure_ID"],
+            sentence_role="other",
+        )
     # =====================================================
-    #  Cause KB
+    #  Failure KB
     # =====================================================
     for cause in failure.get("root_causes", []):
         cause_id = cause["cause_ID"]

@@ -62,6 +62,8 @@ class Sentence:
     cause_id: Optional[str] = None
     sentence_role: str = ""
     #is_activate: bool = True # Keep the invalid sentences
+    productPnID: Optional[int] = None
+    product_domain: Optional[str] = None
 
 
 @dataclass
@@ -209,6 +211,8 @@ class SentenceKB:
             "status": sentence.annotations.get("status"),
             "subject": sentence.annotations.get("subject"),
             "faithful_score": int(sentence.annotations.get("faithful_score", 0)),
+            "productPnID": sentence.productPnID,     
+            "product_domain": sentence.product_domain,
         }
 
         # -------------------------------
