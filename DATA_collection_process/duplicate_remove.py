@@ -66,18 +66,15 @@ def load_json_smart(path: Path):
 def deduplicate_records(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     #Initialize the groups
     grouped: Dict[Tuple, List[Dict[str, Any]]] = defaultdict(list)
-
     # Group the documents by id and name like "id": 29286 + "name": "DFMEA: Sewer Safety Chip"
     for r in data:
         key = (r.get("id"), r.get("name"))
         grouped[key].append(r)
-
     deduplicated = []
     # Go through each group to get the latest one with existed folder path
     for (_, _), records in grouped.items():
         # Count the duplicate number to measure
         occurrence_count = len(records)
-
         # Get the valid items with existing folder path (isCopy = False)
         valid = [x for x in records if x.get("isCopy") is False]
         if not valid:
@@ -96,28 +93,27 @@ def deduplicate_records(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             **chosen,
             "occurrenceCount": occurrence_count
         })
-
     return deduplicated
 
 # ===============================
 # OPERATION 2: TYPE CLASSIFY
 # ===============================
 def is_process_fmea(name: str) -> bool:
+    # Normalize the name to avoid mismatches caused by case, spaces, or symbols
     name = normalize(name)
+    # Return True if any process-related keyword appears in the document name
     return any(w in name for w in PROCESS_WORDS)
-
 
 def split_process_and_sd(data: List[Dict[str, Any]]):
     process = []
     sd_fmea = []
-
     for r in data:
         name = r.get("name", "")
         if is_process_fmea(name):
             process.append(r)
         else:
             sd_fmea.append(r)
-
+    # Split the process FMEA and System FMEA into two lists
     return process, sd_fmea
 
 # ===============================

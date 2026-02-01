@@ -244,7 +244,6 @@ def build_8d_case_from_json(json_path: str) -> EightDCase:
         }
     })
 
-
     # output_iter1 = Iteration1Output(**output_iter1)
 
     #Add ids to sentences
@@ -265,19 +264,18 @@ def build_8d_case_from_json(json_path: str) -> EightDCase:
 
     input_iter2 = build_iteration2_input(output_iter1)
 
+    # FMEA similar case search with productPnID
     results,failure_ids = eightD_fmea_search(
     signals=input_iter2["signals"],
     productPnID=document_info.productPnId,
 )
     similar_fmea = failure_ids
     examples = failures_to_fmea_style_text(results)
-
-
     print("LLM iteration 2")
     output_iter2 = extract_iteration_2.invoke({
         "data": {
-            "signals": input_iter2["signals"],
-            "examples": examples,
+            "signals": input_iter2["signals"], # Sentences with annotations
+            "examples": examples, # Similar FMEA cases in text format
         }
     })
     # output_iter2 = extract_iteration_2.invoke({"data":input_iter2})

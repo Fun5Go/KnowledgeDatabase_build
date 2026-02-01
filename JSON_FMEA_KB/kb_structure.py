@@ -465,13 +465,11 @@ class FailureRetriever:
         Let embedding model see the full 8D sentence.
         """
         where = self._build_where(productPnID, fmea_type)
-
         return self.collection.query(
             query_texts=[query],
             n_results=k,
             where=where,
         )
-
     # =========================================================
     # Merge with role + stage bias
     # =========================================================
@@ -529,27 +527,22 @@ class FailureRetriever:
         k: int = 5,
         raw_k: int = 15,
     ) -> List[str]:
-        """
-        Main RAG entry for 8D input
-        """
-        # 1. role-agnostic vector search
+
+        # Role-free vector search: top-N semantically similar fragments
         res = self.search_free(
             query=text,
             productPnID=productPnID,
             fmea_type=fmea_type,
             k=raw_k,
         )
-
-        # 2. merge with semantic bias
+        # Merge with semantic bias with role and stage weighted
         merged = self.merge_hits_with_bias(res, d_stage)
-
-        # 3. rank by score + role coverage
+        # Rank by score + role coverage
         ranked = sorted(
             merged.items(),
             key=lambda x: (x[1]["score"], len(x[1]["roles"])),
             reverse=True,
         )
-
         return [fid for fid, _ in ranked[:k]]
 
     # =========================================================

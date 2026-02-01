@@ -36,41 +36,36 @@ def extract_text_fields(row):
     return texts
 
 def build_labels(row):
+    # Collect normalized text only from fields in FAILURE_KEYS
     texts = {
         k: row[k].lower().strip()
         for k in FAILURE_KEYS
         if isinstance(row.get(k), str) and row[k].strip()
     }
-
     motor_hits = []
     process_hits = []
-
+    # Scan FAILURE_KEYS fields for keyword matches 
     for v in texts.values():
         for kw, pat in MOTOR_PATTERNS.items():
             if pat.search(v):
                 motor_hits.append(kw)
-
         for kw, pat in PROCESS_PATTERNS.items():
             if pat.search(v):
                 process_hits.append(kw)
-
     labels = {}
-
+    # Add product and fmea labels
     if motor_hits:
         labels["domain"] = "motor drive"
         labels["criterion"] = "high keyword hit"
         labels["motor_drive_hits"] = sorted(set(motor_hits))
-
     if process_hits:
         labels["fmea_type"] = "process"
         labels["process_hits"] = sorted(set(process_hits))
-
     # product / parent hint
     product_text = (row.get("productName") or "").lower()
     product_hint = [p for p in PRODUCT_HINTS if p in product_text]
     if product_hint:
         labels["product_hint"] = product_hint
-
     return labels, texts
 
 def save_failure(row):
