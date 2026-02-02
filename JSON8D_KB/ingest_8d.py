@@ -107,17 +107,11 @@ def ingest_8d_json(
             source_section=ent.get("source_section", ""),
             case_id=case_id,
             annotations=ent.get("annotations", {}),
-        )
-
-        s = Sentence(
-            id=sid,
-            text=ent["text"],
-            source_section=ent.get("source_section", ""),
-            case_id=case_id,
-            annotations=ent.get("annotations", {}),
             failure_id=failure["failure_ID"],
             cause_id=None,
             sentence_role="other",
+            product_domain=product_domain,
+            productPnID=product_pn_id,
         )
         sentence_kb.add(
             sentence=s,
@@ -141,6 +135,8 @@ def ingest_8d_json(
                 failure_id=failure["failure_ID"],
                 cause_id=cause_id,
                 sentence_role="cause_sentence",
+                product_domain=product_domain,
+                productPnID=product_pn_id,
             )
             sentence_kb.add(
                 sentence=s,
