@@ -22,10 +22,10 @@ if not JSON_ROOT.exists():
 KB_DATA_ROOT = BASE_DIR.parent / "KB_motor_drives"
 SENTENCE_KB_DIR = KB_DATA_ROOT / "sentence_kb"
 FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
-CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
+# CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
 
 
-for p in [SENTENCE_KB_DIR, FAILURE_KB_DIR, CAUSE_KB_DIR]:
+for p in [SENTENCE_KB_DIR, FAILURE_KB_DIR]:
     p.mkdir(parents=True, exist_ok=True)
 
 
@@ -34,7 +34,7 @@ for p in [SENTENCE_KB_DIR, FAILURE_KB_DIR, CAUSE_KB_DIR]:
 # =========================================================
 sentence_kb = SentenceKB(persist_dir=SENTENCE_KB_DIR)
 failure_kb = FailureKB(persist_dir=FAILURE_KB_DIR)
-cause_kb = CauseKB(persist_dir=CAUSE_KB_DIR)
+# cause_kb = CauseKB(persist_dir=CAUSE_KB_DIR)
 meta_kb = FileMetaStore(persist_dir=KB_DATA_ROOT)
 
 # =========================================================

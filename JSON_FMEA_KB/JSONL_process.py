@@ -14,9 +14,9 @@ JSONL_PATH= Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_moto
 # Persist KB data folders
 KB_DATA_ROOT = BASE_DIR.parent/ "KB_motor_drives"
 FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
-CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
+# CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"
 
-for p in [FAILURE_KB_DIR, CAUSE_KB_DIR]:
+for p in [FAILURE_KB_DIR]:
     p.mkdir(parents=True, exist_ok=True)
 
 
