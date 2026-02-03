@@ -158,6 +158,7 @@ class FMEAFailureKB:
         self.collection = self.client.get_or_create_collection(
             name="all_failure_kb",
             embedding_function=self.embedder,
+            metadata={"hnsw:space": "cosine"},
         )
 
 

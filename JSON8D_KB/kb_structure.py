@@ -193,6 +193,7 @@ class SentenceKB:
         self.collection = self.client.get_or_create_collection(
             name="sentences",
             embedding_function=self.embedder,
+            metadata={"hnsw:space": "cosine"},
         )
 
     def add(
@@ -392,85 +393,61 @@ class FailureKB:
     def __init__(self, persist_dir: Path):
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
-
         # -------- persistent store --------
         self.store_path = self.persist_dir / "8d_failure_store.json"
         self.store: Dict[str, Dict[str, Any]] = {}
         if self.store_path.exists():
             with open(self.store_path, "r", encoding="utf-8") as f:
                 self.store = json.load(f)
-
         self.cause_store_path = self.persist_dir / "8d_cause_store.json"
         self.cause_store: dict[str, dict] = {}
         if self.cause_store_path.exists():
             self.cause_store = json.loads(
                 self.cause_store_path.read_text(encoding="utf-8")
             )
-
         # -------- vector store --------
+        # Initialize the embedding model
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-MiniLM-L6-v2"
         )
-
         self.collection = self.client.get_or_create_collection(
             name="all_failure_kb",
             embedding_function=self.embedder,
+            metadata={"hnsw:space": "cosine"},
         )
-
     # =========================================================
-    # Add failure (ROLE-AWARE embedding)
+    # Add failure (Failure key embedding)
     # =========================================================
     def add(self, failure):
-        # ---- structured store ----
-        # new_data = asdict(failure)
-        # old_data = self.store.get(failure.failure_id)
-        
-
-        # if old_data == new_data:
-        #     print(f"The case {failure.failure_id} already exists in the KB")
-        #     if operation == "add"
-        #     print()     
-        #     return 
-
-            
-
         self.store[failure.failure_id] = asdict(failure)
         with open(self.store_path, "w", encoding="utf-8") as f:
             json.dump(self.store, f, indent=2, ensure_ascii=False)
-
         ids = []
         documents = []
         metadatas = []
-
         def add_field(text: Optional[str], role: str):
             if not is_valid_embed_text(text):
                 return
             ids.append(f"{failure.failure_id}::{role}")
-            documents.append(text)
+            documents.append(text) # doc for embedding
             metadatas.append({
                 "failure_id": failure.failure_id,
                 "role": role,
-
                 "fmea_type": failure.fmea_type,
                 "source_type": failure.source_type,
-
-                # keep your existing metadata
                 "productPnID": failure.productPnID,     
                 "product_domain": failure.product_domain,
-
                 "review_status": failure.maintenance.review_status,
                 "version": failure.maintenance.version,
                 "last_updated": failure.maintenance.last_updated,
             })
-
         # ---- split embedding ----
         add_field(failure.failure_mode, "failure_mode")
         add_field(failure.failure_element, "failure_element")
         add_field(failure.failure_effect, "failure_effect")
-
         if ids:
-            self.collection.upsert(
+            self.collection.upsert( # update or insert
                 ids=ids,
                 documents=documents,
                 metadatas=metadatas,
