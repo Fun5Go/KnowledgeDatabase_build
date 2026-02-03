@@ -103,7 +103,7 @@ class Cause:
     failure_mode: str
     failure_element: str
     failure_effect: Optional[str]
-    root_cause: str
+    failure_cause: str
 
     fmea_type: str
 
@@ -460,7 +460,7 @@ class FailureKB:
         json.dumps(self.cause_store, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-        embed_text = cause.root_cause
+        embed_text = cause.failure_cause
         if not is_valid_embed_text(embed_text):
             return
 

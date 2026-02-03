@@ -55,7 +55,7 @@ def build_labels(row):
     labels = {}
     # Add product and fmea labels
     if motor_hits:
-        labels["domain"] = "motor drive"
+        labels["domain"] = "motor_drives"
         labels["criterion"] = "high keyword hit"
         labels["motor_drive_hits"] = sorted(set(motor_hits))
     if process_hits:

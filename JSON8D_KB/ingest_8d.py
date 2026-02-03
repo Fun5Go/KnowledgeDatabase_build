@@ -190,7 +190,7 @@ def ingest_8d_json(
             cause_id=cause_id,
             failure_id=failure["failure_ID"],
 
-            root_cause=cause_text,
+            failure_cause=cause_text,
             
             failure_mode=failure.get("failure_mode", ""),
             failure_element=failure.get("failure_element", ""),
