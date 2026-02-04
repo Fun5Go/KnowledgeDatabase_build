@@ -10,7 +10,7 @@ from kb_structure import (
     FileMeta, FileMetaStore,
     evaluate_failure
 )
-
+from datetime import datetime
 
 def parse_maintenance_tag(raw: dict | None) -> MaintenanceTag:
     raw = raw or {}
@@ -24,6 +24,28 @@ def parse_maintenance_tag(raw: dict | None) -> MaintenanceTag:
 
 
 
+def to_year(released) -> int | None:
+    if not released:
+        return None
+
+    s = str(released).strip()
+    if not s or s.lower() in {"unknown", "n/a", "na", "none", "null", "-"}:
+        return None
+
+    # normalize common ISO variants
+    s = s.replace("Z", "+00:00")
+
+    # if it's just a year like "2019"
+    if len(s) == 4 and s.isdigit():
+        return int(s)
+
+    try:
+        return datetime.fromisoformat(s).year
+    except ValueError:
+        # fallback: extract leading year if present, e.g. "2019-01-07 ..."
+        if len(s) >= 4 and s[:4].isdigit():
+            return int(s[:4])
+        return None
 
 def ingest_8d_json(
     json_path: Path,
@@ -57,7 +79,7 @@ def ingest_8d_json(
 )
 
     meta_kb.add(file_meta)
-
+    released_year = to_year(file_meta.released)
     failure = data["failure"]
 
     # =====================================================
@@ -77,6 +99,7 @@ def ingest_8d_json(
             sentence_role="failure_sentence",
             product_domain = product_domain,
             productPnID = product_pn_id,
+            released_year=released_year,
 
         )
         sentence_kb.add(
@@ -112,6 +135,7 @@ def ingest_8d_json(
             sentence_role="other",
             product_domain=product_domain,
             productPnID=product_pn_id,
+            released_year=released_year,
         )
         sentence_kb.add(
             sentence=s,
@@ -137,6 +161,7 @@ def ingest_8d_json(
                 sentence_role="cause_sentence",
                 product_domain=product_domain,
                 productPnID=product_pn_id,
+                released_year=released_year,
             )
             sentence_kb.add(
                 sentence=s,
@@ -165,7 +190,8 @@ def ingest_8d_json(
         maintenance=failure_maintenance,
         
         fmea_type = failure.get("failure_level"),
-        source_type= "8D"
+        source_type= "8D",
+        released_year=released_year,
     )
     for cause in failure.get("root_causes", []) or []:
         cause_id = cause.get("cause_ID") or cause.get("cause_id")
@@ -206,6 +232,7 @@ def ingest_8d_json(
             source_type="8D",
             product_domain=product_domain,
             productPnID=product_pn_id,
+            released_year=released_year,
         )
 
         failure_kb.add_cause(cause_obj)

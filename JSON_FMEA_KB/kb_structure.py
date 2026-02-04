@@ -79,6 +79,7 @@ class FMEAFailure:
 
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
+    released_year: Optional[int] = None
 
 
 @dataclass
@@ -105,6 +106,7 @@ class FMEACause:
 
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
+    released_year: Optional[int] = None
 
 class FileMetaStore:
     def __init__(self, persist_dir: Path):
@@ -166,7 +168,7 @@ class FMEAFailureKB:
     # =========================================================
     # Add failure (ROLE-AWARE embedding)
     # =========================================================
-    def add(self, failure):
+    def add(self, failure:FMEAFailure):
         # ---------- store structured ----------
         self.store[failure.failure_id] = asdict(failure)
         self.store_path.write_text(
@@ -196,6 +198,7 @@ class FMEAFailureKB:
                 "productPnID": failure.productPnID,     
                 "product_domain": failure.product_domain,
                 "source_type": failure.source_type,
+                "released_date": failure.released_year,
             })
 
         # ---------- split embedding by role ----------
@@ -234,6 +237,7 @@ class FMEAFailureKB:
                 "product_domain": cause.product_domain,
                 "fmea_type": cause.fmea_type,
                 "source_type": cause.source_type,
+                "released_date": cause.released_year,
 
             }],
         )

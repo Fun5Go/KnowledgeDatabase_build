@@ -39,7 +39,6 @@ def mark_is_useful_by_name(item: dict) -> None:
 def is_fmea(item: dict) -> bool:
     return item.get("type", "").upper() == "FMEA"
 
-
 def is_allowed_to_copy(item: dict) -> bool:
     if not is_fmea(item):
         return False

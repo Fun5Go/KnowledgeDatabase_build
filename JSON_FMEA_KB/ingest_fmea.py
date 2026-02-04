@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from collections import defaultdict
 import re
+from datetime import datetime
 
 
 GENERIC_RIGHT_TOKENS = {
@@ -76,6 +77,29 @@ def parse_number(value):
             return None
 
     return None
+
+def to_year(released) -> int | None:
+    if not released:
+        return None
+
+    s = str(released).strip()
+    if not s or s.lower() in {"unknown", "n/a", "na", "none", "null", "-"}:
+        return None
+
+    # normalize common ISO variants
+    s = s.replace("Z", "+00:00")
+
+    # if it's just a year like "2019"
+    if len(s) == 4 and s.isdigit():
+        return int(s)
+
+    try:
+        return datetime.fromisoformat(s).year
+    except ValueError:
+        # fallback: extract leading year if present, e.g. "2019-01-07 ..."
+        if len(s) >= 4 and s[:4].isdigit():
+            return int(s[:4])
+        return None
 
 def is_failure_element_term(failure_type: str | None) -> bool:
     ft = normalize(failure_type)
@@ -549,6 +573,7 @@ def ingest_fmea_jsonl(
         )
         meta_kb.add(file_meta)
         fmea_type = labels.get("fmea_type") or "system"
+        released_year = to_year(file_meta.released)
 
         # -------------------------------------------------
         # SECONDARY GROUP: file-internal failure signature
@@ -618,34 +643,35 @@ def ingest_fmea_jsonl(
                 failure_mode=failure_mode,
                 failure_effect=failure_effect,
             )
-
+            # If the failure is a duplicate
             if existing_failure_id:
                 failure_id = existing_failure_id
+                # Update the failure object with new data
                 failure_obj = FMEAFailure(**failure_kb.store[failure_id])
-            else:
+            else: # If the failure are unique, create a id
                 failure_id = f"{file_name}__F{failure_counter}"
                 failure_counter += 1
-
+                # Map the record into the dataclass
                 failure_obj = FMEAFailure(
                     failure_id=failure_id,
                     failure_mode=failure_mode,
                     failure_element=element,
                     failure_effect=failure_effect,
-
                     system=system,
                     function=function,
                     severity=severity,
                     rpn=rpn,
                     cause_ids=[],
                     source_type=source_type,
-
                     # =====  file-level context =====
                     productPnID=file_meta.productPnID,
                     product_domain=file_meta.product_domain,
+                    released_year=released_year,
 
                     fmea_type=fmea_type,
                     process_step=process_step,
                 )
+                # Add the failure object to the KB
                 failure_kb.add(failure_obj)
 
             # =================================================

@@ -64,6 +64,7 @@ class Sentence:
     #is_activate: bool = True # Keep the invalid sentences
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
+    released_year: Optional[int] = None
 
 
 @dataclass
@@ -91,6 +92,7 @@ class Failure:
     # ===== product =====
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
+    released_year: Optional[int] = None
     # Maintenance
     # revision: int
     # last_updated: str
@@ -118,6 +120,7 @@ class Cause:
     source_type: str = "8D"      
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
+    released_year: Optional[int] = None
 
 
 # =========================================================
@@ -214,6 +217,7 @@ class SentenceKB:
             "faithful_score": int(sentence.annotations.get("faithful_score", 0)),
             "productPnID": sentence.productPnID,     
             "product_domain": sentence.product_domain,
+            "released_year":sentence.released_year
         }
 
         # -------------------------------
@@ -419,7 +423,7 @@ class FailureKB:
     # =========================================================
     # Add failure (Failure key embedding)
     # =========================================================
-    def add(self, failure):
+    def add(self, failure:Failure):
         self.store[failure.failure_id] = asdict(failure)
         with open(self.store_path, "w", encoding="utf-8") as f:
             json.dump(self.store, f, indent=2, ensure_ascii=False)
@@ -441,6 +445,7 @@ class FailureKB:
                 "review_status": failure.maintenance.review_status,
                 "version": failure.maintenance.version,
                 "last_updated": failure.maintenance.last_updated,
+                "released_year": failure.released_year,
             })
         # ---- split embedding ----
         add_field(failure.failure_mode, "failure_mode")
@@ -472,11 +477,13 @@ class FailureKB:
                 "cause_id": cause.cause_id,
                 "role": "failure_cause",
                 "discipline": cause.discipline or "",
+                "confidence": cause.confidence,
 
                 "productPnID": cause.productPnID,
                 "product_domain": cause.product_domain,
                 "fmea_type": cause.fmea_type,
                 "source_type": cause.source_type,
+                "released_year": cause.released_year,
 
             }],
         )
