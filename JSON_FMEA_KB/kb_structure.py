@@ -198,7 +198,7 @@ class FMEAFailureKB:
                 "productPnID": failure.productPnID,     
                 "product_domain": failure.product_domain,
                 "source_type": failure.source_type,
-                "released_date": failure.released_year,
+                "released_year": failure.released_year,
             })
 
         # ---------- split embedding by role ----------
@@ -237,7 +237,7 @@ class FMEAFailureKB:
                 "product_domain": cause.product_domain,
                 "fmea_type": cause.fmea_type,
                 "source_type": cause.source_type,
-                "released_date": cause.released_year,
+                "released_year": cause.released_year,
 
             }],
         )
