@@ -242,134 +242,238 @@ class FMEAFailureKB:
             }],
         )
 
+from __future__ import annotations
 
-    # =========================================================
-    # Low-level role-based search
-    # =========================================================
-    def search_by_role(
-            self,
-            query: str,
-            role: str,
-            k: int = 5,
-            where: Optional[Dict[str, Any]] = None,
-        ):
-            where = where or {"role": role}
-            if "role" not in where:
-                where = {**where, "role": role}
+import json
+from dataclasses import asdict
+from pathlib import Path
+from typing import Dict, Optional, Any, List
 
-            return self.collection.query(
-                query_texts=[query],
-                n_results=k,
-                where=where,
-            )
-    
-    def _build_where(
-        self,
-        role: str,
-        productPnID: Optional[Union[str, List[str]]] = None,
-        fmea_type: Optional[Union[str, List[str]]] = None,
-    ):
-        filters = [{"role": role}]
+import chromadb
+from chromadb.utils import embedding_functions
 
-        if productPnID:
-            filters.append(
-                {"productPnID": {"$in": productPnID}}
-                if isinstance(productPnID, list)
-                else {"productPnID": productPnID}
-            )
 
-        if fmea_type:
-            filters.append(
-                {"fmea_type": {"$in": fmea_type}}
-                if isinstance(fmea_type, list)
-                else {"fmea_type": fmea_type}
-            )
+# assumes you already have this
+def is_valid_embed_text(text: Optional[str]) -> bool:
+    return bool(text and text.strip())
 
-        if len(filters) == 1:
-            return filters[0]
 
-        return {"$and": filters}
+class FMEAFailureKB:
+    def __init__(self, persist_dir: Path):
+        self.persist_dir = Path(persist_dir)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
 
-    # =========================================================
-    # High-level merged search (RAG entry point)
-    # =========================================================
-    def search(
-        self,
-        failure_mode: Optional[str] = None,
-        failure_element: Optional[str] = None,
-        failure_effect: Optional[str] = None,
-        productPnID: Optional[FilterValue] = None,
-        fmea_type: Optional[FilterValue] = None,
-        k: int = 5,
-        per_role_k: Optional[int] = None,  # Optional
-    ) -> List[str]:
-        """
-        Return ranked failure_ids
-        """
-        per_role_k = per_role_k or k
+        # ---------- structured store ----------
+        self.store_path = self.persist_dir / "fmea_failure_store.json"
+        self.store: Dict[str, dict] = {}
+        if self.store_path.exists():
+            self.store = json.loads(self.store_path.read_text(encoding="utf-8"))
 
-        merged = defaultdict(lambda: {
-            "score": 0.0,
-            "roles": set(),
-        })
+        self.cause_store_path = self.persist_dir / "fmea_cause_store.json"
+        self.cause_store: dict[str, dict] = {}
+        if self.cause_store_path.exists():
+            self.cause_store = json.loads(self.cause_store_path.read_text(encoding="utf-8"))
 
-        def merge_hits(res, role, weight):
-            if not res or not res.get("ids") or not res["ids"][0]:
-                return
-            for meta, dist in zip(
-                res["metadatas"][0],
-                res["distances"][0],
-            ):
-                fid = meta["failure_id"]
-                merged[fid]["score"] += weight * (1 - dist)
-                merged[fid]["roles"].add(role)
-
-        # ---------- role-specific retrieval with filters ----------
-        if failure_mode:
-            where = self._build_where("failure_mode", productPnID, fmea_type)
-            res = self.search_by_role(failure_mode, "failure_mode", per_role_k, where=where)
-            merge_hits(res, "failure_mode", 0.5)
-
-        if failure_element:
-            where = self._build_where("failure_element", productPnID, fmea_type)
-            res = self.search_by_role(failure_element, "failure_element", per_role_k, where=where)
-            merge_hits(res, "failure_element", 0.4)
-
-        if failure_effect:
-            where = self._build_where("failure_effect", productPnID, fmea_type)
-            res = self.search_by_role(failure_effect, "failure_effect", per_role_k, where=where)
-            merge_hits(res, "failure_effect", 0.3)
-
-        # ---------- rank ----------
-        ranked = sorted(
-            merged.items(),
-            key=lambda x: (x[1]["score"], len(x[1]["roles"])),
-            reverse=True,
+        # ---------- vector store ----------
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
+        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+        self.collection = self.client.get_or_create_collection(
+            name="all_failure_kb",
+            embedding_function=self.embedder,
+            metadata={"hnsw:space": "cosine"},
         )
 
-        return [fid for fid, _ in ranked[:k]]
+    # ---------------------------
+    # existing: add failure
+    # ---------------------------
+    def add(self, failure):
+        self.store[failure.failure_id] = asdict(failure)
+        self.store_path.write_text(
+            json.dumps(self.store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        ids: List[str] = []
+        documents: List[str] = []
+        metadatas: List[dict] = []
+
+        def add_field(text: Optional[str], role: str):
+            if not is_valid_embed_text(text):
+                return
+            ids.append(f"{failure.failure_id}::{role}")
+            documents.append(text)
+            metadatas.append({
+                "failure_id": failure.failure_id,
+                "role": role,
+                "system": failure.system or "",
+                "fmea_type": failure.fmea_type or "",
+                "productPnID": failure.productPnID,
+                "product_domain": failure.product_domain,
+                "source_type": failure.source_type,
+                "released_year": failure.released_year,
+            })
+
+        add_field(failure.failure_mode, "failure_mode")
+        add_field(failure.failure_element, "failure_element")
+        add_field(failure.failure_effect, "failure_effect")
+
+        if ids:
+            self.collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+
+    # ---------------------------
+    # existing: add cause
+    # ---------------------------
+    def add_cause(self, cause):
+        self.cause_store[cause.cause_id] = asdict(cause)
+        self.cause_store_path.write_text(
+            json.dumps(self.cause_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        embed_text = cause.failure_cause
+        if not is_valid_embed_text(embed_text):
+            return
+
+        self.collection.upsert(
+            ids=[cause.cause_id],
+            documents=[embed_text],
+            metadatas=[{
+                "failure_id": cause.failure_id,
+                "cause_id": cause.cause_id,
+                "role": "failure_cause",
+                "discipline": cause.discipline or "",
+                "productPnID": cause.productPnID,
+                "product_domain": cause.product_domain,
+                "fmea_type": cause.fmea_type,
+                "source_type": cause.source_type,
+                "released_year": cause.released_year,
+            }],
+        )
 
     # =========================================================
-    # Get full failure object
+    # UPDATE / DELETE (Failure)
     # =========================================================
-    def get(self, failure_id: str) -> Optional[dict]:
-        return self.store.get(failure_id)
-    
+    def update(self, failure) -> None:
+        """
+        Update a failure in both:
+        - structured store
+        - vector store (delete old role-fragments, then re-add)
+        """
+        # delete any existing vectors for this failure_id
+        self._delete_failure_vectors(failure.failure_id)
 
-    # def search_under_failure(self, query: str, failure_id: str, k: int = 5):
-    #     res = self.collection.query(
-    #         query_texts=[query],
-    #         n_results=k,
-    #         where={"failure_id": failure_id},
-    #     )
-    #     return res["ids"][0] if res["ids"] else []
-    
-    # def get_all_vectors(self): 
-    #     res = self.collection.get(
-    #         include=["embeddings", "metadatas", "ids"]
-    #     )
-    #     return res
-    
+        # replace structured + re-add vectors
+        self.add(failure)
+
+    def delete(self, failure_id: str, *, delete_causes: bool = False) -> None:
+        """
+        Delete a failure from:
+        - structured failure store
+        - vector store role-fragments
+        Optionally also deletes all causes linked to this failure_id.
+        """
+        # structured store
+        if failure_id in self.store:
+            del self.store[failure_id]
+            self.store_path.write_text(
+                json.dumps(self.store, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        # vectors
+        self._delete_failure_vectors(failure_id)
+
+        if delete_causes:
+            self.delete_causes_by_failure_id(failure_id)
+
+    def _delete_failure_vectors(self, failure_id: str) -> None:
+        """
+        Removes all role-fragment vectors for a failure_id.
+        Uses deterministic ids created in add(): {failure_id}::{role}.
+        """
+        ids = [
+            f"{failure_id}::failure_mode",
+            f"{failure_id}::failure_element",
+            f"{failure_id}::failure_effect",
+        ]
+        # Chroma delete ignores missing IDs in most versions; if yours errors, catch exceptions here.
+        self.collection.delete(ids=ids)
+
+    # =========================================================
+    # UPDATE / DELETE (Cause)
+    # =========================================================
+    def update_cause(self, cause) -> None:
+        """
+        Update a cause in both stores.
+        Safe approach: delete existing cause vector by cause_id then re-add.
+        """
+        self.delete_cause(cause.cause_id)
+        self.add_cause(cause)
+
+    def delete_cause(self, cause_id: str) -> None:
+        """
+        Delete a cause from:
+        - structured cause store
+        - vector store (single doc id == cause_id)
+        """
+        if cause_id in self.cause_store:
+            del self.cause_store[cause_id]
+            self.cause_store_path.write_text(
+                json.dumps(self.cause_store, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+        self.collection.delete(ids=[cause_id])
+
+    def delete_causes_by_failure_id(self, failure_id: str) -> None:
+        """
+        Delete all causes linked to a failure_id.
+        - removes matching causes from structured cause_store
+        - deletes corresponding vectors from Chroma
+        """
+        # structured cause ids to delete
+        to_delete = [
+            cid for cid, c in self.cause_store.items()
+            if c.get("failure_id") == failure_id
+        ]
+
+        if to_delete:
+            for cid in to_delete:
+                del self.cause_store[cid]
+            self.cause_store_path.write_text(
+                json.dumps(self.cause_store, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            self.collection.delete(ids=to_delete)
+    def update_merge(self, failure: FMEAFailure) -> None:
+        """
+        Patch-style update:
+        - keeps existing fields unless the new object provides a value
+        - then calls existing update() which reindexes vectors
+        """
+        fid = failure.failure_id
+        old = self.store.get(fid)
+        if not old:
+            # no existing record -> treat as add
+            return self.add(failure)
+
+        new = asdict(failure)
+
+        # merge rule: only overwrite if new value is meaningful
+        merged = dict(old)
+        for k, v in new.items():
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            if isinstance(v, list) and len(v) == 0:
+                continue
+            merged[k] = v
+
+        self.update(FMEAFailure(**merged))
+        
 
 class FailureRetriever:
     """
