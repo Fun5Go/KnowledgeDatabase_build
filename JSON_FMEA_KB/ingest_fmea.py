@@ -604,9 +604,10 @@ def ingest_fmea_jsonl(
                 process_step = None
             else:
                 system = None
-                process_step = content.get("process_step")
-                discipline, element = parse_failure_type_semantics(process_step)
-                function = None
+                # process_step = content.get("process_step")
+                # discipline, element = parse_failure_type_semantics(process_step)
+                # function = None
+                element =  content.get("process_step")
                 # fmea_type = map_discipline_to_fmea_type(discipline)
 
             failure_mode = content.get("failure_mode")

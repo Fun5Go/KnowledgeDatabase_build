@@ -133,130 +133,6 @@ class FileMetaStore:
         )
     
 
-class FMEAFailureKB:
-    def __init__(self, persist_dir: Path):
-        self.persist_dir = Path(persist_dir)
-        self.persist_dir.mkdir(parents=True, exist_ok=True)
-
-        # ---------- structured store (unchanged) ----------
-        self.store_path = self.persist_dir / "fmea_failure_store.json"
-        self.store: Dict[str, dict] = {}
-        if self.store_path.exists():
-            self.store = json.loads(self.store_path.read_text(encoding="utf-8"))
-
-        self.cause_store_path = self.persist_dir / "fmea_cause_store.json"
-        self.cause_store: dict[str, dict] = {}
-        if self.cause_store_path.exists():
-            self.cause_store = json.loads(
-                self.cause_store_path.read_text(encoding="utf-8")
-            )
-
-        # ---------- vector store ----------
-        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
-        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
-
-        self.collection = self.client.get_or_create_collection(
-            name="all_failure_kb",
-            embedding_function=self.embedder,
-            metadata={"hnsw:space": "cosine"},
-        )
-
-
-    
-    # =========================================================
-    # Add failure (ROLE-AWARE embedding)
-    # =========================================================
-    def add(self, failure:FMEAFailure):
-        # ---------- store structured ----------
-        self.store[failure.failure_id] = asdict(failure)
-        self.store_path.write_text(
-            json.dumps(self.store, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-        ids = []
-        documents = []
-        metadatas = []
-    
-
-        def add_field(text: Optional[str], role: str):
-            if not is_valid_embed_text(text):
-                return
-
-            ids.append(f"{failure.failure_id}::{role}")
-            documents.append(text)
-
-            metadatas.append({
-                "failure_id": failure.failure_id,
-                "role": role,
-
-                "system": failure.system or "",
-                "fmea_type": failure.fmea_type or "",   
-
-                "productPnID": failure.productPnID,     
-                "product_domain": failure.product_domain,
-                "source_type": failure.source_type,
-                "released_date": failure.released_year,
-            })
-
-        # ---------- split embedding by role ----------
-        add_field(failure.failure_mode, "failure_mode")
-        add_field(failure.failure_element, "failure_element")
-        add_field(failure.failure_effect, "failure_effect")
-
-        if ids:
-            self.collection.upsert(
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas,
-            )
-
-    def add_cause(self, cause: FMEACause):
-
-        self.cause_store[cause.cause_id] = asdict(cause)
-        self.cause_store_path.write_text(
-        json.dumps(self.cause_store, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-        embed_text = cause.failure_cause
-        if not is_valid_embed_text(embed_text):
-            return
-
-        self.collection.upsert(
-            ids=[cause.cause_id],
-            documents=[embed_text],
-            metadatas=[{
-                "failure_id": cause.failure_id,
-                "cause_id": cause.cause_id,
-                "role": "failure_cause",
-                "discipline": cause.discipline or "",
-
-                "productPnID": cause.productPnID,
-                "product_domain": cause.product_domain,
-                "fmea_type": cause.fmea_type,
-                "source_type": cause.source_type,
-                "released_date": cause.released_year,
-
-            }],
-        )
-
-from __future__ import annotations
-
-import json
-from dataclasses import asdict
-from pathlib import Path
-from typing import Dict, Optional, Any, List
-
-import chromadb
-from chromadb.utils import embedding_functions
-
-
-# assumes you already have this
-def is_valid_embed_text(text: Optional[str]) -> bool:
-    return bool(text and text.strip())
-
 
 class FMEAFailureKB:
     def __init__(self, persist_dir: Path):
@@ -352,29 +228,89 @@ class FMEAFailureKB:
             }],
         )
 
-    # =========================================================
-    # UPDATE / DELETE (Failure)
-    # =========================================================
-    def update(self, failure) -> None:
+    def update_failure(
+        self,
+        failure: FMEAFailure,
+        *,
+        delete_stale_roles: bool = True,
+    ) -> None:
         """
-        Update a failure in both:
-        - structured store
-        - vector store (delete old role-fragments, then re-add)
+        Update structured failure record and re-embed vectors.
+        If delete_stale_roles=True, removes all vectors belonging to failure_id first.
         """
-        # delete any existing vectors for this failure_id
-        self._delete_failure_vectors(failure.failure_id)
 
-        # replace structured + re-add vectors
+        # --- structured store ---
+        self.store[failure.failure_id] = asdict(failure)
+        self.store_path.write_text(
+            json.dumps(self.store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # --- vector store ---
+        if delete_stale_roles:
+            self.collection.delete(where={"failure_id": failure.failure_id})
+
+        # re-add embeddings
         self.add(failure)
 
-    def delete(self, failure_id: str, *, delete_causes: bool = False) -> None:
+
+    def update_cause(self, cause_id: str, **fields) -> None:
         """
-        Delete a failure from:
-        - structured failure store
-        - vector store role-fragments
-        Optionally also deletes all causes linked to this failure_id.
+        Partial update: merge fields into an existing cause record,
+        then re-embed the cause vector.
         """
-        # structured store
+        if cause_id not in self.cause_store:
+            raise KeyError(f"cause_id not found in cause_store: {cause_id}")
+
+        # merge
+        rec = dict(self.cause_store[cause_id])
+        for k, v in fields.items():
+            if v is not None:
+                rec[k] = v
+
+        # persist
+        self.cause_store[cause_id] = rec
+        self.cause_store_path.write_text(
+            json.dumps(self.cause_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # re-embed: delete by id + upsert (only if text valid)
+        self.collection.delete(ids=[cause_id])
+        embed_text = rec.get("failure_cause")
+        if is_valid_embed_text(embed_text):
+            self.collection.upsert(
+                ids=[cause_id],
+                documents=[embed_text],
+                metadatas=[{
+                    "failure_id": rec.get("failure_id", ""),
+                    "cause_id": cause_id,
+                    "role": "failure_cause",
+                    "discipline": rec.get("discipline", "") or "",
+                    "productPnID": rec.get("productPnID"),
+                    "product_domain": rec.get("product_domain"),
+                    "fmea_type": rec.get("fmea_type", "") or "",
+                    "source_type": rec.get("source_type", "") or "",
+                    "released_year": rec.get("released_year"),
+                }],
+            )
+
+
+    # -----------------------------
+    # CRUD: delete
+    # -----------------------------
+    def delete_failure(
+        self,
+        failure_id: str,
+        *,
+        delete_linked_causes: bool = False,
+    ) -> None:
+        """
+        Deletes failure structured record and all vectors with failure_id.
+        Optionally deletes linked causes.
+        """
+
+        # --- structured failure ---
         if failure_id in self.store:
             del self.store[failure_id]
             self.store_path.write_text(
@@ -382,42 +318,24 @@ class FMEAFailureKB:
                 encoding="utf-8",
             )
 
-        # vectors
-        self._delete_failure_vectors(failure_id)
+        # --- vector store ---
+        self.collection.delete(where={"failure_id": failure_id})
 
-        if delete_causes:
-            self.delete_causes_by_failure_id(failure_id)
+        # --- optionally delete linked causes ---
+        if delete_linked_causes:
+            to_delete = [
+                cid for cid, c in self.cause_store.items()
+                if c.get("failure_id") == failure_id
+            ]
+            for cid in to_delete:
+                self.delete_cause(cid)
 
-    def _delete_failure_vectors(self, failure_id: str) -> None:
-        """
-        Removes all role-fragment vectors for a failure_id.
-        Uses deterministic ids created in add(): {failure_id}::{role}.
-        """
-        ids = [
-            f"{failure_id}::failure_mode",
-            f"{failure_id}::failure_element",
-            f"{failure_id}::failure_effect",
-        ]
-        # Chroma delete ignores missing IDs in most versions; if yours errors, catch exceptions here.
-        self.collection.delete(ids=ids)
-
-    # =========================================================
-    # UPDATE / DELETE (Cause)
-    # =========================================================
-    def update_cause(self, cause) -> None:
-        """
-        Update a cause in both stores.
-        Safe approach: delete existing cause vector by cause_id then re-add.
-        """
-        self.delete_cause(cause.cause_id)
-        self.add_cause(cause)
 
     def delete_cause(self, cause_id: str) -> None:
         """
-        Delete a cause from:
-        - structured cause store
-        - vector store (single doc id == cause_id)
+        Deletes cause structured record and its vector.
         """
+
         if cause_id in self.cause_store:
             del self.cause_store[cause_id]
             self.cause_store_path.write_text(
@@ -427,52 +345,12 @@ class FMEAFailureKB:
 
         self.collection.delete(ids=[cause_id])
 
-    def delete_causes_by_failure_id(self, failure_id: str) -> None:
+    def delete_by_where(self, where: Dict[str, Any]) -> None:
         """
-        Delete all causes linked to a failure_id.
-        - removes matching causes from structured cause_store
-        - deletes corresponding vectors from Chroma
+        Vector-only deletion by filter. Use carefully.
+        Structured stores are NOT altered.
         """
-        # structured cause ids to delete
-        to_delete = [
-            cid for cid, c in self.cause_store.items()
-            if c.get("failure_id") == failure_id
-        ]
-
-        if to_delete:
-            for cid in to_delete:
-                del self.cause_store[cid]
-            self.cause_store_path.write_text(
-                json.dumps(self.cause_store, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            self.collection.delete(ids=to_delete)
-    def update_merge(self, failure: FMEAFailure) -> None:
-        """
-        Patch-style update:
-        - keeps existing fields unless the new object provides a value
-        - then calls existing update() which reindexes vectors
-        """
-        fid = failure.failure_id
-        old = self.store.get(fid)
-        if not old:
-            # no existing record -> treat as add
-            return self.add(failure)
-
-        new = asdict(failure)
-
-        # merge rule: only overwrite if new value is meaningful
-        merged = dict(old)
-        for k, v in new.items():
-            if v is None:
-                continue
-            if isinstance(v, str) and v.strip() == "":
-                continue
-            if isinstance(v, list) and len(v) == 0:
-                continue
-            merged[k] = v
-
-        self.update(FMEAFailure(**merged))
+        self.collection.delete(where=where)
         
 
 class FailureRetriever:

@@ -45,6 +45,23 @@ def get_int_cell(row, col_map, *header_names, default_idx=None):
     val = get_cell(row, col_map, *header_names, default_idx=default_idx)
     return val if is_numeric_like(val) else ""
 
+def has_failure_content(row, col_map):
+    """
+    Return True if this row contains any failure-related information
+    (mode / effect / cause).
+    """
+    keys = [
+        "potential failure mode",
+        "potential effect(s) of failure",
+        "potential cause(s) of failure",
+    ]
+    for k in keys:
+        val = get_cell(row, col_map, k)
+        if isinstance(val, str) and val.strip():
+            return True
+    return False
+
+
 
 ###############################################################################
 # Core extraction
@@ -65,42 +82,58 @@ def extract_old_fmea_failures(df, metadata, file_name):
     col_map = build_col_map(header_row)
     df_data = df.iloc[header_idx + 1:].dropna(how="all")
 
+    last_process_step = ""
+
     # 2. Iterate rows
     for row_idx, row in df_data.iterrows():
+
+        process_step_raw = get_cell(
+            row, col_map,
+            "process step",
+            default_idx=1
+        )
+        if not process_step_raw:
+            process_step_raw = get_cell(
+                row, col_map,
+                "function"
+            )
 
         failure_cause = get_cell(
             row, col_map,
             "potential cause(s) of failure",
         )
-
-        process_step = get_cell(row, col_map, "process step", default_idx=1)
-        failure_mode = get_cell(row, col_map, "potential failure mode", )
-        failure_effect = get_cell(row, col_map, "potential effect(s) of failure",)
-
-        severity = get_int_cell(
-                    row, col_map,
-                    "severity",
-                    default_idx=4
-        )
-
-        occurrence = get_int_cell(
+        failure_mode = get_cell(
             row, col_map,
-            "occurrence",
-            default_idx=6
+            "potential failure mode",
         )
-
-        detection = get_int_cell(
+        failure_effect = get_cell(
             row, col_map,
-            "detection",
-            default_idx=9
+            "potential effect(s) of failure",
         )
+        
+        is_failure_row = bool(failure_mode or failure_effect or failure_cause)
+        if process_step_raw:
+            process_step = process_step_raw
+            last_process_step = process_step_raw
+        else:
+            process_step = last_process_step if is_failure_row else ""
+
+        severity = get_int_cell(row, col_map, "severity", default_idx=4)
+        occurrence = get_int_cell(row, col_map, "occurrence", default_idx=6)
+        detection = get_int_cell(row, col_map, "detection", default_idx=9)
 
         rpn = get_int_cell(
             row, col_map,
             "rpn", "so",
             default_idx=10
         )
-        current_detection = get_cell(row, col_map, "current controls", default_idx=8)
+
+        current_detection = get_cell(
+            row, col_map,
+            "current controls",
+            default_idx=8
+        )
+
         recommended_action = get_cell(
             row, col_map,
             "recommended actions",
@@ -193,4 +226,4 @@ def process_old_fmea_xlsx(path, output_json, fmea_index):
     with open(output_json, "w", encoding="utf-8") as f:
         json.dump(records, f, ensure_ascii=False, indent=2)
 
-    print("✅ Old FMEA JSON saved to:", output_json)
+    print("Old FMEA JSON saved to:", output_json)

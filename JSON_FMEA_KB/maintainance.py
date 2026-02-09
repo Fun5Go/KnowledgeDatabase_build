@@ -1,4 +1,4 @@
-from kb_structure import FMEAFailureKB, FMEAFailure
+from kb_structure import FMEAFailureKB, FMEAFailure, FMEACause
 
 from pathlib import Path
 from copy import deepcopy
@@ -15,16 +15,28 @@ failure_kb = FMEAFailureKB(persist_dir=KB_PATH)
 # ))
 
 # failure_kb.delete("FMEA6799210115R03__F8", delete_causes=True)
-raw = failure_kb.failure_store.get("FMEA6799210115R03__F16")
+# raw = failure_kb.store.get("FMEA6799210115R03__F16")
 
 
-updated = deepcopy(raw)
-updated["failure_effect"] = "STO function not active"
+# updated = deepcopy(raw)
+# updated["failure_effect"] = "function not active"
 
 
-failure = FMEAFailure(**updated)
+# failure = FMEAFailure(**updated)
 
-failure_kb.update_failure(
-    failure,
-    delete_stale_roles=True
-)
+# failure_kb.update_failure(FMEAFailure(
+#     failure_id="FMEA6799210115R03__F16",
+#     failure_mode="Leak at connector",
+#     failure_element="Connector seal",
+#     failure_effect="Loss of pressure",
+# ))
+
+# failure_kb.update_cause(
+#     cause_id="FMEA6799210115R03__F6_C1",
+#     failure_cause="Leak at connector",
+#     # failure_element="Connector seal",
+#     # failure_effect="Loss of pressure",
+# )
+
+
+failure_kb.delete_failure(failure_id="FMEA6799210115R03__F20",delete_linked_causes=True)

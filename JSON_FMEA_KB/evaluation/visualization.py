@@ -7,6 +7,7 @@ from chromadb.utils import embedding_functions
 
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
+from collections import Counter
 
 
 # =========================================================
@@ -14,10 +15,10 @@ from sklearn.decomposition import PCA
 # =========================================================
 
 ROLES = {
-    "failure_element": "tab:blue",
+    # "failure_element": "tab:blue",
     "failure_mode": "tab:orange",
     "failure_effect": "tab:green",
-    "failure_cause": "tab:red",
+     "failure_cause": "tab:red",
 }
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -37,7 +38,7 @@ def load_failure_embeddings(
     )
 
     collection = client.get_collection(
-        name="fmea_failure_kb",
+        name="all_failure_kb",
         embedding_function=embedder,
     )
 
@@ -74,6 +75,8 @@ def plot_pca_2d(
     """
     2D PCA scatter: same axis, color by role.
     """
+    role_counts = Counter(roles)
+
     pca = PCA(n_components=2, random_state=42)
     X_2d = pca.fit_transform(X)
 
@@ -88,12 +91,13 @@ def plot_pca_2d(
             X_2d[idx, 0],
             X_2d[idx, 1],
             c=color,
-            label=role,
+            label=f"{role} (n={role_counts[role]})",
             alpha=0.6,
             s=20,
         )
 
-    plt.title("Failure Fragment Semantic Distribution (PCA 2D)")
+    total = len(roles)
+    plt.title(f"Failure Fragment Semantic Distribution (PCA 2D)  |  total={total}")
     plt.xlabel("PC1")
     plt.ylabel("PC2")
     plt.legend()
@@ -113,6 +117,8 @@ def plot_pca_1d(
     """
     1D PCA distribution (histogram) per role.
     """
+    role_counts = Counter(roles)
+
     pca = PCA(n_components=1, random_state=42)
     x_1d = pca.fit_transform(X).flatten()
 
@@ -127,10 +133,11 @@ def plot_pca_1d(
             vals,
             bins=50,
             alpha=0.5,
-            label=role,
+            label=f"{role} (n={role_counts[role]})",
         )
 
-    plt.title("Failure Fragment Semantic Distribution (PCA 1D)")
+    total = len(roles)
+    plt.title(f"Failure Fragment Semantic Distribution (PCA 1D)  |  total={total}")
     plt.xlabel("PC1")
     plt.ylabel("Count")
     plt.legend()
@@ -158,20 +165,17 @@ def run_failure_semantic_visualization(
     if len(X) == 0:
         raise RuntimeError("No failure embeddings found for visualization.")
 
-    plot_pca_2d(
-        X,
-        roles,
-        output_dir / "failure_role_pca_2d.png",
-    )
+    # ---- counts summary ----
+    counts = Counter(roles)
+    total = len(roles)
+    print("[COUNT] total =", total)
+    for r in ROLES.keys():
+        print(f"[COUNT] {r}: {counts.get(r, 0)}")
 
-    plot_pca_1d(
-        X,
-        roles,
-        output_dir / "failure_role_pca_1d.png",
-    )
+    plot_pca_2d(X, roles, output_dir / "failure_role_pca_2d.png")
+    plot_pca_1d(X, roles, output_dir / "failure_role_pca_1d.png")
 
     print(f"[OK] Visualization written to: {output_dir}")
-
 
 # =========================================================
 # CLI
@@ -180,9 +184,9 @@ def run_failure_semantic_visualization(
 if __name__ == "__main__":
     BASE_DIR = Path(__file__).resolve().parent
 
-    KB_DATA_ROOT = BASE_DIR.parent / "KB_motor_drives"
-    FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
-
+    # KB_DATA_ROOT = BASE_DIR.parent / "KB_motor_drives"
+    # FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
+    FAILURE_KB_DIR = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
     OUTPUT_DIR = BASE_DIR / "semantic_viz_output"
 
     run_failure_semantic_visualization(
