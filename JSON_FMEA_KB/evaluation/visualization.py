@@ -21,10 +21,10 @@ import json
 # =========================================================
 
 ROLES = {
-    # "failure_element": "tab:blue",
-    # "failure_mode": "tab:orange",
-    # "failure_effect": "tab:green",
-     "failure_cause": "tab:red",
+    "element": "tab:blue",
+    # "mode": "tab:orange",
+    # "effect": "tab:green",
+    #  "cause": "tab:red",
 }
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -44,7 +44,7 @@ def load_failure_embeddings(
     )
 
     collection = client.get_collection(
-        name="all_failure_kb",
+        name="failure_semantic_kb",
         embedding_function=embedder,
     )
 
@@ -59,7 +59,7 @@ def load_failure_embeddings(
             data["documents"],
             data["ids"],
         ):
-            role = meta.get("role")
+            role = meta.get("field_type")
             if role not in ROLES:
                 continue
 

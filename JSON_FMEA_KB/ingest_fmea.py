@@ -1,10 +1,11 @@
-from kb_structure import FMEAFailureKB, FMEAFailure, FMEACause, FileMeta, FileMetaStore
+from kb_structure import FMEAFailureKB, FileMeta, FileMetaStore, FailureEntity, FailureSemanticNode
 
 import json
 from pathlib import Path
 from collections import defaultdict
 import re
 from datetime import datetime
+import hashlib
 
 
 GENERIC_RIGHT_TOKENS = {
@@ -370,7 +371,6 @@ def collect_semantic(
 def ingest_fmea_jsonl(
     jsonl_path: Path,
     failure_kb,
-    # cause_kb,
     meta_kb,
 ):
     # =================================================
@@ -388,15 +388,15 @@ def ingest_fmea_jsonl(
                 raise ValueError(f"Invalid JSON on line {line_no}: {e}") from e
 
     print(f"[INGEST] {jsonl_path.name}")
-    semantic_nodes: dict[str, dict] = {}
+
     # =================================================
-    # 1) PRIMARY GROUP: by file_name in each row
+    # 1) PRIMARY GROUP: by file_name
     # =================================================
     rows_by_file = defaultdict(list)
     for row in rows:
         file_name = row.get("file_name")
         if not file_name:
-            raise ValueError("JSONL row missing file_name; cannot determine FMEA boundary")
+            raise ValueError("JSONL row missing file_name")
         rows_by_file[file_name].append(row)
 
     # =================================================
@@ -404,8 +404,11 @@ def ingest_fmea_jsonl(
     # =================================================
     for file_name, rows in rows_by_file.items():
 
+        # semantic accumulator (PER FILE!)
+        semantic_nodes: dict[str, dict] = {}
+
         # -------------------------------------------------
-        # META (PER FILE)
+        # META
         # -------------------------------------------------
         first = rows[0]
         metadata = first.get("metadata", {})
@@ -415,41 +418,37 @@ def ingest_fmea_jsonl(
             source_type=first.get("source_type"),
             released=metadata.get("released"),
             productName=metadata.get("productName"),
-            productPnID= metadata.get("productPnId"),
-            # project_description=metadata.get("project_description"),
+            productPnID=metadata.get("productPnId"),
             file_name=file_name,
             product_domain=labels.get("domain"),
         )
         meta_kb.add(file_meta)
+
         fmea_type = labels.get("fmea_type") or "system"
         released_year = to_year(file_meta.released)
 
         # -------------------------------------------------
-        # SECONDARY GROUP: file-internal failure signature
+        # SECONDARY GROUP: failure signature
         # -------------------------------------------------
         grouped = defaultdict(list)
         for row in rows:
             sig = build_failure_signature(row)
             grouped[sig].append(row)
 
-
         # =================================================
-        # 3) FAILURE INGEST (GROUP LEVEL)
+        # 3) FAILURE INGEST
         # =================================================
-        for _, group in grouped.items():
+        for group in grouped.values():
             first = group[0]
-
 
             row_index = first.get("row_index")
             if row_index is None:
                 raise ValueError(f"Missing row_index in {file_name}")
-            row_failure_id = f"{file_name}__R{row_index}"
 
+            failure_id = f"{file_name}__R{row_index}"
             content = first.get("content", {})
             source_type = first.get("source_type")
-            # ---------------------------------------------
-            # Restore new / old FMEA semantic logic
-            # ---------------------------------------------
+
             if source_type == "new_fmea":
                 system = content.get("system_name")
                 element = content.get("system_element")
@@ -458,21 +457,15 @@ def ingest_fmea_jsonl(
                 process_step = None
             else:
                 system = None
-                # process_step = content.get("process_step")
-                # discipline, element = parse_failure_type_semantics(process_step)
-                # function = None
-                element =  content.get("process_step")
-                # fmea_type = map_discipline_to_fmea_type(discipline)
+                element = content.get("process_step")
+                function = None
+                discipline = None
+                process_step = None
 
             failure_mode = content.get("failure_mode")
-            if isinstance(failure_mode, str) and failure_mode.strip() and failure_mode.strip().replace(".", "", 1).isdigit():
-                print(f"Format error: failure_mode is numeric-string in {file_name}, row_index={row.get('row_index')}")
-                continue
             failure_effect = content.get("failure_effect")
 
-            # ---------------------------------------------
-            # severity / rpn = MAX within failure group
-            # ---------------------------------------------
+            # ---------- severity / rpn ----------
             severity_vals = [
                 parse_number(r.get("RPN", {}).get("severity"))
                 for r in group
@@ -487,165 +480,89 @@ def ingest_fmea_jsonl(
             ]
             rpn = max(rpn_vals) if rpn_vals else None
 
-            # ---------------------------------------------
-            # FAILURE DEDUP (KB-level)
-            # ---------------------------------------------
-            existing_failure_id = is_duplicate_failure(
-                failure_kb,
-                system=system,
-                element=element,
-                function=function,
-                failure_mode=failure_mode,
-                failure_effect=failure_effect,
-            )
-            # If the failure is a duplicate
-            if existing_failure_id:
-                failure_id = existing_failure_id
-                # Update the failure object with new data
-                failure_obj = FMEAFailure(**failure_kb.store[failure_id])
+            # ---------- semantic IDs ----------
+            mode_id = make_semantic_id("mode", failure_mode) if failure_mode else None
+            element_id = make_semantic_id("element", element) if element else None
+            effect_id = make_semantic_id("effect", failure_effect) if failure_effect else None
 
-                if row_failure_id not in failure_obj.failure_id_group:
-                    failure_obj.failure_id_group.append(row_failure_id)
-            else: # If the failure are unique, create a id
-                failure_id = row_failure_id
+            if mode_id:
+                collect_semantic(semantic_nodes,
+                                 semantic_id=mode_id,
+                                 field_type="mode",
+                                 text=failure_mode,
+                                 failure_id=failure_id)
 
-                failure_obj = FMEAFailure(
-                    failure_id=failure_id,
-                    failure_mode=failure_mode,
-                    failure_element=element,
-                    failure_effect=failure_effect,
-                    system=system,
-                    function=function,
-                    severity=severity,
-                    rpn=rpn,
-                    cause_ids=[],
+            if element_id:
+                collect_semantic(semantic_nodes,
+                                 semantic_id=element_id,
+                                 field_type="element",
+                                 text=element,
+                                 failure_id=failure_id)
 
-                    # NEW
-                    failure_id_group=[row_failure_id],
+            if effect_id:
+                collect_semantic(semantic_nodes,
+                                 semantic_id=effect_id,
+                                 field_type="effect",
+                                 text=failure_effect,
+                                 failure_id=failure_id)
 
-                    source_type=source_type,
-                    productPnID=file_meta.productPnID,
-                    product_domain=file_meta.product_domain,
-                    released_year=released_year,
-                    fmea_type=fmea_type,
-                    process_step=process_step,
-                )
+            # ---------- entity ----------
 
-                failure_kb.add(failure_obj)
-
-            # =================================================
-            # 4) CAUSE INGEST (ROW LEVEL UNDER FAILURE)
-            # =================================================
-            cause_counter = len(failure_obj.cause_ids) + 1
-
+              # ---------- causes ----------
             for row in group:
-                content = row.get("content", {})
-                rpn_block = row.get("RPN", {})
-
-                cause_text = normalize_excel_text(content.get("failure_cause"))
-
-
-                if not content.get("failure_mode") and not content.get("failure_cause"):
-                    print(f"[SKIP] Missing failure_mode/cause in {file_name}, row_index={row.get('row_index')}")
-                    continue
-
-                if isinstance(cause_text, str) and cause_text.strip() and cause_text.strip().replace(".", "", 1).isdigit():
-                    print(f"Format error: failure_cause is numeric-string in {file_name}, row_index={row.get('row_index')}")
-                    continue
+                cause_text = normalize_excel_text(
+                    row.get("content", {}).get("failure_cause")
+                )
                 if not cause_text:
                     continue
 
+                cause_semantic_id = make_semantic_id("cause", cause_text)
 
-                existing_cause_id = is_duplicate_cause(
-                    failure_kb,
+                collect_semantic(
+                    semantic_nodes,
+                    semantic_id=cause_semantic_id,
+                    field_type="cause",
+                    text=cause_text,
                     failure_id=failure_id,
-                    cause_text=cause_text,
                 )
 
-                if existing_cause_id:
-                    
-                    existing_cause = failure_kb.cause_store.get(existing_cause_id)
+            failure_entity = FailureEntity(
+                failure_id=failure_id,
+                mode_id=mode_id,
+                element_id=element_id,
+                effect_id=effect_id,
+                cause_id=cause_semantic_id,
 
-                    if existing_cause:
-                        cause_ref = {
-                            "cause_id": existing_cause_id,
-                            "cause_text": existing_cause.get("failure_cause"),
-                        }
+                failure_mode_text=failure_mode,
+                failure_element_text=element,
+                failure_effect_text=failure_effect,
+                failure_cause_text=cause_text,
 
-                        if not any(
-                            c.get("cause_id") == existing_cause_id
-                            for c in failure_obj.cause_ids
-                        ):
-                            failure_obj.cause_ids.append(cause_ref)
+                system=system,
+                function=function,
+                process_step=process_step,
+                discipline=discipline,
 
-                    continue
+                severity=severity,
+                rpn=rpn,
 
-                cause_id = f"{failure_id}_C{cause_counter}"
-                cause_counter += 1
+                source_type=source_type,
+                fmea_type=fmea_type,
+                productPnID=file_meta.productPnID,
+                product_domain=file_meta.product_domain,
+                released_year=released_year,
+            )
+            failure_kb.upsert_failure_entity(failure_entity)
 
-                if source_type == "new_fmea":
-                    cause_obj = FMEACause(
-                        cause_id=cause_id,
-                        failure_id=failure_id,
-                        failure_mode=failure_mode,
-                        failure_element=element,
-                        failure_effect=failure_effect,
-                        failure_cause=cause_text,
-                        discipline=content.get("cause_discipline"),
-                        prevention=content.get("controls_prevention"),
-                        detection=content.get("current_detection"),
-                        detection_value=parse_number(rpn_block.get("detection")),
-                        occurrence=parse_number(rpn_block.get("occurrence")),
-                        recommended_action=content.get("recommended_action"),
-
-                        # =====  file-level context =====
-                        productPnID=file_meta.productPnID,
-                        product_domain=file_meta.product_domain,
-                        source_type=source_type,
-                        fmea_type=fmea_type,
-                    )
-                else:
-                    cause_obj = FMEACause(
-                        cause_id=cause_id,
-                        failure_id=failure_id,
-                        failure_mode=failure_mode,
-                        failure_element=element,
-                        failure_effect=failure_effect,
-                        failure_cause=cause_text,
-                        discipline=discipline,
-                        prevention=None,
-                        detection=content.get("current_detection") or rpn_block.get("detection"),
-                        detection_value=parse_number(rpn_block.get("detection")),
-                        occurrence=parse_number(rpn_block.get("occurrence")),
-                        recommended_action=content.get("recommended_action"),
-
-                        # =====  file-level context =====
-                        productPnID=file_meta.productPnID,
-                        product_domain=file_meta.product_domain,
-                        source_type=source_type,
-                        fmea_type=fmea_type,
-
-  
-                    )
-
-                failure_kb.add_cause(cause_obj)
-                cause_ref = {
-                    "cause_id": cause_id,
-                    "cause_text": cause_text,
-                }
-                failure_obj.cause_ids.append(cause_ref)
-
-            # ---------------------------------------------
-            # Back-write failure → causes
-            # ---------------------------------------------
-            failure_kb.store[failure_id]["cause_ids"] = failure_obj.cause_ids
-
-    # =================================================
-    # 5) Persist failure store
-    # =================================================
-    failure_kb.store_path.write_text(
-        json.dumps(failure_kb.store, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+        # =================================================
+        # 4) FLUSH semantic nodes (PER FILE)
+        # =================================================
+        for node in semantic_nodes.values():
+            failure_kb.upsert_semantic_node(
+                semantic_id=node["semantic_id"],
+                field_type=node["field_type"],
+                text=node["text"],
+                failure_ids=node["failure_ids"],
+            )
 
     print(f"[OK] {jsonl_path.name} ingested")

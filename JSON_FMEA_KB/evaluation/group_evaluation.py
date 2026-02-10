@@ -110,5 +110,5 @@ print("failure_cause groups:", len(groups_cause))
 # print("failure_mode groups:", len(groups_mode))
 
 # # (optional) show group contents
-# print("\nGroups by failure_cause:", json.dumps(groups_cause, indent=2))
+print("\nGroups by failure_cause:", json.dumps(groups_cause, indent=2))
 # print("\nGroups by failure_element:", json.dumps(groups_element, indent=2))

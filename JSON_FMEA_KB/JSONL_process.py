@@ -41,14 +41,14 @@ ingest_fmea_jsonl(
 
 
 print("[INFO] Ingest finished")
-roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
+field_type = ["mode", "effect", "element", "cause"]
 
 def count_by_where(col, where):
     res = col.get(where=where, include=[])
     return len(res["ids"])
-roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
-for r in roles:
-    n = count_by_where(failure_kb.collection, {"role": r})
+field_type =  ["mode", "effect", "element", "cause"]
+for r in field_type:
+    n = count_by_where(failure_kb.collection, {"field_type": r})
     print(f"{r} count: {n}")
 print(f"Total count: {failure_kb.collection.count()}")
 

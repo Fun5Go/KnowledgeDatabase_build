@@ -80,13 +80,12 @@ class FailureEntity:
 
     # ===== identifiers =====
     failure_id: str
-    cause_id: Optional[str]
 
     # ===== links to semantic nodes =====
     mode_id: Optional[str]
     element_id: Optional[str]
     effect_id: Optional[str]
-    cause_semantic_id: Optional[str]
+    cause_id: Optional[str]
 
     # ===== original raw text (traceability) =====
     failure_mode_text: Optional[str]
@@ -209,7 +208,7 @@ class FMEAFailureKB:
             documents=[text],
             metadatas=[{
                 "field_type": field_type,
-                "failure_ids": failure_ids_unique,
+                # "failure_ids": failure_ids_unique,
                 "count": count,
             }],
         )
