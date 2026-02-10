@@ -10,6 +10,7 @@ from chromadb.utils import embedding_functions
 from dataclasses import asdict
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass, field
+from datetime import datetime
 
 FilterValue = Union[str, List[str]]
 DStage = Literal["D2", "D4"]
@@ -27,6 +28,21 @@ def is_valid_embed_text(text: Optional[str]) -> bool:
     }:
         return False
     return True
+
+@dataclass
+class EmbeddingVersion:
+    """
+    One embedding generation event.
+    """
+    embedding_id: str                   # unique id for this embedding version
+    model_name: str                     # e.g. "text-embedding-3-large"
+    model_version: str                  # e.g. "2024-12"
+    
+    modified_by: str                    # "LLM" | "human" | "pipeline"
+    # modified_at: datetime               # embedding generation time
+
+    normalization_strategy: Optional[str] = None
+    notes: Optional[str] = None
 
 @dataclass
 class FileMeta: #General metadata for a FMEA worksheet
@@ -59,15 +75,21 @@ class FailureSemanticNode:
     THIS is embeddable.
     """
 
-    semantic_id: str                     # unique ID for this semantic node
+    semantic_id: str
     field_type: FailureFieldType         # element | mode | effect | cause
 
-    text: str                            # normalized semantic text
+    # ===== semantic text =====
+    text: str                            # current normalized semantic text
+    original_text: str                  # original extracted text (immutable)
 
-    # All failures that map to this semantic concept
+    # ===== embedding versioning =====
+    active_embedding_id: Optional[str] = None
+    embedding_versions: Dict[str, EmbeddingVersion] = field(default_factory=dict)
+
+    # ===== linkage =====
     failure_ids: List[str] = field(default_factory=list)
 
-    # Optional bookkeeping
+    # ===== bookkeeping =====
     source_count: int = 0
 
 
@@ -181,27 +203,46 @@ class FMEAFailureKB:
     field_type: str,   # element | mode | effect | cause
     text: str,
     failure_ids: list[str],
+
+    # ---- NEW ----
+    original_text: Optional[str] = None,
+    embedding_versions: Optional[dict] = None,
+    active_embedding_id: Optional[str] = None,
 ) -> None:
         if not is_valid_embed_text(text):
             return
 
-        # unique + keep order
         failure_ids_unique = list(dict.fromkeys(failure_ids))
         count = len(failure_ids_unique)
 
-        # ---- structured store (full data) ----
-        self.field_store[semantic_id] = {
+        record = {
             "semantic_id": semantic_id,
             "field_type": field_type,
             "text": text,
             "failure_ids": failure_ids_unique,
             "count": count,
         }
+
+        # ---- NEW: version-safe extensions ----
+        if original_text is not None:
+            record["original_text"] = original_text
+
+        if embedding_versions is not None:
+            # make JSON-safe if needed
+            record["embedding_versions"] = {
+                k: asdict(v) if hasattr(v, "__dict__") else v
+                for k, v in embedding_versions.items()
+            }
+
+        if active_embedding_id is not None:
+            record["active_embedding_id"] = active_embedding_id
+
+        self.field_store[semantic_id] = record
+
         self.field_store_path.write_text(
             json.dumps(self.field_store, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-
         # ---- vector store (light metadata) ----
         self.collection.upsert(
             ids=[semantic_id],

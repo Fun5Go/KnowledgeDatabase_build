@@ -1,4 +1,4 @@
-from kb_structure import FMEAFailureKB, FileMeta, FileMetaStore, FailureEntity, FailureSemanticNode
+from kb_structure import FMEAFailureKB, FileMeta, FileMetaStore, FailureEntity, FailureSemanticNode, EmbeddingVersion
 
 import json
 from pathlib import Path
@@ -6,7 +6,14 @@ from collections import defaultdict
 import re
 from datetime import datetime
 import hashlib
+from typing import Optional
+import uuid
 
+# Verssion Config
+INGEST_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+INGEST_EMBEDDING_VERSION = "v1"
+INGEST_MODIFIED_BY = "pipeline"
+NORMALIZATION_STRATEGY = "lowercase+trim"
 
 GENERIC_RIGHT_TOKENS = {
     "general",
@@ -39,6 +46,20 @@ ELEMENT_RIGHT_TOKENS = {
 # =========================================================
 # Helpers
 # =========================================================
+
+def to_jsonable(obj):
+    """Convert common Python objects (datetime, dataclass, dict/list) to JSON-serializable."""
+    if obj is None:
+        return None
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if is_dataclass(obj):
+        return to_jsonable(asdict(obj))
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_jsonable(v) for v in obj]
+    return obj
 
 def normalize(s: str | None) -> str:
     if not s:
@@ -281,86 +302,66 @@ def build_failure_signature(row: dict) -> tuple:
             normalize(content.get("failure_effect")),
         )
 
-#====================================
-#===== Duplicate checking ===========
-def is_duplicate_failure(
-    failure_kb: FMEAFailureKB,
-    system,
-    element,
-    function,
-    failure_mode,
-    failure_effect,
-) -> str | None:
-    """
-    If duplicate found, return existing failure_id
-    Else return None
-    """
-    nm = normalize(failure_mode)
-    ne = normalize(failure_effect)
-    nel = normalize(element)
-    ns = normalize(system)
-
-    for fid, f in failure_kb.store.items():
-        if (
-            normalize(f.get("failure_mode")) == nm
-            and normalize(f.get("failure_effect")) == ne
-            and normalize(f.get("failure_element")) == nel
-            and normalize(f.get("system")) == ns
-        ):
-            return fid
-
-    return None
-
-def is_duplicate_cause(
-    failure_kb: FMEAFailureKB,
-    failure_id: str,
-    cause_text: str,
-) -> str | None:
-    """
-    Deduplicate causes under the same failure
-    """
-    if not cause_text:
-        return None
-
-    nc = normalize(cause_text)
-
-    for cid, c in failure_kb.cause_store.items():
-        if c.get("failure_id") != failure_id:
-            continue
-
-        existing_text = c.get("failure_cause")
-        if not existing_text:
-            continue
-
-        if normalize(existing_text) == nc:
-            return cid
-
-    return None
 
 def make_semantic_id(field_type: str, text: str) -> str:
     norm = normalize_excel_text(text).lower()
     h = hashlib.md5(norm.encode("utf-8")).hexdigest()[:12]
     return f"{field_type}:{h}"
 
+
+def create_embedding_version(
+    *,
+    model_name: str,
+    model_version: str,
+    modified_by: str,
+    normalization_strategy: Optional[str] = None,
+    notes: Optional[str] = None,
+):
+    return EmbeddingVersion(
+        embedding_id=f"emb_{uuid.uuid4().hex[:12]}",
+        model_name=model_name,
+        model_version=model_version,
+        modified_by=modified_by,            # "LLM" | "human" | "pipeline"
+        # modified_at=datetime,
+        normalization_strategy=normalization_strategy,
+        notes=notes,
+    )
+
+
 def collect_semantic(
-    semantic_map: dict,
+    semantic_nodes: dict,
     *,
     semantic_id: str,
     field_type: str,
     text: str,
     failure_id: str,
 ):
-    node = semantic_map.setdefault(
-        semantic_id,
-        {
+    if semantic_id not in semantic_nodes:
+        emb_version = create_embedding_version(
+            model_name=INGEST_EMBEDDING_MODEL,
+            model_version=INGEST_EMBEDDING_VERSION,
+            modified_by=INGEST_MODIFIED_BY,
+            normalization_strategy=NORMALIZATION_STRATEGY,
+        )
+
+        semantic_nodes[semantic_id] = {
             "semantic_id": semantic_id,
             "field_type": field_type,
             "text": text,
-            "failure_ids": [],
-        },
-    )
-    if failure_id not in node["failure_ids"]:
-        node["failure_ids"].append(failure_id)
+            "original_text": text,
+            "failure_ids": [failure_id],
+            "source_count": 1,
+            "embedding_versions": {
+                emb_version.embedding_id: emb_version
+            },
+            "active_embedding_id": None,
+        }
+    else:
+        node = semantic_nodes[semantic_id]
+        if failure_id not in node["failure_ids"]:
+            node["failure_ids"].append(failure_id)
+            node["source_count"] += 1
+
 
 
 
@@ -405,7 +406,7 @@ def ingest_fmea_jsonl(
     for file_name, rows in rows_by_file.items():
 
         # semantic accumulator (PER FILE!)
-        semantic_nodes: dict[str, dict] = {}
+        semantic_nodes: dict[str, FailureSemanticNode] = {}
 
         # -------------------------------------------------
         # META
@@ -563,6 +564,11 @@ def ingest_fmea_jsonl(
                 field_type=node["field_type"],
                 text=node["text"],
                 failure_ids=node["failure_ids"],
+
+                # ---- versioning ----
+                original_text=node.get("original_text", node["text"]),
+                embedding_versions=node.get("embedding_versions"),
+                active_embedding_id=node.get("active_embedding_id"),
             )
 
     print(f"[OK] {jsonl_path.name} ingested")
