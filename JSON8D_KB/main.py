@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kb_structure import FailureKB, SentenceKB, FileMetaStore
+from kb_structure import  SentenceKB, FileMetaStore, EightDFailureKB
 from ingest_8d import ingest_8d_json
 
 
@@ -33,7 +33,7 @@ for p in [SENTENCE_KB_DIR, FAILURE_KB_DIR]:
 # 2) Init KBs
 # =========================================================
 sentence_kb = SentenceKB(persist_dir=SENTENCE_KB_DIR)
-failure_kb = FailureKB(persist_dir=FAILURE_KB_DIR)
+failure_kb = EightDFailureKB(persist_dir=FAILURE_KB_DIR)
 # cause_kb = CauseKB(persist_dir=CAUSE_KB_DIR)
 meta_kb = FileMetaStore(persist_dir=KB_DATA_ROOT)
 
@@ -55,14 +55,14 @@ for jp in json_files:
     )
 
 print("[INFO] Ingest finished")
-roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
+roles = ["mode", "effect", "element", "cause"]
 
 def count_by_where(col, where):
     res = col.get(where=where, include=[])
     return len(res["ids"])
-roles = ["failure_mode", "failure_effect", "failure_element", "failure_cause"]
+roles = ["mode", "effect", "element", "cause"]
 for r in roles:
-    n = count_by_where(failure_kb.collection, {"role": r})
+    n = count_by_where(failure_kb.collection, {"field_type": r})
     print(f"{r} count: {n}")
 print(f"Total count: {failure_kb.collection.count()}")
 

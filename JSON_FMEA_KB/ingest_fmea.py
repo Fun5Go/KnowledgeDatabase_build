@@ -1,4 +1,4 @@
-from kb_structure import FMEAFailureKB, FileMeta, FileMetaStore, FailureEntity, FailureSemanticNode, EmbeddingVersion
+from kb_structure import FMEAFailureKB, FileMeta, FileMetaStore, FailureEntity, FailureSemanticNode
 
 import json
 from pathlib import Path
@@ -6,14 +6,7 @@ from collections import defaultdict
 import re
 from datetime import datetime
 import hashlib
-from typing import Optional
-import uuid
 
-# Verssion Config
-INGEST_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-INGEST_EMBEDDING_VERSION = "v1"
-INGEST_MODIFIED_BY = "pipeline"
-NORMALIZATION_STRATEGY = "lowercase+trim"
 
 GENERIC_RIGHT_TOKENS = {
     "general",
@@ -46,20 +39,6 @@ ELEMENT_RIGHT_TOKENS = {
 # =========================================================
 # Helpers
 # =========================================================
-
-def to_jsonable(obj):
-    """Convert common Python objects (datetime, dataclass, dict/list) to JSON-serializable."""
-    if obj is None:
-        return None
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    if is_dataclass(obj):
-        return to_jsonable(asdict(obj))
-    if isinstance(obj, dict):
-        return {str(k): to_jsonable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [to_jsonable(v) for v in obj]
-    return obj
 
 def normalize(s: str | None) -> str:
     if not s:
@@ -308,60 +287,27 @@ def make_semantic_id(field_type: str, text: str) -> str:
     h = hashlib.md5(norm.encode("utf-8")).hexdigest()[:12]
     return f"{field_type}:{h}"
 
-
-def create_embedding_version(
-    *,
-    model_name: str,
-    model_version: str,
-    modified_by: str,
-    normalization_strategy: Optional[str] = None,
-    notes: Optional[str] = None,
-):
-    return EmbeddingVersion(
-        embedding_id=f"emb_{uuid.uuid4().hex[:12]}",
-        model_name=model_name,
-        model_version=model_version,
-        modified_by=modified_by,            # "LLM" | "human" | "pipeline"
-        # modified_at=datetime,
-        normalization_strategy=normalization_strategy,
-        notes=notes,
-    )
-
-
 def collect_semantic(
-    semantic_nodes: dict,
+    semantic_map: dict,
     *,
     semantic_id: str,
     field_type: str,
     text: str,
     failure_id: str,
+    source_type: str,
 ):
-    if semantic_id not in semantic_nodes:
-        emb_version = create_embedding_version(
-            model_name=INGEST_EMBEDDING_MODEL,
-            model_version=INGEST_EMBEDDING_VERSION,
-            modified_by=INGEST_MODIFIED_BY,
-            normalization_strategy=NORMALIZATION_STRATEGY,
-        )
-
-        semantic_nodes[semantic_id] = {
+    node = semantic_map.setdefault(
+        semantic_id,
+        {
             "semantic_id": semantic_id,
             "field_type": field_type,
             "text": text,
-            "original_text": text,
-            "failure_ids": [failure_id],
-            "source_count": 1,
-            "embedding_versions": {
-                emb_version.embedding_id: emb_version
-            },
-            "active_embedding_id": None,
-        }
-    else:
-        node = semantic_nodes[semantic_id]
-        if failure_id not in node["failure_ids"]:
-            node["failure_ids"].append(failure_id)
-            node["source_count"] += 1
-
+            "failure_ids": [],
+            "source_type": source_type,
+        },
+    )
+    if failure_id not in node["failure_ids"]:
+        node["failure_ids"].append(failure_id)
 
 
 
@@ -406,7 +352,7 @@ def ingest_fmea_jsonl(
     for file_name, rows in rows_by_file.items():
 
         # semantic accumulator (PER FILE!)
-        semantic_nodes: dict[str, FailureSemanticNode] = {}
+        semantic_nodes: dict[str, dict] = {}
 
         # -------------------------------------------------
         # META
@@ -491,21 +437,24 @@ def ingest_fmea_jsonl(
                                  semantic_id=mode_id,
                                  field_type="mode",
                                  text=failure_mode,
-                                 failure_id=failure_id)
+                                 failure_id=failure_id,
+                                 source_type=source_type)
 
             if element_id:
                 collect_semantic(semantic_nodes,
                                  semantic_id=element_id,
                                  field_type="element",
                                  text=element,
-                                 failure_id=failure_id)
+                                 failure_id=failure_id,
+                                 source_type=source_type)
 
             if effect_id:
                 collect_semantic(semantic_nodes,
                                  semantic_id=effect_id,
                                  field_type="effect",
                                  text=failure_effect,
-                                 failure_id=failure_id)
+                                 failure_id=failure_id,
+                                 source_type=source_type)
 
             # ---------- entity ----------
 
@@ -525,6 +474,7 @@ def ingest_fmea_jsonl(
                     field_type="cause",
                     text=cause_text,
                     failure_id=failure_id,
+                    source_type=source_type
                 )
 
             failure_entity = FailureEntity(
@@ -564,11 +514,7 @@ def ingest_fmea_jsonl(
                 field_type=node["field_type"],
                 text=node["text"],
                 failure_ids=node["failure_ids"],
-
-                # ---- versioning ----
-                original_text=node.get("original_text", node["text"]),
-                embedding_versions=node.get("embedding_versions"),
-                active_embedding_id=node.get("active_embedding_id"),
+                source_type = node["source_type"],
             )
 
     print(f"[OK] {jsonl_path.name} ingested")

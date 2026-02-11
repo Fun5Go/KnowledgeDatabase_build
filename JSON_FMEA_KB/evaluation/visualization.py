@@ -21,8 +21,8 @@ import json
 # =========================================================
 
 ROLES = {
-    "element": "tab:blue",
-    # "mode": "tab:orange",
+    # "element": "tab:blue",
+    "mode": "tab:orange",
     # "effect": "tab:green",
     #  "cause": "tab:red",
 }

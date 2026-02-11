@@ -68,56 +68,57 @@ class Sentence:
 
 
 @dataclass
-class Failure:
-    # ===== required =====
+class EightDSemanticNode:
+    """
+    Unique semantic concept extracted from 8D.
+    THIS is embeddable.
+    """
+
+    semantic_id: str                  # unique ID
+    field_type: str                   # element | mode | effect | cause
+
+    text: str                         # normalized semantic text
+
+    # All 8D failures that map to this concept
+    failure_ids: List[str] = field(default_factory=list)
+
+    # bookkeeping
+    source_count: int = 0
+
+@dataclass
+class EightDFailureEntity:
+    """
+    One 8D failure record.
+    NOT embeddable.
+    """
+
+    # ===== identifiers =====
     failure_id: str
-    failure_mode: str
-    failure_element: str
 
-    # ===== optional text =====
-    failure_effect: Optional[str] = None
+    # ===== links to semantic nodes =====
+    mode_id: Optional[str]
+    element_id: Optional[str]
+    effect_id: Optional[str]
+
+    # ===== original raw text (traceability) =====
+    failure_mode_text: Optional[str]
+    failure_element_text: Optional[str]
+    failure_effect_text: Optional[str]
+    cause_ids: List[Dict[str, Any]] = field(default_factory=list)
+
+    # ===== 8D-specific =====
     status: Optional[str] = None
+    discipline: Optional[str] = None
 
-    # ===== context =====
+
+    # ===== evidence =====
+    supporting_sentence_ids: List[str] = field(default_factory=list)
+
+    # ===== process / context =====
     fmea_type: Optional[str] = None
     source_type: str = "8D"
 
-    # ===== evidence / links =====
-    supporting_sentence_ids: List[str] = field(default_factory=list)
-    cause_ids: List[Dict[str, Any]] = field(default_factory=list)
-
-    # ===== maintenance =====
-    maintenance: Optional[MaintenanceTag] = None
-
     # ===== product =====
-    productPnID: Optional[int] = None
-    product_domain: Optional[str] = None
-    released_year: Optional[int] = None
-    # Maintenance
-    # revision: int
-    # last_updated: str
-
-
-@dataclass
-class Cause:
-    cause_id: str
-    failure_id: str
-    failure_mode: str
-    failure_element: str
-    failure_effect: Optional[str]
-    failure_cause: str
-
-    fmea_type: str
-
-    discipline: str
-    confidence: str
-    supporting_sentence_ids: List[str]
-
-    # Maintenance
-    maintenance: MaintenanceTag
-    # revision: int
-    # last_updated: str
-    source_type: str = "8D"      
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
     released_year: Optional[int] = None
@@ -393,103 +394,106 @@ class SentenceKB:
 # Failure KB (entry gate)
 # =========================================================
 
-class FailureKB:
+class EightDFailureKB:
     def __init__(self, persist_dir: Path):
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
-        # -------- persistent store --------
-        self.store_path = self.persist_dir / "8d_failure_store.json"
-        self.store: Dict[str, Dict[str, Any]] = {}
-        if self.store_path.exists():
-            with open(self.store_path, "r", encoding="utf-8") as f:
-                self.store = json.load(f)
-        self.cause_store_path = self.persist_dir / "8d_cause_store.json"
-        self.cause_store: dict[str, dict] = {}
-        if self.cause_store_path.exists():
-            self.cause_store = json.loads(
-                self.cause_store_path.read_text(encoding="utf-8")
+
+        # =========================================================
+        # SHARED SEMANTIC STORE  (same as FMEA)
+        # =========================================================
+        self.field_store_path = self.persist_dir / "fmea_field_store.json"
+        self.field_store: Dict[str, dict] = {}
+
+        if self.field_store_path.exists():
+            self.field_store = json.loads(
+                self.field_store_path.read_text(encoding="utf-8")
             )
-        # -------- vector store --------
-        # Initialize the embedding model
+
+        # =========================================================
+        # 8D ENTITY STORE (separate)
+        # =========================================================
+        self.entity_store_path = self.persist_dir / "8d_entity_store.json"
+        self.entity_store: Dict[str, dict] = {}
+
+        if self.entity_store_path.exists():
+            self.entity_store = json.loads(
+                self.entity_store_path.read_text(encoding="utf-8")
+            )
+
+        # =========================================================
+        # SHARED VECTOR STORE (same collection as FMEA)
+        # =========================================================
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
+
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-MiniLM-L6-v2"
         )
+
         self.collection = self.client.get_or_create_collection(
-            name="all_failure_kb",
+            name="failure_semantic_kb",  # same as FMEA
             embedding_function=self.embedder,
             metadata={"hnsw:space": "cosine"},
         )
-    # =========================================================
-    # Add failure (Failure key embedding)
-    # =========================================================
-    def add(self, failure:Failure):
-        self.store[failure.failure_id] = asdict(failure)
-        with open(self.store_path, "w", encoding="utf-8") as f:
-            json.dump(self.store, f, indent=2, ensure_ascii=False)
-        ids = []
-        documents = []
-        metadatas = []
-        def add_field(text: Optional[str], role: str):
-            if not is_valid_embed_text(text):
-                return
-            ids.append(f"{failure.failure_id}::{role}")
-            documents.append(text) # doc for embedding
-            metadatas.append({
-                "failure_id": failure.failure_id,
-                "role": role,
-                "fmea_type": failure.fmea_type,
-                "source_type": failure.source_type,
-                "productPnID": failure.productPnID,     
-                "product_domain": failure.product_domain,
-                "review_status": failure.maintenance.review_status,
-                "version": failure.maintenance.version,
-                "last_updated": failure.maintenance.last_updated,
-                "released_year": failure.released_year,
-            })
-        # ---- split embedding ----
-        add_field(failure.failure_mode, "failure_mode")
-        add_field(failure.failure_element, "failure_element")
-        add_field(failure.failure_effect, "failure_effect")
-        if ids:
-            self.collection.upsert( # update or insert
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas,
-            )
-        
-    def add_cause(self, cause: Cause):
 
-        self.cause_store[cause.cause_id] = asdict(cause)
-        self.cause_store_path.write_text(
-        json.dumps(self.cause_store, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-        embed_text = cause.failure_cause
-        if not is_valid_embed_text(embed_text):
+    # =========================================================
+    # SEMANTIC NODE UPSERT (shared)
+    # =========================================================
+    def upsert_semantic_node(
+        self,
+        *,
+        semantic_id: str,
+        field_type: str,  # element | mode | effect | cause
+        text: str,
+        failure_ids: list[str],
+        source_type: str
+    ) -> None:
+
+        if not is_valid_embed_text(text):
             return
 
+        failure_ids_unique = list(dict.fromkeys(failure_ids))
+        count = len(failure_ids_unique)
+
+        # ---------- structured store ----------
+        self.field_store[semantic_id] = {
+            "semantic_id": semantic_id,
+            "field_type": field_type,
+            "text": text,
+            "failure_ids": failure_ids_unique,
+            "count": count,
+            "source_type": source_type, 
+        }
+
+        self.field_store_path.write_text(
+            json.dumps(self.field_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # ---------- vector store ----------
         self.collection.upsert(
-            ids=[cause.cause_id],
-            documents=[embed_text],
+            ids=[semantic_id],
+            documents=[text],
             metadatas=[{
-                "failure_id": cause.failure_id,
-                "cause_id": cause.cause_id,
-                "role": "failure_cause",
-                "discipline": cause.discipline or "",
-                "confidence": cause.confidence,
-
-                "productPnID": cause.productPnID,
-                "product_domain": cause.product_domain,
-                "fmea_type": cause.fmea_type,
-                "source_type": cause.source_type,
-                "released_year": cause.released_year,
-                "version": cause.maintenance.version,
-                "last_updated": cause.maintenance.last_updated,
-
+                "field_type": field_type,
+                "count": count,
+                "source_type": source_type,  # helps filtering later
             }],
         )
 
+    # =========================================================
+    # 8D FAILURE ENTITY UPSERT
+    # =========================================================
+    def upsert_failure_entity(self, entity: EightDFailureEntity):
+        """
+        Store 8D failure entity (NOT embeddable)
+        """
+        self.entity_store[entity.failure_id] = asdict(entity)
+
+        self.entity_store_path.write_text(
+            json.dumps(self.entity_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
 
 
