@@ -175,7 +175,7 @@ class FMEAFailureKB:
     # ---------------------------
     # existing: add failure
     # ---------------------------
-def upsert_semantic_node(
+    def upsert_semantic_node(
     self,
     *,
     semantic_id: str,
@@ -185,64 +185,76 @@ def upsert_semantic_node(
     source_type: str,
 ) -> None:
 
-    if not is_valid_embed_text(text):
-        return
+        if not is_valid_embed_text(text):
+            return
 
-    # =========================================
-    # 1️⃣ CHECK EXISTING
-    # =========================================
-    existing = self.field_store.get(semantic_id)
+        # -------------------------------
+        # Take the existing
+        # -------------------------------
+        existing = self.field_store.get(semantic_id)
 
-    if existing:
-        # merge failure_ids
-        old_ids = existing.get("failure_ids", [])
-        merged_ids = list(dict.fromkeys(old_ids + failure_ids))
+        if existing:
+            # merge failure_ids
+            merged_ids = set(existing.get("failure_ids", []))
+            merged_ids.update(failure_ids)
+            failure_ids_unique = sorted(merged_ids)
 
-        existing["failure_ids"] = merged_ids
-        existing["count"] = len(merged_ids)
+            # merge source_type（可选增强）
+            if existing.get("source_type") != source_type:
+                existing_source = existing.get("source_type")
+                if isinstance(existing_source, list):
+                    source_types = set(existing_source)
+                else:
+                    source_types = {existing_source}
+                source_types.add(source_type)
+                merged_source_type = list(source_types)
+            else:
+                merged_source_type = existing.get("source_type")
 
-        # optional: merge source_type
-        old_source = existing.get("source_type")
-        if old_source != source_type:
-            existing["source_type"] = "mixed"
+        else:
+            failure_ids_unique = sorted(set(failure_ids))
+            merged_source_type = source_type
 
-        self.field_store[semantic_id] = existing
+        count = len(failure_ids_unique)
 
-    else:
-        # create new
-        merged_ids = list(dict.fromkeys(failure_ids))
-
+        # -------------------------------
+        # write structured store
+        # -------------------------------
         self.field_store[semantic_id] = {
             "semantic_id": semantic_id,
             "field_type": field_type,
             "text": text,
-            "failure_ids": merged_ids,
-            "count": len(merged_ids),
-            "source_type": source_type,
+            "failure_ids": failure_ids_unique,
+            "count": count,
+            "source_type": merged_source_type,
         }
 
-    # =========================================
-    # 2️⃣ SAVE JSON
-    # =========================================
-    self.field_store_path.write_text(
-        json.dumps(self.field_store, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+        # -------------------------------
+        #  JSON
+        # -------------------------------
+        self.field_store_path.write_text(
+            json.dumps(self.field_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
-    # =========================================
-    # 3️⃣ VECTOR UPSERT
-    # =========================================
-    # ⚠ 只需要用当前 canonical text
-    self.collection.upsert(
-        ids=[semantic_id],
-        documents=[text],
-        metadatas=[{
-            "field_type": field_type,
-            "count": self.field_store[semantic_id]["count"],
-        }],
-    )
+        # -------------------------------
+        # update vector store
+        # -------------------------------
 
-    # ---------------------------
+        if isinstance(merged_source_type, list):
+            source_type_meta = ",".join(sorted(merged_source_type))
+        else:
+            source_type_meta = merged_source_type
+        self.collection.upsert(
+            ids=[semantic_id],
+            documents=[text],
+            metadatas=[{
+                "field_type": field_type,
+                "count": count,
+                "source_type": source_type_meta
+            }],
+        )
+
     # existing: add cause
     # ---------------------------
     def upsert_failure_entity(self, entity):
