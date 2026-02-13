@@ -171,38 +171,171 @@ def get_failure_entity(
     kb = _load_kb(persist_dir)
     return kb.entity_store.get(failure_id)
 
-def print_semantic_results(res):
+
+
+FIELD_ID_MAP = {
+    "element": "element_id",
+    "mode": "mode_id",
+    "effect": "effect_id",
+    "cause": "cause_id",
+}
+
+def query_linked_failure_fields(
+    persist_dir: Union[str, Path],
+    query_text: str,
+    field_type: str,
+    linked_fields: List[str],
+    n_results: int = 5,
+    min_count: Optional[int] = None,
+):
+    """
+    Input field type and text
+    Output the linked failure field (mode/effect/cause)
+
+    Returns:
+        {
+            linked_field_type: {
+                semantic_id: {
+                    "text": ...,
+                    "failure_ids": [...],
+                    "count": ...
+                }
+            }
+        }
+    """
+
+    kb = _load_kb(persist_dir)
+
+    # --------------------------------------------
+    # 1) Semantic search on input field
+    # --------------------------------------------
+    res = query_semantic_kb(
+        persist_dir=persist_dir,
+        query_text=query_text,
+        field_type=field_type,
+        n_results=n_results,
+        min_count=min_count,
+    )
+
+    semantic_ids = res.get("ids", [[]])[0]
+
+    # --------------------------------------------
+    # 2) Collect failure_ids
+    # --------------------------------------------
+    all_failure_ids = set()
+
+    for sid in semantic_ids:
+        node = kb.field_store.get(sid, {}) or {}
+        failure_ids = node.get("failure_ids", []) or []
+        all_failure_ids.update(failure_ids)
+
+    # --------------------------------------------
+    # 3) Traverse failure entities
+    # --------------------------------------------
+    result = {lf: {} for lf in linked_fields}
+
+    for fid in all_failure_ids:
+
+        entity = kb.entity_store.get(fid)
+        if not entity:
+            continue
+
+        for lf in linked_fields:
+
+            real_key = FIELD_ID_MAP.get(lf, lf)
+
+            semantic_id = entity.get(real_key)
+            if not semantic_id:
+                continue
+
+            node = kb.field_store.get(semantic_id)
+            if not node:
+                continue
+
+            if semantic_id not in result[lf]:
+                result[lf][semantic_id] = {
+                    "text": node.get("text"),
+                    "count": len(node.get("failure_ids", [])),
+                    "failure_ids": list(node.get("failure_ids", [])),
+                }
+
+    # --------------------------------------------
+    # 4) Sort by frequency
+    # --------------------------------------------
+    for lf in result:
+        result[lf] = dict(
+            sorted(
+                result[lf].items(),
+                key=lambda x: x[1]["count"],
+                reverse=True,
+            )
+        )
+
+    return result
+
+
+def print_semantic_results(res, kb, max_failure_ids: int = 15):
+    """
+    res: chroma query result
+    kb: FMEAFailureKB or EightDFailureKB (must have .field_store)
+    """
     ids = res.get("ids", [[]])[0]
     docs = res.get("documents", [[]])[0]
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
 
     n = min(len(ids), len(docs), len(metas), len(dists))
-
     print(f"Returned semantic nodes: {n}")
 
     for i in range(n):
+        semantic_id = ids[i]
+        meta = metas[i] or {}
+
+        # ---- get failure_ids from structured store ----
+        node = kb.field_store.get(semantic_id, {}) or {}
+        failure_ids = node.get("failure_ids", []) or []
+
+        # ---- optional truncate ----
+        shown = failure_ids[:max_failure_ids]
+        more = len(failure_ids) - len(shown)
+
         print("=" * 100)
-        print(f"[{i:02d}] semantic_id: {ids[i]}")
+        print(f"[{i:02d}] semantic_id: {semantic_id}")
         print(f"  text: {docs[i]}")
         print(f"  similarity: {1 - float(dists[i]):.4f}")
-        print(f"  field_type: {metas[i].get('field_type')}")
-        print(f"  source_type: {metas[i].get('source_type')}")
-        print(f"  count: {metas[i].get('count')}")
+        print(f"  field_type: {meta.get('field_type')}")
+        print(f"  source_type: {meta.get('source_type')}")
+        print(f"  count: {meta.get('count')}")
+
+        print(f"  failure_ids({len(failure_ids)}): {shown}" + (f" ... (+{more})" if more > 0 else ""))
 
 
 
 if  __name__ == "__main__":
     KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
+    kb = FMEAFailureKB(KB_PATH)
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
-        query_text="power train",
-        field_type="element",
-        n_results=5,
+        query_text="Component break-down",
+        field_type="mode",
+        n_results=10,
         min_count=1,
     )
+    print_semantic_results(res, kb)
 
-    print_semantic_results(res)
+#     linked = query_linked_failure_fields(
+#     persist_dir=KB_PATH,
+#     query_text="power train",
+#     field_type="element",
+#     linked_fields=["cause"],
+#     n_results=5,
+#     min_count=1,
+# )
 
-    
+# for field_type, items in linked.items():
+#     print(f"\n==== LINKED FIELD: {field_type} ====")
+#     for sid, data in items.items():
+#         print(f"{sid}")
+#         print(f"  text: {data['text']}")
+#         print(f"  count: {data['count']}")
