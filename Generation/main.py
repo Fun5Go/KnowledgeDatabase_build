@@ -40,16 +40,6 @@ def build_ground_truth_input(
     target_n: Optional[int] = None,
     strict_unique: bool = False,
 ) -> str:
-    """
-    Build LLM-readable GT examples.
-
-    Args:
-        results: retrieved chains
-        target_n: desired number of output cases
-        strict_unique:
-            False → backfill duplicates if unique not enough
-            True  → do NOT backfill, return fewer and warn
-    """
 
     if not results:
         return "No similar failure chains were retrieved from the knowledge base."
@@ -71,9 +61,6 @@ def build_ground_truth_input(
             norm(r.get("cause")),
         )
 
-    # -------------------------------------------------
-    # 1️⃣ Collect unique chains
-    # -------------------------------------------------
     selected = []
     seen = set()
     duplicates = []
@@ -88,51 +75,67 @@ def build_ground_truth_input(
         if len(selected) >= target_n:
             break
 
-    # -------------------------------------------------
-    # 2️⃣ Backfill only if NOT strict
-    # -------------------------------------------------
     if not strict_unique and len(selected) < target_n:
         need = target_n - len(selected)
         selected.extend(duplicates[:need])
 
-    # In strict mode, do nothing (may be fewer)
+    def extract_matched_inputs(match_detail: dict) -> dict:
+        """
+        Return {field_type: 'a | b | c'} extracted from hit['structure_text'].
+        Dedup + preserve order.
+        """
+        out = {}
+        for ft in ["element", "mode", "cause", "effect"]:
+            hits = (match_detail or {}).get(ft, []) or []
+            seen_txt = set()
+            texts = []
+            for h in hits:
+                t = (h.get("structure_text") or "").strip()
+                if not t:
+                    continue
+                key = norm(t)
+                if key in seen_txt:
+                    continue
+                seen_txt.add(key)
+                texts.append(t)
+            if texts:
+                out[ft] = " | ".join(texts)
+        return out
 
-    # -------------------------------------------------
-    # 3️⃣ Format
-    # -------------------------------------------------
     lines = []
-    lines.append("Retrieved Similar FMEA Failure Chains:\n")
-
-    if strict_unique and len(selected) < target_n:
-        lines.append(
-            f"⚠ WARNING: Only {len(selected)} unique chains available "
-            f"(requested {target_n}). No duplicate backfilling applied.\n"
-        )
+    lines.append("GROUND TRUTH FAILURE PATTERN:\n")
 
     for idx, r in enumerate(selected, start=1):
-        lines.append(f"Rank {idx}")
+        element = r.get("element")
+        function = r.get("function") or "N/A"
+        mode = r.get("mode") or "N/A"
+        effect = r.get("effect") or "N/A"
+        cause = r.get("cause") or "N/A"
+
+        lines.append(f"Pattern {idx}")
         lines.append(f"Failure ID: {r.get('failure_id')}")
         lines.append(f"Relevance Score: {r.get('score')}")
         lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
 
-        lines.append("Failure Chain:")
-        lines.append(f"  Element : {r.get('element')}")
-        lines.append(f"  Function: {r.get('function')}")
-        lines.append(f"  Mode    : {r.get('mode')}")
-        lines.append(f"  Effect  : {r.get('effect')}")
-        lines.append(f"  Cause   : {r.get('cause')}")
+        lines.append(
+            f'In element "{element}", the function "{function}" results in effect "{effect}" '
+            f'when failure mode "{mode}" occurs, which is caused by "{cause}".'
+        )
 
-        # match_detail = r.get("match_detail", {}) or {}
-        # if isinstance(match_detail, dict):
-        #     for field_type, matches in match_detail.items():
-        #         if matches:
-        #             lines.append(f"  {str(field_type).upper()}:")
-        #             for m in matches:
-        #                 lines.append(f"    - {m}")
+        # ✅ Only add a compact "Matched input: ..." line
+        matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
+        if matched_inputs:
+            # keep stable order
+            parts = []
+            for ft in ["element", "mode", "cause", "effect"]:
+                if ft in matched_inputs:
+                    parts.append(f'{ft} "{matched_inputs[ft]}"')
+            lines.append("Matched input: " + ", ".join(parts))
 
         lines.append("-" * 60)
 
     return "\n".join(lines)
+
 
 def save_failure_candidates_to_json(result: dict, output_path: Path):
     """
@@ -147,23 +150,28 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
     print(f"\n Failure candidates saved to: {output_path}")
 
 @traceable(name="RAG")
-def RAG_pipeline(structure_input: Dict, KB_PATH: str):
+def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10, 
+    max_hits_per_field_per_failure: int = 2, require_cause: bool = False,
+    require_cause_plus: bool = False, ):
 
     similar_failure = build_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
-        top_k_per_field=5,
-        minimum_field_match=2,
-        top_n=20,
+        top_k_per_field=top_k_per_field,
+        top_n=top_n,
+        max_hits_per_field_per_failure = max_hits_per_field_per_failure,
+        require_cause = require_cause,
+        require_cause_plus = require_cause_plus,
     )
 
-    structure_input = build_structure_analysis_input(structure_input)
+    # structure_input = build_structure_analysis_input(structure_input)
+    structure_input_json = json.dumps(structure_input, ensure_ascii=False, indent=2)
 
-    failure_example = build_ground_truth_input(similar_failure,target_n=10, strict_unique=True)
+    failure_example = build_ground_truth_input(similar_failure,target_n=20, strict_unique=True)
 
     failure_candidates = failure_inference_generation.invoke({
         "data": {
-            "structure_analysis": structure_input, # Sentences with annotations
+            "structure_analysis": structure_input_json, # Sentences with annotations
             "gt_example": failure_example, # Similar FMEA cases in text format
         }
     })
@@ -249,7 +257,7 @@ if __name__ == "__main__":
     ]
 }
 
-    result = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH)
+    result = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=10, top_n=50, max_hits_per_field_per_failure=3)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)

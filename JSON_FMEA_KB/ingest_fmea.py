@@ -268,19 +268,19 @@ def build_failure_signature(row: dict) -> tuple:
 
     if row.get("source_type") == "new_fmea":
         return (
-            normalize(content.get("system_name")),
             normalize(content.get("system_element")),
             normalize(content.get("function")),
             normalize(content.get("failure_mode")),
             normalize(content.get("failure_effect")),
+            normalize_excel_text(content.get("failure_cause")),  
         )
     else:  # old_fmea
         return (
             normalize(content.get("process_step")),
             normalize(content.get("failure_mode")),
             normalize(content.get("failure_effect")),
+            normalize_excel_text(content.get("failure_cause")),  
         )
-
 
 def make_semantic_id(field_type: str, text: str) -> str:
     norm = normalize_excel_text(text).lower()
@@ -457,17 +457,14 @@ def ingest_fmea_jsonl(
                                  source_type=source_type)
 
             # ---------- entity ----------
+            cause_text = content.get("failure_cause")
 
-              # ---------- causes ----------
-            for row in group:
-                cause_text = normalize_excel_text(
-                    row.get("content", {}).get("failure_cause")
-                )
-                if not cause_text:
-                    continue
+            cause_semantic_id = (
+                make_semantic_id("cause", cause_text)
+                if cause_text else None
+            )
 
-                cause_semantic_id = make_semantic_id("cause", cause_text)
-
+            if cause_semantic_id:
                 collect_semantic(
                     semantic_nodes,
                     semantic_id=cause_semantic_id,
@@ -476,6 +473,7 @@ def ingest_fmea_jsonl(
                     failure_id=failure_id,
                     source_type=source_type
                 )
+
 
             failure_entity = FailureEntity(
                 failure_id=failure_id,

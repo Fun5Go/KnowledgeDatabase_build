@@ -1,91 +1,154 @@
 failure_inference_prompt = """
-You are given:
-1) Multiple Ground Truth Similar Example retrieved from the Failure Knowledge Base.
-   This example is the most semantically similar failure chain to the current structure.
-   It should be treated as the PRIMARY reference pattern.
+==============================
+TASK
+==============================
 
-2) A Structure Analysis describing failure elements and possible failure modes,
-   failure effects, and failure causes. Their relationships are not correctly matched currently.
-Your task:
-Infer the MOST RELEVANT and LOGICALLY CONSISTENT FMEA failure chains
-for the given Structure Analysis accroding to the ground truth example
+You are an automotive FMEA expert.
 
-----------------------------------------
-CRITICAL INFERENCE PRINCIPLES
-----------------------------------------
+Your task is to generate the MOST RELEVANT and LOGICALLY CONSISTENT
+FMEA failure chains for the given structure analysis.
 
-1. The Ground Truth Similar Examples are your MAIN guidance.
-   - Prioritize structural similarity to the example.
-   - Reuse its causal logic pattern if applicable.
-   - Do NOT ignore the example.
+You MUST use the Ground Truth Similar Example as the PRIMARY knowledge source.
 
-2. DO NOT over-infer or force new relationships.
-   - No aggressive reasoning.
-   - No speculative failure physics.
-   - No creative expansion beyond what is structurally supported.
+==============================
+GROUND TRUTH PRIORITY (CRITICAL)
+==============================
 
-3. Only perform LIGHT inference:
-   - Minor logical corrections of mismatched cause/effect
-   - Small completion of missing function wording if clearly implied
-   - Alignment of structure terms to the GT example pattern
+The Ground Truth Similar Example is retrieved from the Failure Knowledge Base (KB)
+and represents historical, real FMEA failure chains that are semantically closest
+to the current structure.
 
-4. If the Structure Analysis does not strongly support a chain,
-   you should:
-   - Avoid generating it
+You MUST treat the Ground Truth Example as the PRIMARY and MOST TRUSTWORTHY
+knowledge source for this task.
+
+This means:
+- Prefer reusing and adapting GT causal patterns over creating new ones.
+- When a structure item can be mapped to one or more GT patterns, you MUST map it.
+- Only use engineering inference to bridge small gaps needed for alignment.
+- If a chain contradicts GT patterns, do NOT output it (unless structure strongly proves otherwise).
+- Aim to maximize the utilization of relevant GT patterns (high coverage), while keeping correctness.
+
+The goal is NOT creativity. The goal is KB-anchored reconstruction of likely failure chains
+based on historical similar failures.
+
+==============================
+STRICT INFERENCE CONSTRAINTS
+==============================
+
+1. Ground Truth Example is the dominant reference from historical KB failures (MANDATORY):
+   - The GT example contains historical similar failures stored in the knowledge base.
+   - It defines the most reliable cause → mode → effect logic for this context.
+   - You MUST prioritize GT patterns whenever they are semantically applicable.
+   - Do NOT ignore GT patterns: if a structure node matches a GT pattern, you MUST reuse/adapt it.
+   - Use inference ONLY as a light bridge to align structure fields with GT logic, not to invent new chains.
+
+2. Multi-directional Causality is allowed:
+   - A single failure cause may lead to multiple failure modes.
+   - A single failure mode may have multiple independent causes (e.g., HW, SW, thermal, mechanical).
+   - Generate separate failure chains for each valid pairing.
+
+3. Controlled engineering inference is allowed:
+   - Minor logical completion
+   - Reasonable domain-consistent inference
+   - Alignment with known motor_drive behavior
+
+4. DO NOT:
+   - Invent unrealistic physics
+   - Create speculative system behavior
+   - Reverse cause/effect direction
+   - Create circular logic
+   - Introduce unrelated disciplines without support
+
+5. If structure alignment is weak:
+   - Either do not generate the chain
    - Or assign lower confidence
 
-----------------------------------------
-FMEA LOGIC REQUIREMENT
-----------------------------------------
 
-Each candidate must follow correct FMEA causality:
+==============================
+VALID FMEA CAUSAL STRUCTURE
+==============================
 
-   failure_element
-      → failure_function
-         → failure_mode
-            → failure_effect
-               ← caused by ← failure_cause
+Each candidate must strictly follow:
 
-Cause must logically lead to Mode.
-Mode must logically lead to Effect.
-No reversed or circular logic.
+failure_element
+   → failure_function
+      → failure_mode
+         → failure_effect
+            ← caused by ← failure_cause
 
-----------------------------------------
-support_failure_id RULE
-----------------------------------------
+Mandatory rules:
+- Cause MUST logically lead to Mode
+- Mode MUST logically lead to Effect
+- No reversed logic
+- No missing links
 
-- Use the failure IDs from the Ground Truth Example that support your reasoning.
-- If adapting from the GT example, include its ID.
-- Do NOT fabricate IDs.
-- A failure candidate can be supported by multiple IDs.
 
-----------------------------------------
-confidence RULE
-----------------------------------------
+==============================
+FIELD SELECTION RULE
+==============================
 
-- "high" → structure closely matches GT example
-- "medium" → mostly aligned with light adjustment
-- "low" → weak alignment but still plausible
+For each node in structure:
 
-----------------------------------------
-inference_reason RULE
-----------------------------------------
+- failure_mode MUST come from "modes"
+- failure_cause MUST come from "causes"
+- failure_effect MUST come from "effects"
+- failure_element MUST match the node
 
-Briefly explain:
-- How the structure aligns with the GT example
-- Why the causal chain is valid
+Do NOT invent new phrases unless strongly supported by:
+- GT pattern
+- Or well-established motor_drive engineering knowledge
+
+
+==============================
+SUPPORT FAILURE ID RULE
+==============================
+
+- Use ONLY failure IDs from the Ground Truth Example if applicable.
+- A candidate may reference multiple IDs.
+- If the chain is strongly aligned with GT → include its ID(s).
+- If NO GT ID directly supports the chain:
+    - Leave support_failure_id as empty list []
+    - Provide full technical reasoning inside "insight"
+    - Clearly explain why the inferred relationship is valid.
+
+
+==============================
+CONFIDENCE LEVEL
+==============================
+
+- "high"   → structure closely matches GT pattern
+- "medium" → mostly aligned with minor adjustment
+- "low"    → inferred without direct GT support but logically valid
+
+
+==============================
+INFERENCE REASON
+==============================
+
+Brief explanation of:
+- How structure aligns with GT pattern
+- Why cause → mode → effect chain is valid
+
 Keep concise and engineering-focused.
 
-----------------------------------------
-Ground Truth Similar Example:
+
+==============================
+GROUND TRUTH SIMILAR EXAMPLE
+==============================
+
 {gt_example}
 
-----------------------------------------
-Structure Analysis:
+
+==============================
+STRUCTURE ANALYSIS (JSON)
+==============================
+
 {structure_analysis}
 
-----------------------------------------
+
+==============================
 OUTPUT FORMAT (STRICT JSON ONLY)
+==============================
 
 {{
   "failure_candidates": [
@@ -96,12 +159,14 @@ OUTPUT FORMAT (STRICT JSON ONLY)
       "failure_effect": "...",
       "failure_cause": "...",
       "confidence": "high | medium | low",
-      "support_failure_id": ["id_xxx"],
-      "inference_reason": "technical reasoning"
+      "support_failure_id": [""],
+      "inference_reason": "short explanation",
+      "insight": "only required if no GT support; provide full technical reasoning"
     }}
   ]
 }}
 
 Return ONLY valid JSON.
 Do not output any extra explanation.
+
 """

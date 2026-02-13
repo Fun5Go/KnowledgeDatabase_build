@@ -1,4 +1,4 @@
-from typing import Dict, List, Union, Optional
+from typing import Dict, List, Union, Optional, Any
 from collections import defaultdict
 from pathlib import Path
 from Retriever.failure_query_tools import _load_kb,query_semantic_kb
@@ -15,47 +15,67 @@ from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 
 def build_failure_chains_from_structure(
     persist_dir: Union[str, Path],
-    structure_input: Dict,
+    structure_input: Dict[str, Any],
     top_k_per_field: int = 10,
     min_count: Optional[int] = None,
-    weight_element: float = 1.0,
+    weight_element: float = 1.5,
     weight_mode: float = 2.0,
-    weight_cause: float = 1.5,
-    weight_effect: float = 1.5,
-    minimum_field_match: int = 2,
+    weight_cause: float = 2.0,
+    weight_effect: float = 1.0,
     top_n: Optional[int] = 50,
     source_type: Optional[str] = None,
-):
+    # ---- graph constraints / scoring controls ----
+    require_cause: bool = False,
+    require_cause_plus: bool = False,  # require (mode + cause) or (mode + effect) if True
+    min_similarity: float = 0.4,     # ignore weak semantic hits
+    max_hits_per_field_per_failure: int = 4,  # cap to prevent score explosion from many near-duplicates
+    normalize_by_hits: bool = False,  # for graph-constrained retrieval, default False
+) -> List[Dict[str, Any]]:
     """
-    Soft-AND based retrieval.
-    Independent field search + score aggregation.
+    Graph-constrained (failure_id-level) retrieval for FMEA chains.
+
+    Key changes vs soft-AND global aggregation:
+    1) Node-scoped: each structure node builds its own candidate pool (prevents cross-node contamination).
+    2) Failure_id constrained: all outputs are complete KB entities (element/mode/cause/effect come from same failure_id).
+    3) Structural constraints:
+        - require_mode: only keep failures with mode hit
+        - require_mode_plus: additionally require (cause or effect) hit
+    4) Similarity threshold + per-field hit cap for robustness.
+
+    Output: list of chains (KB failure entities) with node_id, matched_fields, and match_detail.
     """
+
+    persist_dir = Path(persist_dir)
 
     kb = _load_kb(persist_dir)
     product_domain = structure_input.get("product_domain")
 
-    candidate_scores = defaultdict(lambda: {
-        "score": 0.0,
-        "field_hits": set(),
-        "matched": {
-            "element": [],
-            "mode": [],
-            "cause": [],
-            "effect": []
-        }
-    })
+    all_results: List[Dict[str, Any]] = []
 
-    # =====================================================
-    # 1) Traverse structure
-    # =====================================================
-    for node in structure_input.get("nodes", []):
+    nodes = structure_input.get("nodes", []) or []
+    for node in nodes:
+        node_id = node.get("element_id")
 
-        element_text = node.get("failure_element")
-        modes = node.get("modes", []) or []
-        causes = node.get("causes", []) or []
-        effects = node.get("effects", []) or []
+        element_text = (node.get("failure_element") or "").strip()
+        modes = [x for x in (node.get("modes", []) or []) if str(x).strip()]
+        causes = [x for x in (node.get("causes", []) or []) if str(x).strip()]
+        effects = [x for x in (node.get("effects", []) or []) if str(x).strip()]
 
-        # ---------- ELEMENT ----------
+        # ------------------------------
+        # Node-scoped candidate scores
+        # ------------------------------
+        candidate_scores = defaultdict(lambda: {
+            "score": 0.0,
+            "field_hits": set(),
+            "matched": {
+                "element": [],
+                "mode": [],
+                "cause": [],
+                "effect": []
+            }
+        })
+
+        # ---- ELEMENT ----
         if element_text:
             res = query_semantic_kb(
                 persist_dir,
@@ -66,12 +86,17 @@ def build_failure_chains_from_structure(
                 source_type=source_type,
             )
             _accumulate_candidate_scores(
-                kb, res, candidate_scores,
+                kb=kb,
+                semantic_query_result=res,
+                candidate_scores=candidate_scores,
+                query_text=element_text,
                 field_type="element",
-                weight=weight_element
+                weight=weight_element,
+                min_similarity=min_similarity,
+                max_hits_per_field_per_failure=max_hits_per_field_per_failure,
             )
 
-        # ---------- MODES ----------
+        # ---- MODES ----
         for m in modes:
             res = query_semantic_kb(
                 persist_dir,
@@ -82,12 +107,17 @@ def build_failure_chains_from_structure(
                 source_type=source_type,
             )
             _accumulate_candidate_scores(
-                kb, res, candidate_scores,
+                kb=kb,
+                semantic_query_result=res,
+                candidate_scores=candidate_scores,
+                query_text=m,
                 field_type="mode",
-                weight=weight_mode
+                weight=weight_mode,
+                min_similarity=min_similarity,
+                max_hits_per_field_per_failure=max_hits_per_field_per_failure,
             )
 
-        # ---------- CAUSES ----------
+        # ---- CAUSES ----
         for c in causes:
             res = query_semantic_kb(
                 persist_dir,
@@ -98,12 +128,17 @@ def build_failure_chains_from_structure(
                 source_type=source_type,
             )
             _accumulate_candidate_scores(
-                kb, res, candidate_scores,
+                kb=kb,
+                semantic_query_result=res,
+                candidate_scores=candidate_scores,
+                query_text=c,
                 field_type="cause",
-                weight=weight_cause
+                weight=weight_cause,
+                min_similarity=min_similarity,
+                max_hits_per_field_per_failure=max_hits_per_field_per_failure,
             )
 
-        # ---------- EFFECTS ----------
+        # ---- EFFECTS ----
         for e in effects:
             res = query_semantic_kb(
                 persist_dir,
@@ -114,97 +149,123 @@ def build_failure_chains_from_structure(
                 source_type=source_type,
             )
             _accumulate_candidate_scores(
-                kb, res, candidate_scores,
+                kb=kb,
+                semantic_query_result=res,
+                candidate_scores=candidate_scores,
+                query_text=e,
                 field_type="effect",
-                weight=weight_effect
+                weight=weight_effect,
+                min_similarity=min_similarity,
+                max_hits_per_field_per_failure=max_hits_per_field_per_failure,
             )
 
-    # =====================================================
-    # 2) Reconstruct full failure chains
-    # =====================================================
-    results = []
+        # --------------------------------------------
+        # Graph Constrained Filtering (failure_id-level)
+        # --------------------------------------------
+        for fid, info in candidate_scores.items():
+            fields = info["field_hits"]
 
-    for fid, info in candidate_scores.items():
-
-        # ---- minimum field match filter ----
-        if len(info["field_hits"]) < minimum_field_match:
-            continue
-
-        entity = kb.entity_store.get(fid)
-        if not entity:
-            continue
-
-        # ---- product_domain filter ----
-        if product_domain:
-            if entity.get("product_domain") != product_domain:
+            if require_cause and ("cause" not in fields):
                 continue
 
-        # ---- normalize score (avoid explosion) ----
-        normalized_score = info["score"] / max(len(info["field_hits"]), 1)
+            if require_cause_plus and ("cause"in fields) and not (("mode" in fields) or ("effect" in fields) or ("element" in fields)):
+                continue
 
-        chain = {
-            "failure_id": fid,
-            "element": entity.get("failure_element_text"),
-            "function": entity.get("function"),
-            "mode": entity.get("failure_mode_text"),
-            "effect": entity.get("failure_effect_text"),
-            "cause": entity.get("failure_cause_text"),
-            "score": round(normalized_score, 4),
-            "matched_fields": list(info["field_hits"]),
-            "match_detail": info["matched"],
-        }
+            entity = kb.entity_store.get(fid)
+            if not entity:
+                continue
 
-        results.append(chain)
+            if product_domain and entity.get("product_domain") != product_domain:
+                continue
 
-    # =====================================================
-    # 3) Sort
-    # =====================================================
-    results.sort(key=lambda x: x["score"], reverse=True)
+            score = info["score"]
+            if normalize_by_hits:
+                # Optional: mild normalization; keep stable denominator (max 4 fields)
+                denom = max(1, min(len(fields), 4))
+                score = score / denom
 
-    if top_n:
-        results = results[:top_n]
+            chain = {
+                "node_id": node_id,
+                "failure_id": fid,
+                "element": entity.get("failure_element_text"),
+                "function": entity.get("function"),
+                "mode": entity.get("failure_mode_text"),
+                "cause": entity.get("failure_cause_text"),
+                "effect": entity.get("failure_effect_text"),
+                "score": round(float(score), 4),
+                "matched_fields": sorted(list(fields)),
+                "match_detail": info["matched"],
+            }
+            all_results.append(chain)
 
-    return results
+    # ------------------------------
+    # Global sort + truncate
+    # ------------------------------
+    all_results.sort(key=lambda x: x["score"], reverse=True)
+    if top_n is not None:
+        all_results = all_results[: int(top_n)]
 
+    return all_results
 
-# =========================================================
-# Helper
-# =========================================================
 
 def _accumulate_candidate_scores(
-    kb,
-    semantic_query_result,
-    candidate_scores,
+    kb: Any,
+    semantic_query_result: Dict[str, Any],
+    candidate_scores: Dict[str, Any],
+    query_text: str,
     field_type: str,
     weight: float,
-):
-    ids = semantic_query_result.get("ids", [[]])[0]
-    dists = semantic_query_result.get("distances", [[]])[0]
+    min_similarity: float = 0.35,
+    max_hits_per_field_per_failure: int = 3,
+) -> None:
+    """
+    Accumulate failure_id scores from semantic hits with graph constraint:
+    semantic_id -> failure_ids (from kb.field_store) -> candidate_scores[failure_id]
+
+    Improvements:
+    - min_similarity threshold to drop weak matches
+    - cap hits per field per failure_id to prevent score explosion
+    - dedupe semantic_id per failure_id per field
+    """
+
+    ids = (semantic_query_result.get("ids", [[]]) or [[]])[0] or []
+    dists = (semantic_query_result.get("distances", [[]]) or [[]])[0] or []
 
     for sid, dist in zip(ids, dists):
+        # Chroma distances are typically [0..2] depending on metric;
+        # keep your original conversion but guard.
+        try:
+            similarity = max(0.0, 1.0 - float(dist))
+        except Exception:
+            continue
 
-        similarity = max(0.0, 1 - float(dist))
+        if similarity < min_similarity:
+            continue
 
-        node = kb.field_store.get(sid, {})
+        node = kb.field_store.get(sid, {}) or {}
         failure_ids = node.get("failure_ids", []) or []
+        if not failure_ids:
+            continue
 
         for fid in failure_ids:
+            matched_list = candidate_scores[fid]["matched"][field_type]
+
+            # ---- cap per-field hits per failure ----
+            if max_hits_per_field_per_failure is not None and len(matched_list) >= int(max_hits_per_field_per_failure):
+                continue
 
             # ---- prevent duplicate semantic_id scoring ----
-            existing_ids = {
-                m["semantic_id"]
-                for m in candidate_scores[fid]["matched"][field_type]
-            }
-
+            existing_ids = {m["semantic_id"] for m in matched_list}
             if sid in existing_ids:
                 continue
 
-            candidate_scores[fid]["score"] += similarity * weight
+            candidate_scores[fid]["score"] += similarity * float(weight)
             candidate_scores[fid]["field_hits"].add(field_type)
 
-            candidate_scores[fid]["matched"][field_type].append({
+            matched_list.append({
                 "semantic_id": sid,
-                "similarity": round(similarity, 4)
+                "similarity": round(float(similarity), 4),
+                "structure_text": query_text,
             })
 
 if  __name__ == "__main__":
@@ -223,54 +284,47 @@ if  __name__ == "__main__":
     # 2) Structure Input
     # -----------------------------------------------------
     structure_input = {
-        "product_domain": "motor_drives",
-        "nodes": [
-            {
-                "element_id": "E1",
-                "failure_element": "",
-                "modes": [
-                "unstable control behavior",
-                "Motor failure / overheating",
-                "Insufficient torque output",
-                "No voltage applied",
-                "creates too much noise",
-
-                ],
-                "causes": [
-                    "Incorrect control parameter settings",
-                    "Thermal protection malfunction",
-                    "Startup motor current exceeds component limits",
-                    "Overvoltage caused by motor disconnection",
-                    "Embedded SW migration issue (e3.2)",
-                    
-                ],
-                "effects": [
-                    "Improper gear shifting",
-                    "Gear does not engage",
-                    "too much noise",
-                    "Motor not shorted while device is not powered",
-                    "No connection to RC",
-                    "Unstable cadence setting"
-                ]
-            }
-        ]
-    }
-
+    "product_domain": "motor_drives",
+    "nodes": [
+        {
+            "element_id": "E1",
+            "failure_element": "power train",
+            "modes": [
+                "unstable control performance",
+                "motor failure or overheating",
+                "insufficient torque delivery",
+                "no voltage supplied",
+                # "excessive noise generation",
+            ],
+            "causes": [
+                "incorrect control parameter configuration",
+                "thermal protection system malfunction",
+                "startup current exceeding component limits",
+                "overvoltage due to motor disconnection",
+                "embedded software migration issue (e3.2)",
+            ],
+            "effects": [
+                "improper gear shifting",
+                "gear fails to engage",
+                # "excessive noise",
+                "motor not shorted when device is unpowered",
+                "no connection to RC",
+                "unstable cadence control",
+            ]
+        }
+    ]
+}
     # -----------------------------------------------------
     # 3) Run Retrieval
     # -----------------------------------------------------
     results = build_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
-        top_k_per_field=5,
-        minimum_field_match=2,
+        top_k_per_field=10,
+        # minimum_field_match=2,
         top_n=50,
         # source_type="old_fmea",
     )
-    from typing import List, Dict, Tuple
-
-
-    from typing import List, Dict, Tuple, Optional
 
 
     def build_ground_truth_input(
