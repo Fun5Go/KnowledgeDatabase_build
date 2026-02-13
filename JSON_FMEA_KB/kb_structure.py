@@ -161,6 +161,17 @@ class FMEAFailureKB:
         if self.entity_store_path.exists():
             self.entity_store = json.loads(self.entity_store_path.read_text(encoding="utf-8"))
 
+        self.edge_store_path = self.persist_dir / "fmea_edge_store.json"
+        self.edge_store: Dict[str, Dict[str, Dict[str, int]]] = {}
+        if self.edge_store_path.exists():
+            self.edge_store = json.loads(self.edge_store_path.read_text(encoding="utf-8"))
+        else:
+            self.edge_store = {
+                "mode_to_cause": {},
+                "mode_to_effect": {},
+                "element_to_mode": {},
+            }
+
         # ---------- vector store ----------
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
         self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
@@ -264,6 +275,27 @@ class FMEAFailureKB:
         self.entity_store[entity.failure_id] = asdict(entity)
         self.entity_store_path.write_text(
             json.dumps(self.entity_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        def _add_edge(src_type: str, src_id: str, tgt_id: str):
+            if not src_id or not tgt_id:
+                return
+            self.edge_store.setdefault(src_type, {})
+            self.edge_store[src_type].setdefault(src_id, {})
+            self.edge_store[src_type][src_id].setdefault(tgt_id, 0)
+            self.edge_store[src_type][src_id][tgt_id] += 1
+                    # mode -> cause
+        _add_edge("mode_to_cause", entity.mode_id, entity.cause_id)
+
+        # mode -> effect
+        _add_edge("mode_to_effect", entity.mode_id, entity.effect_id)
+
+        # element -> mode
+        _add_edge("element_to_mode", entity.element_id, entity.mode_id)
+
+        # 3) persist edge store
+        self.edge_store_path.write_text(
+            json.dumps(self.edge_store, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
         
