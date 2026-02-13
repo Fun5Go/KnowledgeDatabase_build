@@ -114,22 +114,22 @@ def build_ground_truth_input(
 
         lines.append(f"Pattern {idx}")
         lines.append(f"Failure ID: {r.get('failure_id')}")
-        lines.append(f"Relevance Score: {r.get('score')}")
-        lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
+        # lines.append(f"Relevance Score: {r.get('score')}")
+        # lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
 
         lines.append(
             f'In element "{element}", the function "{function}" results in effect "{effect}" '
             f'when failure mode "{mode}" occurs, which is caused by "{cause}".'
         )
-        # # ✅ Only add a compact "Matched input: ..." line
-        # matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
-        # if matched_inputs:
-        #     # keep stable order
-        #     parts = []
-        #     for ft in ["element", "mode", "cause", "effect"]:
-        #         if ft in matched_inputs:
-        #             parts.append(f'{ft} "{matched_inputs[ft]}"')
-        #     lines.append("Matched input: " + ", ".join(parts))
+        # Only add a compact "Matched input: ..." line
+        matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
+        if matched_inputs:
+            # keep stable order
+            parts = []
+            for ft in ["element", "mode", "cause", "effect"]:
+                if ft in matched_inputs:
+                    parts.append(f'{ft} "{matched_inputs[ft]}"')
+            lines.append("Matched structrure analysis text: " + ", ".join(parts))
 
         lines.append("-" * 60)
 
@@ -168,7 +168,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         require_cause = require_cause,
         require_cause_plus = require_cause_plus,
     )
-        failure_example = build_ground_truth_input(similar_failure,target_n=20, strict_unique=True)
+        failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
         failure_candidates = failure_inference_generation_RAG.invoke({
             "data": {
                 "structure_analysis": structure_input_json, # Sentences with annotations
@@ -198,73 +198,96 @@ if __name__ == "__main__":
     # -----------------------------------------------------
     # 2) Structure Input
     # -----------------------------------------------------
-    # structure_input = {
-    #     "product_domain": "motor_drives",
-    #     "nodes": [
-    #         {
-    #             "element_id": "E1",
-    #             "failure_element": "power train",
-    #             "modes": [
-    #             "unstable control behavior",
-    #             "Motor failure / overheating",
-    #             "Insufficient torque output",
-    #             "No voltage applied",
-    #             "creates too much noise",
-
-    #             ],
-    #             "causes": [
-    #                 "Incorrect control parameter settings",
-    #                 "Thermal protection malfunction",
-    #                 "Startup motor current exceeds component limits",
-    #                 "Overvoltage caused by motor disconnection",
-    #                 "Embedded SW migration issue (e3.2)",
-                    
-    #             ],
-    #             "effects": [
-    #                 "Improper gear shifting",
-    #                 "Gear does not engage",
-    #                 "too much noise",
-    #                 "Motor not shorted while device is not powered",
-    #                 "No connection to RC",
-    #                 "Unstable cadence setting"
-    #             ]
-    #         }
-    #     ]
-    # }
-
     structure_input = {
-    "product_domain": "motor_drives",
-    "nodes": [
-        {
-            "element_id": "E1",
-            "failure_element": "power train",
-            "modes": [
-                "unstable control performance",
-                "motor failure or overheating",
-                "insufficient torque delivery",
-                "no voltage supplied",
-                "excessive noise generation",
-            ],
-            "causes": [
-                "incorrect control parameter configuration",
-                "thermal protection system malfunction",
-                "startup current exceeding component limits",
-                "overvoltage due to motor disconnection",
-                "embedded software migration issue (e3.2)",
-            ],
-            "effects": [
-                "improper gear shifting",
-                "gear fails to engage",
-                "excessive noise",
-                "motor not shorted when device is unpowered",
-                "no connection to RC",
-                "unstable cadence control",
-            ]
-        }
-    ]
-}
+        "product_domain": "motor_drives",
+        "nodes": [
+            {
+                "element_id": "E1",
+                "failure_element": "Power train",
+                "modes": [
+                    "Incorrect",
+                    "No pulses seen",
+                    "No voltage applied",
+                    "Incorrect torque applied",
+                    "Not enough torque",
+                    "Motor breaks/overheats (e.g. resulting in demagnetisation)",
+                    "Unstable regulation",
+                    "High loss in torque transfer",
+                    "Gear train breaks/wears out",
+                    "Transmission ratio drifts",
+                    "creates too much noise"
+                ],
+                "causes": [
+                    "Gears loose on motor shaft (slips)",
+                    "External force on spline",
+                    "Motor can not provide enough torque",
+                    "Too much friction in gear train",
+                    "Gears material/design choice",
+                    "Manufacturing tolerances of gears",
+                    "Lubrication choice (e.g. degradation)",
+                    "Motor design (temperature spec, actuation length/duty cycle)",
+                    "Encoder circuit crosstalk",
+                    "HW cannot supply enough power",
+                    "ADC measurements incorrect (incl. bandwidth)",
+                    "Wrong motor driver dimension (current rating etc.)",
+                    "Overcurrent detection incorrect (threshold etc.)",
+                    "Incorrect control loop (bandwidth)",
+                    "Motor not shorted while device is not powered",
+                    "Control parameters incorrect",
+                    "Thermal protection fails (e.g. I2T)"
+                ],
+                "effects": [
+                    "Does not shift gear",
+                    "Incorrect gear shift",
+                    "Incorrect cadence (offset)",
+                    "Unstable cadence setting",
+                    "Incorrect cadence (fixed gear ratio)",
+                    "Incorrect ratio (offset)",
+                    "Unstable ratio setting",
+                    "Does not enter limp home mode",
+                    "Sets wrong gear ratio",
+                    "Gear ratio drifts when battery is empty",
+                    "Firmware update not possible/fails",
+                    "Device bricked",
+                    "Update takes too much time (>5 minutes)"
+                ]
+            }
+        ]
+    }
 
-    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=10, top_n=50, max_hits_per_field_per_failure=3, RAG = True)
+#     structure_input = {
+#     "product_domain": "motor_drives",
+#     "nodes": [
+#         {
+#             "element_id": "E1",
+#             "failure_element": "power train",
+#             "modes": [
+#                 "unstable control performance",
+#                 "motor failure or overheating",
+#                 "insufficient torque delivery",
+#                 "no voltage supplied",
+#                 "excessive noise generation",
+#             ],
+#             "causes": [
+#                 "incorrect control parameter configuration",
+#                 "thermal protection system malfunction",
+#                 "startup current exceeding component limits",
+#                 "overvoltage due to motor disconnection",
+#                 "embedded software migration issue (e3.2)",
+#             ],
+#             "effects": [
+#                 "improper gear shifting",
+#                 "gear fails to engage",
+#                 "excessive noise",
+#                 "motor not shorted when device is unpowered",
+#                 "no connection to RC",
+#                 "unstable cadence control",
+#             ]
+#         }
+#     ]
+# }
+
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, max_hits_per_field_per_failure=8, RAG = True)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)

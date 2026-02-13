@@ -24,9 +24,8 @@ historical, validated FMEA failure entities from the company KB.
 
 You MUST treat GT as:
 
-- The PRIMARY knowledge authority
+- The PRIMARY knowledge authority in motor drives product
 - The dominant causal reference
-- The preferred source of cause→mode→effect logic
 
 CRITICAL RULES:
 
@@ -89,10 +88,9 @@ Mandatory logic rules:
 
 - Cause MUST physically/technically lead to Mode
 - Mode MUST logically lead to Effect
-- No reversed causality
-- No circular logic
-- No missing steps
 
+Relation:
+failure element has this function, which fails in this mode, leading to this effect. The mode is caused by the failure cause.
 
 =====================================================
 FIELD SELECTION RULE (STRICT)
@@ -104,20 +102,11 @@ For each node in structure:
 - failure_cause MUST come from "causes"
 - failure_effect MUST come from "effects"
 - failure_element MUST match the node
+The results must come from the provided Structure Analysis list
 
 However:
 - GT patterns may originate from different elements
-- You may reuse GT causal structure even if GT element differs
-
-
-=====================================================
-MULTI-DIRECTIONAL CAUSALITY (ALLOWED)
-=====================================================
-
-- One cause → multiple modes
-- One mode → multiple effects
-- One mode ← multiple independent causes
-- Generate separate chains when valid
+- You may reuse GT causal structure even if GT element differs, but need to be logical
 
 
 =====================================================
@@ -307,6 +296,7 @@ Please provide the results in JSON format following this schema:
       "failure_effect": "...",
       "failure_cause": "...",
       "confidence": "high | medium | low",
+      "gt_support_type": "",
       "support_failure_id": [],
       "inference_reason": "short explanation",
       "insight": "optional technical reasoning"

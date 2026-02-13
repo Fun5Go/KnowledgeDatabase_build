@@ -317,9 +317,9 @@ if  __name__ == "__main__":
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
-        query_text="Component break-down",
-        field_type="mode",
-        n_results=10,
+        query_text="Overcurrent detection incorrect",
+        field_type="cause",
+        n_results=5,
         min_count=1,
     )
     print_semantic_results(res, kb)

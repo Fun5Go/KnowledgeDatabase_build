@@ -16,19 +16,19 @@ from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 def build_failure_chains_from_structure(
     persist_dir: Union[str, Path],
     structure_input: Dict[str, Any],
-    top_k_per_field: int = 10,
+    top_k_per_field: int = 25,
     min_count: Optional[int] = None,
-    weight_element: float = 1.5,
-    weight_mode: float = 2.0,
-    weight_cause: float = 2.0,
-    weight_effect: float = 1.0,
+    weight_element: float = 1.0,
+    weight_mode: float = 1.5,
+    weight_cause: float = 1.5,
+    weight_effect: float = 1.5,
     top_n: Optional[int] = 50,
     source_type: Optional[str] = None,
     # ---- graph constraints / scoring controls ----
     require_cause: bool = False,
     require_cause_plus: bool = False,  # require (mode + cause) or (mode + effect) if True
-    min_similarity: float = 0.4,     # ignore weak semantic hits
-    max_hits_per_field_per_failure: int = 4,  # cap to prevent score explosion from many near-duplicates
+    min_similarity: float = 0.5,     # ignore weak semantic hits
+    max_hits_per_field_per_failure: int = 10,  # cap to prevent score explosion from many near-duplicates
     normalize_by_hits: bool = False,  # for graph-constrained retrieval, default False
 ) -> List[Dict[str, Any]]:
     """
@@ -268,6 +268,184 @@ def _accumulate_candidate_scores(
                 "structure_text": query_text,
             })
 
+
+def generate_failure_chains_from_structure(
+    persist_dir: Union[str, Path],
+    structure_input: Dict[str, Any],
+    top_k_per_field: int = 25,
+    min_count: Optional[int] = None,
+    weight_element: float = 1.0,
+    weight_mode: float = 1.5,
+    weight_cause: float = 1.5,
+    weight_effect: float = 1.5,
+    top_n: Optional[int] = 50,
+    source_type: Optional[str] = None,
+    require_cause: bool = False,
+    require_cause_plus: bool = False,
+    min_similarity: float = 0.5,
+    max_hits_per_field_per_failure: int = 10,
+    normalize_by_hits: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Graph-constrained retrieval + structure-native FMEA chain generation.
+
+    Output chains:
+    - Relation pattern from KB
+    - Semantic text from structure analysis
+    - KB used only as fallback completion
+    """
+
+    persist_dir = Path(persist_dir)
+    kb = _load_kb(persist_dir)
+    product_domain = structure_input.get("product_domain")
+
+    all_results: List[Dict[str, Any]] = []
+    nodes = structure_input.get("nodes", []) or []
+
+    for node in nodes:
+        node_id = node.get("element_id")
+
+        element_text = (node.get("failure_element") or "").strip()
+        modes = [x.strip() for x in (node.get("modes") or []) if str(x).strip()]
+        causes = [x.strip() for x in (node.get("causes") or []) if str(x).strip()]
+        effects = [x.strip() for x in (node.get("effects") or []) if str(x).strip()]
+
+        candidate_scores = defaultdict(lambda: {
+            "score": 0.0,
+            "field_hits": set(),
+            "matched": {
+                "element": [],
+                "mode": [],
+                "cause": [],
+                "effect": []
+            }
+        })
+
+        # -------------------------
+        # SEMANTIC SEARCH
+        # -------------------------
+
+        def query_and_accumulate(text: str, field: str, weight: float):
+            res = query_semantic_kb(
+                persist_dir,
+                text,
+                field_type=field,
+                n_results=top_k_per_field,
+                min_count=min_count,
+                source_type=source_type,
+            )
+            _accumulate_candidate_scores(
+                kb=kb,
+                semantic_query_result=res,
+                candidate_scores=candidate_scores,
+                query_text=text,
+                field_type=field,
+                weight=weight,
+                min_similarity=min_similarity,
+                max_hits_per_field_per_failure=max_hits_per_field_per_failure,
+            )
+
+        if element_text:
+            query_and_accumulate(element_text, "element", weight_element)
+
+        for m in modes:
+            query_and_accumulate(m, "mode", weight_mode)
+
+        for c in causes:
+            query_and_accumulate(c, "cause", weight_cause)
+
+        for e in effects:
+            query_and_accumulate(e, "effect", weight_effect)
+
+        # -------------------------
+        # GRAPH-CONSTRAINED FILTER
+        # -------------------------
+
+        for fid, info in candidate_scores.items():
+            fields = info["field_hits"]
+
+            if require_cause and ("cause" not in fields):
+                continue
+
+            if require_cause_plus and ("cause" in fields) and not (
+                ("mode" in fields) or ("effect" in fields) or ("element" in fields)
+            ):
+                continue
+
+            entity = kb.entity_store.get(fid)
+            if not entity:
+                continue
+
+            if product_domain and entity.get("product_domain") != product_domain:
+                continue
+
+            score = info["score"]
+
+            if normalize_by_hits:
+                denom = max(1, min(len(fields), 4))
+                score = score / denom
+
+            # -------------------------
+            # STRUCTURE TEXT REPLACEMENT
+            # -------------------------
+            def pick_best_structure_text(matched_list):
+                if not matched_list:
+                    return None
+                best = sorted(matched_list, key=lambda x: x["similarity"], reverse=True)[0]
+                return best.get("structure_text")
+
+            structure_element = pick_best_structure_text(info["matched"]["element"])
+            structure_mode    = pick_best_structure_text(info["matched"]["mode"])
+            structure_cause   = pick_best_structure_text(info["matched"]["cause"])
+            structure_effect  = pick_best_structure_text(info["matched"]["effect"])
+
+            # final values (structure first, kb fallback)
+            final_element = structure_element or entity.get("failure_element_text")
+            final_mode    = structure_mode    or entity.get("failure_mode_text")
+            final_cause   = structure_cause   or entity.get("failure_cause_text")
+            final_effect  = structure_effect  or entity.get("failure_effect_text")
+
+            # tag per field
+            tag_element = "STRUCTURE" if structure_element else "KB"
+            tag_mode    = "STRUCTURE" if structure_mode else "KB"
+            tag_cause   = "STRUCTURE" if structure_cause else "KB"
+            tag_effect  = "STRUCTURE" if structure_effect else "KB"
+
+            chain = {
+                "node_id": node_id,
+                "failure_id": fid,
+
+                # keep plain fields for downstream compatibility
+                "element": final_element,
+                "function": entity.get("function"),
+                "mode": final_mode,
+                "cause": final_cause,
+                "effect": final_effect,
+
+                # NEW: tagged display fields
+                "tagged": {
+                    "element": {"text": final_element, "tag": tag_element},
+                    "mode":    {"text": final_mode,    "tag": tag_mode},
+                    "cause":   {"text": final_cause,   "tag": tag_cause},
+                    "effect":  {"text": final_effect,  "tag": tag_effect},
+                },
+
+                "score": round(float(score), 4),
+                "matched_fields": sorted(list(fields)),
+                "match_detail": info["matched"],  # 保持你build_ground_truth_input能print
+            }
+            all_results.append(chain)
+
+    # -------------------------
+    # GLOBAL SORT
+    # -------------------------
+    all_results.sort(key=lambda x: x["score"], reverse=True)
+
+    if top_n is not None:
+        all_results = all_results[: int(top_n)]
+
+    return all_results
+
 if  __name__ == "__main__":
 
 
@@ -284,48 +462,77 @@ if  __name__ == "__main__":
     # 2) Structure Input
     # -----------------------------------------------------
     structure_input = {
-    "product_domain": "motor_drives",
-    "nodes": [
-        {
-            "element_id": "E1",
-            "failure_element": "power train",
-            "modes": [
-                "unstable control performance",
-                "motor failure or overheating",
-                "insufficient torque delivery",
-                "no voltage supplied",
-                # "excessive noise generation",
-            ],
-            "causes": [
-                "incorrect control parameter configuration",
-                "thermal protection system malfunction",
-                "startup current exceeding component limits",
-                "overvoltage due to motor disconnection",
-                "embedded software migration issue (e3.2)",
-            ],
-            "effects": [
-                "improper gear shifting",
-                "gear fails to engage",
-                # "excessive noise",
-                "motor not shorted when device is unpowered",
-                "no connection to RC",
-                "unstable cadence control",
-            ]
-        }
-    ]
-}
+        "product_domain": "motor_drives",
+        "nodes": [
+            {
+                "element_id": "E1",
+                "failure_element": "Power train",
+                "modes": [
+                    "Incorrect",
+                    "No pulses seen",
+                    "No voltage applied",
+                    "Incorrect torque applied",
+                    "Not enough torque",
+                    "Motor breaks/overheats (e.g. resulting in demagnetisation)",
+                    "Unstable regulation",
+                    "High loss in torque transfer",
+                    "Gear train breaks/wears out",
+                    "Transmission ratio drifts",
+                    "creates too much noise"
+                ],
+                "causes": [
+                    "Gears loose on motor shaft (slips)",
+                    "External force on spline",
+                    "Motor can not provide enough torque",
+                    "Too much friction in gear train",
+                    "Gears material/design choice",
+                    "Manufacturing tolerances of gears",
+                    "Lubrication choice (e.g. degradation)",
+                    "Motor design (temperature spec, actuation length/duty cycle)",
+                    "Encoder circuit crosstalk",
+                    "HW cannot supply enough power",
+                    "ADC measurements incorrect (incl. bandwidth)",
+                    "Wrong motor driver dimension (current rating etc.)",
+                    "Overcurrent detection incorrect (threshold etc.)",
+                    "Incorrect control loop (bandwidth)",
+                    "Motor not shorted while device is not powered",
+                    "Control parameters incorrect",
+                    "Thermal protection fails (e.g. I2T)"
+                ],
+                "effects": [
+                    "Does not shift gear",
+                    "Incorrect gear shift",
+                    "Incorrect cadence (offset)",
+                    "Unstable cadence setting",
+                    "Incorrect cadence (fixed gear ratio)",
+                    "Incorrect ratio (offset)",
+                    "Unstable ratio setting",
+                    "Does not enter limp home mode",
+                    "Sets wrong gear ratio",
+                    "Gear ratio drifts when battery is empty",
+                    "Firmware update not possible/fails",
+                    "Device bricked",
+                    "Update takes too much time (>5 minutes)"
+                ]
+            }
+        ]
+    }
+
     # -----------------------------------------------------
     # 3) Run Retrieval
     # -----------------------------------------------------
-    results = build_failure_chains_from_structure(
+    # results = build_failure_chains_from_structure(
+    #     persist_dir=KB_PATH,
+    #     structure_input=structure_input,
+    #     top_k_per_field=15,
+    #     # minimum_field_match=2,
+    #     top_n=50,
+    #     # source_type="old_fmea",
+    # )
+    results = generate_failure_chains_from_structure(
         persist_dir=KB_PATH,
-        structure_input=structure_input,
-        top_k_per_field=10,
-        # minimum_field_match=2,
-        top_n=50,
-        # source_type="old_fmea",
+        structure_input=structure_input
     )
-
 
     def build_ground_truth_input(
         results: List[Dict],
@@ -408,12 +615,18 @@ if  __name__ == "__main__":
             lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
 
             lines.append("Failure Chain:")
-            lines.append(f"  Element : {r.get('element')}")
-            lines.append(f"  Function: {r.get('function')}")
-            lines.append(f"  Mode    : {r.get('mode')}")
-            lines.append(f"  Effect  : {r.get('effect')}")
-            lines.append(f"  Cause   : {r.get('cause')}")
+            tagged = r.get("tagged") or {}
+            def fmt(field_name: str, fallback_key: str):
+                obj = tagged.get(field_name)
+                if isinstance(obj, dict) and "text" in obj:
+                    return f"{obj.get('text')}  [{obj.get('tag', 'UNKNOWN')}]"
+                return f"{r.get(fallback_key)}  [UNKNOWN]"
 
+            lines.append(f"  Element : {fmt('element', 'element')}")
+            lines.append(f"  Function: {r.get('function')}  [KB]")  # function通常来自KB
+            lines.append(f"  Mode    : {fmt('mode', 'mode')}")
+            lines.append(f"  Effect  : {fmt('effect', 'effect')}")
+            lines.append(f"  Cause   : {fmt('cause', 'cause')}")
             match_detail = r.get("match_detail", {}) or {}
             if isinstance(match_detail, dict):
                 for field_type, matches in match_detail.items():
@@ -427,25 +640,5 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=30,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=45,strict_unique=True)
     print(results)
-
-    # # -----------------------------------------------------
-    # # 4) Print Results
-    # # -----------------------------------------------------
-    # print("\n" + "=" * 100)
-    # print(f"Total Retrieved Chains: {len(results)}")
-    # print("=" * 100)
-
-    # for i, r in enumerate(results):
-    #     print(f"\nRank {i+1}")
-    #     print("-" * 80)
-    #     print(f"Failure ID : {r['failure_id']}")
-    #     print(f"Score      : {r['score']}")
-    #     print(f"Element    : {r['element']}")
-    #     print(f"Mode       : {r['mode']}")
-    #     print(f"Effect     : {r['effect']}")
-    #     print(f"Cause      : {r['cause']}")
-    #     print(f"Matched    : {r['matched_fields']}")
-
-    # print("\nDone.")
