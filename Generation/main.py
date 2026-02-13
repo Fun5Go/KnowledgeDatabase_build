@@ -1,4 +1,4 @@
-from .LLM_function import  failure_inference_generation
+from .LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE
 from Retriever.SA_query import build_failure_chains_from_structure
 from typing import Dict, List, Optional
 from pathlib import Path
@@ -121,16 +121,15 @@ def build_ground_truth_input(
             f'In element "{element}", the function "{function}" results in effect "{effect}" '
             f'when failure mode "{mode}" occurs, which is caused by "{cause}".'
         )
-
-        # ✅ Only add a compact "Matched input: ..." line
-        matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
-        if matched_inputs:
-            # keep stable order
-            parts = []
-            for ft in ["element", "mode", "cause", "effect"]:
-                if ft in matched_inputs:
-                    parts.append(f'{ft} "{matched_inputs[ft]}"')
-            lines.append("Matched input: " + ", ".join(parts))
+        # # ✅ Only add a compact "Matched input: ..." line
+        # matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
+        # if matched_inputs:
+        #     # keep stable order
+        #     parts = []
+        #     for ft in ["element", "mode", "cause", "effect"]:
+        #         if ft in matched_inputs:
+        #             parts.append(f'{ft} "{matched_inputs[ft]}"')
+        #     lines.append("Matched input: " + ", ".join(parts))
 
         lines.append("-" * 60)
 
@@ -152,9 +151,15 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
 @traceable(name="RAG")
 def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10, 
     max_hits_per_field_per_failure: int = 2, require_cause: bool = False,
-    require_cause_plus: bool = False, ):
+    require_cause_plus: bool = False, RAG: bool = True, ):
 
-    similar_failure = build_failure_chains_from_structure(
+
+
+    # structure_input = build_structure_analysis_input(structure_input)
+    structure_input_json = json.dumps(structure_input, ensure_ascii=False,indent=2)
+
+    if RAG == True:
+        similar_failure = build_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
         top_k_per_field=top_k_per_field,
@@ -163,19 +168,24 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         require_cause = require_cause,
         require_cause_plus = require_cause_plus,
     )
-
-    # structure_input = build_structure_analysis_input(structure_input)
-    structure_input_json = json.dumps(structure_input, ensure_ascii=False, indent=2)
-
-    failure_example = build_ground_truth_input(similar_failure,target_n=20, strict_unique=True)
-
-    failure_candidates = failure_inference_generation.invoke({
-        "data": {
-            "structure_analysis": structure_input_json, # Sentences with annotations
-            "gt_example": failure_example, # Similar FMEA cases in text format
-        }
-    })
-    return failure_candidates
+        failure_example = build_ground_truth_input(similar_failure,target_n=20, strict_unique=True)
+        failure_candidates = failure_inference_generation_RAG.invoke({
+            "data": {
+                "structure_analysis": structure_input_json, # Sentences with annotations
+                "gt_example": failure_example, # Similar FMEA cases in text format
+            }
+        })
+        OUTPUT_PATH = Path(
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json"
+    )
+    else:
+       failure_candidates = failure_inference_generation_PURE.invoke({
+                       "data": {
+                "structure_analysis": structure_input_json, # Sentences with annotations
+            }
+       })
+       OUTPUT_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_pure.json")
+    return failure_candidates,OUTPUT_PATH
 
 if __name__ == "__main__":
         # -----------------------------------------------------
@@ -183,9 +193,6 @@ if __name__ == "__main__":
     # -----------------------------------------------------
     KB_PATH = Path(
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb"
-    )
-    OUTPUT_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates.json"
     )
 
     # -----------------------------------------------------
@@ -257,7 +264,7 @@ if __name__ == "__main__":
     ]
 }
 
-    result = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=10, top_n=50, max_hits_per_field_per_failure=3)
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=10, top_n=50, max_hits_per_field_per_failure=3, RAG = True)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)

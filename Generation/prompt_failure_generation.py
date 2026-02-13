@@ -1,74 +1,83 @@
-failure_inference_prompt = """
-==============================
+failure_inference_prompt_RAG = failure_inference_prompt_RAG = """
+=====================================================
 TASK
-==============================
+=====================================================
 
-You are an automotive FMEA expert.
+You are a senior automotive FMEA domain expert.
 
-Your task is to generate the MOST RELEVANT and LOGICALLY CONSISTENT
-FMEA failure chains for the given structure analysis.
+Your task is to reconstruct the MOST LOGICALLY CONSISTENT and
+KB-ANCHORED FMEA failure chains for the given structure analysis.
 
-You MUST use the Ground Truth Similar Example as the PRIMARY knowledge source.
+The PRIMARY objective is to MAXIMIZE reuse of Ground Truth Similar
+Examples retrieved from the Company Failure Knowledge Base.
 
-==============================
-GROUND TRUTH PRIORITY (CRITICAL)
-==============================
-
-The Ground Truth Similar Example is retrieved from the Failure Knowledge Base (KB)
-and represents historical, real FMEA failure chains that are semantically closest
-to the current structure.
-
-You MUST treat the Ground Truth Example as the PRIMARY and MOST TRUSTWORTHY
-knowledge source for this task.
-
-This means:
-- Prefer reusing and adapting GT causal patterns over creating new ones.
-- When a structure item can be mapped to one or more GT patterns, you MUST map it.
-- Only use engineering inference to bridge small gaps needed for alignment.
-- If a chain contradicts GT patterns, do NOT output it (unless structure strongly proves otherwise).
-- Aim to maximize the utilization of relevant GT patterns (high coverage), while keeping correctness.
-
-The goal is NOT creativity. The goal is KB-anchored reconstruction of likely failure chains
-based on historical similar failures.
-
-==============================
-STRICT INFERENCE CONSTRAINTS
-==============================
-
-1. Ground Truth Example is the dominant reference from historical KB failures (MANDATORY):
-   - The GT example contains historical similar failures stored in the knowledge base.
-   - It defines the most reliable cause → mode → effect logic for this context.
-   - You MUST prioritize GT patterns whenever they are semantically applicable.
-   - Do NOT ignore GT patterns: if a structure node matches a GT pattern, you MUST reuse/adapt it.
-   - Use inference ONLY as a light bridge to align structure fields with GT logic, not to invent new chains.
-
-2. Multi-directional Causality is allowed:
-   - A single failure cause may lead to multiple failure modes.
-   - A single failure mode may have multiple independent causes (e.g., HW, SW, thermal, mechanical).
-   - Generate separate failure chains for each valid pairing.
-
-3. Controlled engineering inference is allowed:
-   - Minor logical completion
-   - Reasonable domain-consistent inference
-   - Alignment with known motor_drive behavior
-
-4. DO NOT:
-   - Invent unrealistic physics
-   - Create speculative system behavior
-   - Reverse cause/effect direction
-   - Create circular logic
-   - Introduce unrelated disciplines without support
-
-5. If structure alignment is weak:
-   - Either do not generate the chain
-   - Or assign lower confidence
+This is NOT a creativity task.
+This is a Knowledge-Base Reconstruction task.
 
 
-==============================
-VALID FMEA CAUSAL STRUCTURE
-==============================
+=====================================================
+GROUND TRUTH DOMINANCE (HIGHEST PRIORITY RULE)
+=====================================================
 
-Each candidate must strictly follow:
+The Ground Truth Similar Example (GT) represents
+historical, validated FMEA failure entities from the company KB.
+
+You MUST treat GT as:
+
+- The PRIMARY knowledge authority
+- The dominant causal reference
+- The preferred source of cause→mode→effect logic
+
+CRITICAL RULES:
+
+1. If structure fields semantically match ANY GT failure entity,
+   you MUST reuse or adapt that GT logic.
+
+2. You are NOT constrained by the same failure_element.
+   - If a GT cause→mode→effect pattern applies logically
+     to the current element, you MUST reuse it.
+   - Cross-element reuse is allowed when physics/function align.
+
+3. You SHOULD prioritize:
+   - Complete GT failure entities
+   - Then combinations of multiple GT entities
+   - Only lastly: controlled engineering inference
+
+4. The goal is HIGH COVERAGE of GT utilization,
+   while maintaining strict causal correctness.
+
+5. If a generated chain contradicts GT patterns,
+   DO NOT output it unless structure strongly enforces it.
+
+
+=====================================================
+GT SUPPORT CLASSIFICATION (MANDATORY FIELD)
+=====================================================
+
+Each generated failure candidate MUST include:
+
+"gt_support_type": one of:
+
+- "complete_entity"
+    → Fully supported by a single GT failure entity
+
+- "composed_from_multiple"
+    → Built by stitching multiple GT entities
+      (e.g., cause from one GT failure + mode/effect from another)
+
+- "partial_pattern"
+    → Partially aligned with GT but requires small inference
+
+- "no_direct_gt"
+    → No GT support; pure engineering inference
+      (ONLY allowed if structure has no GT match)
+
+
+=====================================================
+STRICT CAUSAL STRUCTURE
+=====================================================
+
+Each candidate MUST strictly follow:
 
 failure_element
    → failure_function
@@ -76,16 +85,18 @@ failure_element
          → failure_effect
             ← caused by ← failure_cause
 
-Mandatory rules:
-- Cause MUST logically lead to Mode
+Mandatory logic rules:
+
+- Cause MUST physically/technically lead to Mode
 - Mode MUST logically lead to Effect
-- No reversed logic
-- No missing links
+- No reversed causality
+- No circular logic
+- No missing steps
 
 
-==============================
-FIELD SELECTION RULE
-==============================
+=====================================================
+FIELD SELECTION RULE (STRICT)
+=====================================================
 
 For each node in structure:
 
@@ -94,61 +105,99 @@ For each node in structure:
 - failure_effect MUST come from "effects"
 - failure_element MUST match the node
 
-Do NOT invent new phrases unless strongly supported by:
-- GT pattern
-- Or well-established motor_drive engineering knowledge
+However:
+- GT patterns may originate from different elements
+- You may reuse GT causal structure even if GT element differs
 
 
-==============================
-SUPPORT FAILURE ID RULE
-==============================
+=====================================================
+MULTI-DIRECTIONAL CAUSALITY (ALLOWED)
+=====================================================
 
-- Use ONLY failure IDs from the Ground Truth Example if applicable.
-- A candidate may reference multiple IDs.
-- If the chain is strongly aligned with GT → include its ID(s).
-- If NO GT ID directly supports the chain:
-    - Leave support_failure_id as empty list []
-    - Provide full technical reasoning inside "insight"
-    - Clearly explain why the inferred relationship is valid.
+- One cause → multiple modes
+- One mode → multiple effects
+- One mode ← multiple independent causes
+- Generate separate chains when valid
 
 
-==============================
+=====================================================
+SUPPORT FAILURE ID RULE (IMPORTANT)
+=====================================================
+
+- support_failure_id MUST be a list
+- It may contain:
+    - One ID
+    - Multiple IDs
+    - Or be empty []
+
+Rules:
+
+1. If fully supported by one GT failure:
+      support_failure_id = ["FMEA_R1"]
+      gt_support_type = "complete_entity"
+
+2. If stitched from several GT failures:
+      support_failure_id = ["FMEA_R3", FMEA_R5"]
+      gt_support_type = "composed_from_multiple"
+
+3. If partially supported:
+      support_failure_id = [""]
+      gt_support_type = "partial_pattern"
+
+4. If no GT support:
+      support_failure_id = []
+      gt_support_type = "no_direct_gt"
+      AND insight field MUST contain detailed reasoning.
+
+
+=====================================================
 CONFIDENCE LEVEL
-==============================
+=====================================================
 
-- "high"   → structure closely matches GT pattern
-- "medium" → mostly aligned with minor adjustment
-- "low"    → inferred without direct GT support but logically valid
+- "high"
+    → Direct GT entity reuse (minimal modification)
 
+- "medium"
+    → Composed or partially aligned with GT
 
-==============================
-INFERENCE REASON
-==============================
-
-Brief explanation of:
-- How structure aligns with GT pattern
-- Why cause → mode → effect chain is valid
-
-Keep concise and engineering-focused.
+- "low"
+    → No direct GT support but logically valid
 
 
-==============================
+=====================================================
+INFERENCE LIMITATIONS
+=====================================================
+
+Allowed:
+- Minor alignment adjustments
+- Engineering-consistent bridging
+- Well-known motor_drive failure physics
+
+NOT allowed:
+- Unrealistic physics
+- Speculative system behavior
+- Discipline mixing without basis
+- Reverse logic
+- Creativity beyond GT patterns
+
+
+=====================================================
 GROUND TRUTH SIMILAR EXAMPLE
-==============================
+=====================================================
 
 {gt_example}
 
 
-==============================
+=====================================================
 STRUCTURE ANALYSIS (JSON)
-==============================
+=====================================================
 
 {structure_analysis}
 
 
-==============================
+=====================================================
 OUTPUT FORMAT (STRICT JSON ONLY)
-==============================
+=====================================================
 
 {{
   "failure_candidates": [
@@ -159,14 +208,110 @@ OUTPUT FORMAT (STRICT JSON ONLY)
       "failure_effect": "...",
       "failure_cause": "...",
       "confidence": "high | medium | low",
+      "gt_support_type": "complete_entity | composed_from_multiple | partial_pattern | no_direct_gt",
       "support_failure_id": [""],
-      "inference_reason": "short explanation",
-      "insight": "only required if no GT support; provide full technical reasoning"
+      "inference_reason": "short GT alignment explanation",
+      "insight": "ONLY required if gt_support_type == no_direct_gt"
     }}
   ]
 }}
 
 Return ONLY valid JSON.
-Do not output any extra explanation.
-
+Do NOT output extra explanation.
 """
+
+
+
+failure_inference_prompt_PURE = """
+==============================
+TASK
+==============================
+
+You are an automotive FMEA expert.
+
+Your task is to generate the most relevant and logically consistent
+FMEA failure chains for the given structure analysis using engineering knowledge.
+
+
+==============================
+INFERENCE PRINCIPLES
+==============================
+
+The generated chains should:
+
+• Follow realistic cause → mode → effect relationships
+• Remain physically and logically consistent
+• Reflect typical motor drive reliability behavior
+• Prefer well-established engineering patterns over speculative ones
+• Use reasonable inference only when necessary to complete missing links
+
+
+==============================
+CAUSAL STRUCTURE REFERENCE
+==============================
+
+Typical structure:
+
+failure_element
+  → failure_function
+     → failure_mode
+        → failure_effect
+           ← failure_cause
+
+Each chain is expected to keep this direction and remain complete.
+
+
+==============================
+FIELD SELECTION GUIDANCE
+==============================
+
+When information is available:
+
+• failure_mode generally comes from "modes"
+• failure_cause generally comes from "causes"
+• failure_effect generally comes from "effects"
+• failure_element matches the node
+
+If fields are missing, engineering-consistent inference may be applied.
+Lower confidence can be assigned for inferred parts.
+
+
+==============================
+CONFIDENCE
+==============================
+
+high   – strong structural support  
+medium – partially inferred  
+low    – mostly inferred  
+
+
+==============================
+STRUCTURE ANALYSIS (JSON)
+==============================
+
+{structure_analysis}
+
+
+==============================
+OUTPUT
+==============================
+
+Please provide the results in JSON format following this schema:
+
+{{
+  "failure_candidates": [
+    {{
+      "failure_element": "...",
+      "failure_function": "...",
+      "failure_mode": "...",
+      "failure_effect": "...",
+      "failure_cause": "...",
+      "confidence": "high | medium | low",
+      "support_failure_id": [],
+      "inference_reason": "short explanation",
+      "insight": "optional technical reasoning"
+    }}
+  ]
+}}
+"""
+
