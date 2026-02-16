@@ -283,7 +283,7 @@ def generate_failure_chains_from_structure(
     structure_input: Dict[str, Any],
     top_k_per_field: int = 25,
     min_count: Optional[int] = None,
-    weight_element: float = 1.0,
+    weight_element: float = 0.5,
     weight_mode: float = 1.5,
     weight_cause: float = 1.5,
     weight_effect: float = 1.5,
@@ -399,7 +399,7 @@ def generate_failure_chains_from_structure(
 
             # bonus strategy
             if mce_hit_count >= 2:
-                score *= 0.8          # 强化双命中
+                score *= 0.7          # 强化双命中
             elif mce_hit_count == 1:
                 score *= 1         # 轻微惩罚
             else:

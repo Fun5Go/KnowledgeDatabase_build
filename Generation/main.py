@@ -35,107 +35,6 @@ def build_structure_analysis_input(structure_input: Dict,):
     return "\n".join(lines)
     
 
-def build_ground_truth_input(
-    results: List[Dict],
-    target_n: Optional[int] = None,
-    strict_unique: bool = False,
-) -> str:
-
-    if not results:
-        return "No similar failure chains were retrieved from the knowledge base."
-
-    if target_n is None:
-        target_n = len(results)
-
-    def norm(x):
-        if x is None:
-            return ""
-        return " ".join(str(x).strip().split()).lower()
-
-    def sig(r):
-        return (
-            norm(r.get("element")),
-            norm(r.get("function")),
-            norm(r.get("mode")),
-            norm(r.get("effect")),
-            norm(r.get("cause")),
-        )
-
-    selected = []
-    seen = set()
-    duplicates = []
-
-    for r in results:
-        s = sig(r)
-        if s in seen:
-            duplicates.append(r)
-            continue
-        seen.add(s)
-        selected.append(r)
-        if len(selected) >= target_n:
-            break
-
-    if not strict_unique and len(selected) < target_n:
-        need = target_n - len(selected)
-        selected.extend(duplicates[:need])
-
-    def extract_matched_inputs(match_detail: dict) -> dict:
-        """
-        Return {field_type: 'a | b | c'} extracted from hit['structure_text'].
-        Dedup + preserve order.
-        """
-        out = {}
-        for ft in ["element", "mode", "cause", "effect"]:
-            hits = (match_detail or {}).get(ft, []) or []
-            seen_txt = set()
-            texts = []
-            for h in hits:
-                t = (h.get("structure_text") or "").strip()
-                if not t:
-                    continue
-                key = norm(t)
-                if key in seen_txt:
-                    continue
-                seen_txt.add(key)
-                texts.append(t)
-            if texts:
-                out[ft] = " | ".join(texts)
-        return out
-
-    lines = []
-    lines.append("GROUND TRUTH FAILURE PATTERN:\n")
-
-    for idx, r in enumerate(selected, start=1):
-        element = r.get("element")
-        function = r.get("function") or "N/A"
-        mode = r.get("mode") or "N/A"
-        effect = r.get("effect") or "N/A"
-        cause = r.get("cause") or "N/A"
-
-        lines.append(f"Pattern {idx}")
-        lines.append(f"Failure ID: {r.get('failure_id')}")
-        # lines.append(f"Relevance Score: {r.get('score')}")
-        # lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
-
-        lines.append(
-            f'In element "{element}", the function "{function}" results in effect "{effect}" '
-            f'when failure mode "{mode}" occurs, which is caused by "{cause}".'
-        )
-        # Only add a compact "Matched input: ..." line
-        matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
-        if matched_inputs:
-            # keep stable order
-            parts = []
-            for ft in ["element", "mode", "cause", "effect"]:
-                if ft in matched_inputs:
-                    parts.append(f'{ft} "{matched_inputs[ft]}"')
-            lines.append("Matched structrure analysis text: " + ", ".join(parts))
-
-        lines.append("-" * 60)
-
-    return "\n".join(lines)
-
-
 def build_fill_entity(
     results: List[Dict],
     target_n: Optional[int] = None,
@@ -148,12 +47,17 @@ def build_fill_entity(
     if target_n is None:
         target_n = len(results)
 
+    # ---------------------------
+    # Utility functions
+    # ---------------------------
+
     def norm(x):
         if x is None:
             return ""
         return " ".join(str(x).strip().split()).lower()
 
     def sig(r):
+        """Signature for duplicate filtering"""
         return (
             norm(r.get("element")),
             norm(r.get("function")),
@@ -161,6 +65,31 @@ def build_fill_entity(
             norm(r.get("effect")),
             norm(r.get("cause")),
         )
+
+    def with_tag(text: str, tag: str) -> str:
+        """
+        Build display text with tag.
+        Example:
+        ADC measurements incorrect [STRUCTURE]
+        """
+        text = (text or "N/A").strip()
+        tag = (tag or "KB").strip().upper()
+        return f"{text} [{tag}]"
+
+    def get_tagged_text(r: dict, field: str, fallback_text: str):
+        """
+        Extract text and tag from r["tagged"][field]
+        Fallback to plain r[field]
+        Default tag = KB
+        """
+        tagged = (r.get("tagged") or {}).get(field) or {}
+        text = tagged.get("text") or r.get(field) or fallback_text or "N/A"
+        tag = tagged.get("tag") or "KB"
+        return text, tag
+
+    # ---------------------------
+    # Select unique results
+    # ---------------------------
 
     selected = []
     seen = set()
@@ -180,68 +109,56 @@ def build_fill_entity(
         need = target_n - len(selected)
         selected.extend(duplicates[:need])
 
-    def extract_matched_inputs(match_detail: dict) -> dict:
-        out = {}
-        for ft in ["element", "mode", "cause", "effect"]:
-            hits = (match_detail or {}).get(ft, []) or []
-            seen_txt = set()
-            texts = []
-            for h in hits:
-                t = (h.get("structure_text") or "").strip()
-                if not t:
-                    continue
-                key = norm(t)
-                if key in seen_txt:
-                    continue
-                seen_txt.add(key)
-                texts.append(t)
-            if texts:
-                out[ft] = " | ".join(texts)
-        return out
+    # ---------------------------
+    # Build structured entities
+    # ---------------------------
 
-    def get_tagged_text(r: dict, field: str, fallback_text: str) -> tuple[str, str]:
-        """
-        Return (text, tag) from r["tagged"][field], fallback to r[field] / fallback_text.
-        Tag defaults to "KB" if missing.
-        """
-        tagged = (r.get("tagged") or {}).get(field) or {}
-        text = (tagged.get("text") or r.get(field) or fallback_text or "N/A")
-        tag = (tagged.get("tag") or "KB")
-        return text, tag
+    entities = []
+    llm_entities = []
 
-    lines = []
-
-    for idx, r in enumerate(selected, start=1):
-        # Plain values kept for compatibility, but printing uses tagged if present
+    for r in selected:
         function = r.get("function") or "N/A"
 
         element_text, element_tag = get_tagged_text(r, "element", r.get("element"))
-        mode_text, mode_tag       = get_tagged_text(r, "mode",    r.get("mode"))
-        effect_text, effect_tag   = get_tagged_text(r, "effect",  r.get("effect"))
-        cause_text, cause_tag     = get_tagged_text(r, "cause",   r.get("cause"))
+        mode_text, mode_tag = get_tagged_text(r, "mode", r.get("mode"))
+        cause_text, cause_tag = get_tagged_text(r, "cause", r.get("cause"))
+        effect_text, effect_tag = get_tagged_text(r, "effect", r.get("effect"))
 
-        lines.append(f"To be filled failure entity: {idx}")
-        lines.append(f"Failure ID: {r.get('failure_id')}")
+        # -------------------------
+        # Internal structured entity (for your system logic)
+        # -------------------------
+        entity = {
+            "failure_id": r.get("failure_id"),
+            "failure_element": element_text,
+            "failure_element_tag": element_tag,
+            "failure_function": function,
+            "given_failure_mode": mode_text,
+            "given_failure_mode_tag": mode_tag,
+            "given_failure_cause": cause_text,
+            "given_failure_cause_tag": cause_tag,
+            "given_failure_effect": effect_text,
+            "given_failure_effect_tag": effect_tag,
+        }
 
-        # g
-        lines.append(
-            f'In element "{element_text}" [{element_tag}], the function "{function}" results in effect '
-            f'"{effect_text}" [{effect_tag}] when failure mode "{mode_text}" [{mode_tag}] occurs, '
-            f'which is caused by "{cause_text}" [{cause_tag}].'
-        )
+        entities.append(entity)
 
-        # # 你原来就有的“Matched ...”行：如果你也想保留，继续保留；不想就删掉这段即可
-        # matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
-        # if matched_inputs:
-        #     parts = []
-        #     for ft in ["element", "mode", "cause", "effect"]:
-        #         if ft in matched_inputs:
-        #             parts.append(f'{ft} "{matched_inputs[ft]}"')
-        #     lines.append("Matched structure analysis text: " + ", ".join(parts))
+        # -------------------------
+        # LLM-only payload (display only)
+        # -------------------------
+        llm_entity = {
+            "failure_id": r.get("failure_id"),
+            "failure_function": function,
+            "failure_element": with_tag(element_text, element_tag),
+            "failure_mode": with_tag(mode_text, mode_tag),
+            "ailure_cause": with_tag(cause_text, cause_tag),
+            "failure_effect": with_tag(effect_text, effect_tag),
+        }
 
-        # lines.append("-" * 60)
+        llm_entities.append(llm_entity)
 
-    return "\n".join(lines)
+    # 
+    return json.dumps(llm_entities, indent=2, ensure_ascii=False)
+
 
 
 def save_failure_candidates_to_json(result: dict, output_path: Path):
@@ -296,7 +213,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 require_cause = require_cause,
                 require_cause_plus = require_cause_plus,
             )
-            semi_candidates =  build_fill_entity(semi_candidates,target_n=15,strict_unique=True)
+            semi_candidates =  build_fill_entity(semi_candidates,target_n=25,strict_unique=True)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -333,7 +250,6 @@ if __name__ == "__main__":
                 "element_id": "E1",
                 "failure_element": "Power train",
                 "modes": [
-                    "Incorrect",
                     "No pulses seen",
                     "No voltage applied",
                     "Incorrect torque applied",

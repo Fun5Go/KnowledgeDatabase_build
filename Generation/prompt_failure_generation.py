@@ -359,7 +359,7 @@ STRICT FIELD RULES
 =====================================================
 
 failure_element:
-- Copy from the Structure Analysis
+-Directly from the Structure Analysis
 
 failure_function:
 - MUST remain exactly as given in the input entity.
@@ -397,24 +397,28 @@ PROHIBITED ACTIONS
 =====================================================
 
 - Do NOT use any KB wording in final output.
+- Do NOT map "failure_mode" in "failure_effect"
 - Do NOT invent new modes, causes, or effects.
 - Do NOT merge entities.
 - Do NOT skip any entity.
 - Do NOT modify failure_element or failure_function.
 - Do NOT output partial chains.
-
-=====================================================
-INPUT FAILURE ENTITIES
-=====================================================
-
-{to_be_fill_failure}
-
+- Avoid the same text in failure_mode, failure_cause, and failure effect. 
 
 =====================================================
 STRUCTURE ANALYSIS (JSON)
 =====================================================
 
 {structure_analysis}
+
+
+=====================================================
+INPUT FAILURE ENTITIES
+=====================================================
+Use the specific text from the Structure Analysis above, and put them into the correct field position.
+
+
+{to_be_fill_failure}
 
 
 =====================================================
