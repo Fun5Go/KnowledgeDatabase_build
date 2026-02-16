@@ -245,6 +245,12 @@ def _accumulate_candidate_scores(
 
         node = kb.field_store.get(sid, {}) or {}
         failure_ids = node.get("failure_ids", []) or []
+        def _get_kb_text(node: dict, field_type: str) -> str:
+            for k in ("text",):
+                v = node.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            return ""
         if not failure_ids:
             continue
 
@@ -262,11 +268,13 @@ def _accumulate_candidate_scores(
 
             candidate_scores[fid]["score"] += similarity * float(weight)
             candidate_scores[fid]["field_hits"].add(field_type)
+            kb_text = _get_kb_text(node, field_type)
 
             matched_list.append({
                 "semantic_id": sid,
                 "similarity": round(float(similarity), 4),
                 "structure_text": query_text,
+                "kb_text": kb_text
             })
 
 
@@ -274,7 +282,6 @@ def generate_failure_chains_from_structure(
     persist_dir: Union[str, Path],
     structure_input: Dict[str, Any],
     top_k_per_field: int = 25,
-    top_k_range: Optional[int] = None,
     min_count: Optional[int] = None,
     weight_element: float = 1.0,
     weight_mode: float = 1.5,
@@ -284,12 +291,18 @@ def generate_failure_chains_from_structure(
     source_type: Optional[str] = None,
     require_cause: bool = False,
     require_cause_plus: bool = False,
-    min_similarity: float = 0.6,
-    minimal_score: float = 0.0,
+    min_similarity: float = 0.45,
     max_hits_per_field_per_failure: int = 10,
     normalize_by_hits: bool = False,
-    min_field_match: int = 1,   # NEW: field coverage control
 ) -> List[Dict[str, Any]]:
+    """
+    Graph-constrained retrieval + structure-native FMEA chain generation.
+
+    Output chains:
+    - Relation pattern from KB
+    - Semantic text from structure analysis
+    - KB used only as fallback completion
+    """
 
     persist_dir = Path(persist_dir)
     kb = _load_kb(persist_dir)
@@ -306,13 +319,6 @@ def generate_failure_chains_from_structure(
         causes = [x.strip() for x in (node.get("causes") or []) if str(x).strip()]
         effects = [x.strip() for x in (node.get("effects") or []) if str(x).strip()]
 
-        anchor_nodes = {
-            "element": set(),
-            "mode": set(),
-            "cause": set(),
-            "effect": set(),
-        }
-
         candidate_scores = defaultdict(lambda: {
             "score": 0.0,
             "field_hits": set(),
@@ -324,9 +330,9 @@ def generate_failure_chains_from_structure(
             }
         })
 
-        # =====================================================
+        # -------------------------
         # SEMANTIC SEARCH
-        # =====================================================
+        # -------------------------
 
         def query_and_accumulate(text: str, field: str, weight: float):
             res = query_semantic_kb(
@@ -337,16 +343,6 @@ def generate_failure_chains_from_structure(
                 min_count=min_count,
                 source_type=source_type,
             )
-
-            ids = (res.get("ids", [[]]) or [[]])[0] or []
-            dists = (res.get("distances", [[]]) or [[]])[0] or []
-
-            for sid, dist in zip(ids, dists):
-                similarity = max(0.0, 1.0 - float(dist))
-                if similarity < min_similarity:
-                    continue
-                anchor_nodes[field].add(sid)
-
             _accumulate_candidate_scores(
                 kb=kb,
                 semantic_query_result=res,
@@ -360,69 +356,22 @@ def generate_failure_chains_from_structure(
 
         if element_text:
             query_and_accumulate(element_text, "element", weight_element)
+
         for m in modes:
             query_and_accumulate(m, "mode", weight_mode)
+
         for c in causes:
             query_and_accumulate(c, "cause", weight_cause)
+
         for e in effects:
             query_and_accumulate(e, "effect", weight_effect)
 
-        # =====================================================
-        # GRAPH EXPANSION
-        # =====================================================
-
-        graph_candidate_failures = set()
-
-        for mode_id in anchor_nodes["mode"]:
-            mode_node = kb.field_store.get(mode_id)
-            if mode_node:
-                graph_candidate_failures.update(mode_node.get("failure_ids", []))
-
-            for cause_id in kb.edge_store.get("mode_to_cause", {}).get(mode_id, {}):
-                node = kb.field_store.get(cause_id)
-                if node:
-                    graph_candidate_failures.update(node.get("failure_ids", []))
-
-            for effect_id in kb.edge_store.get("mode_to_effect", {}).get(mode_id, {}):
-                node = kb.field_store.get(effect_id)
-                if node:
-                    graph_candidate_failures.update(node.get("failure_ids", []))
-
-        if not graph_candidate_failures:
-            for cause_id in anchor_nodes["cause"]:
-                node = kb.field_store.get(cause_id)
-                if node:
-                    graph_candidate_failures.update(node.get("failure_ids", []))
-
-        if anchor_nodes["element"]:
-            element_failures = set()
-            for element_id in anchor_nodes["element"]:
-                node = kb.field_store.get(element_id)
-                if node:
-                    element_failures.update(node.get("failure_ids", []))
-            if element_failures:
-                graph_candidate_failures &= element_failures
-
-        if graph_candidate_failures:
-            candidate_scores = {
-                fid: info
-                for fid, info in candidate_scores.items()
-                if fid in graph_candidate_failures
-            }
-
-        # =====================================================
-        # SCORING + FIELD COVERAGE
-        # =====================================================
-
-        ranked_local = []
+        # -------------------------
+        # GRAPH-CONSTRAINED FILTER
+        # -------------------------
 
         for fid, info in candidate_scores.items():
-
             fields = info["field_hits"]
-            field_count = len(fields)
-
-            if field_count < min_field_match:
-                continue
 
             if require_cause and ("cause" not in fields):
                 continue
@@ -441,59 +390,47 @@ def generate_failure_chains_from_structure(
 
             score = info["score"]
 
-            # -------- Field Coverage Weight --------
-            if field_count == 1:
-                score *= 0.5
+            # -------------------------
+            # CONNECTION BONUS (mode/cause/effect)
+            # -------------------------
+
+            mce_fields = {"mode", "cause", "effect"}
+            mce_hit_count = len(fields.intersection(mce_fields))
+
+            # bonus strategy
+            if mce_hit_count >= 2:
+                score *= 1.5          # 强化双命中
+            elif mce_hit_count == 1:
+                score *= 0.85         # 轻微惩罚
             else:
-                score *= (1 + 0.3 * (field_count - 1))
+                score *= 0.6          # 严重惩罚
 
-            # -------- Graph Bonus --------
-            entity_mode_id = entity.get("mode_id")
-            entity_cause_id = entity.get("cause_id")
-
-            if entity_mode_id in anchor_nodes["mode"]:
-                cause_weight = kb.edge_store.get("mode_to_cause", {}) \
-                    .get(entity_mode_id, {}) \
-                    .get(entity_cause_id, 0)
-                if cause_weight > 0:
-                    score += math.log(1 + cause_weight)
 
             if normalize_by_hits:
-                denom = max(1, min(field_count, 4))
-                score /= denom
+                denom = max(1, min(len(fields), 4))
+                score = score / denom
 
-            if score < minimal_score:
-                continue
-
-            ranked_local.append((fid, entity, info, score))
-
-        ranked_local.sort(key=lambda x: x[3], reverse=True)
-
-        if top_k_range is not None:
-            ranked_local = ranked_local[:top_k_range]
-
-        # =====================================================
-        # STRUCTURE TEXT REPLACEMENT + TAG
-        # =====================================================
-
-        def pick_best_structure_text(matched_list):
-            if not matched_list:
-                return None
-            best = sorted(matched_list, key=lambda x: x["similarity"], reverse=True)[0]
-            return best.get("structure_text")
-
-        for fid, entity, info, score in ranked_local:
+            # -------------------------
+            # STRUCTURE TEXT REPLACEMENT
+            # -------------------------
+            def pick_best_structure_text(matched_list):
+                if not matched_list:
+                    return None
+                best = sorted(matched_list, key=lambda x: x["similarity"], reverse=True)[0]
+                return best.get("structure_text")
 
             structure_element = pick_best_structure_text(info["matched"]["element"])
             structure_mode    = pick_best_structure_text(info["matched"]["mode"])
             structure_cause   = pick_best_structure_text(info["matched"]["cause"])
             structure_effect  = pick_best_structure_text(info["matched"]["effect"])
 
+            # final values (structure first, kb fallback)
             final_element = structure_element or entity.get("failure_element_text")
             final_mode    = structure_mode    or entity.get("failure_mode_text")
             final_cause   = structure_cause   or entity.get("failure_cause_text")
             final_effect  = structure_effect  or entity.get("failure_effect_text")
 
+            # tag per field
             tag_element = "STRUCTURE" if structure_element else "KB"
             tag_mode    = "STRUCTURE" if structure_mode else "KB"
             tag_cause   = "STRUCTURE" if structure_cause else "KB"
@@ -502,32 +439,35 @@ def generate_failure_chains_from_structure(
             chain = {
                 "node_id": node_id,
                 "failure_id": fid,
+
+                # keep plain fields for downstream compatibility
                 "element": final_element,
                 "function": entity.get("function"),
                 "mode": final_mode,
                 "cause": final_cause,
                 "effect": final_effect,
+
+                # NEW: tagged display fields
                 "tagged": {
                     "element": {"text": final_element, "tag": tag_element},
                     "mode":    {"text": final_mode,    "tag": tag_mode},
                     "cause":   {"text": final_cause,   "tag": tag_cause},
                     "effect":  {"text": final_effect,  "tag": tag_effect},
                 },
+
                 "score": round(float(score), 4),
                 "matched_fields": sorted(list(fields)),
-                "match_detail": info["matched"],
+                "match_detail": info["matched"],  # 保持你build_ground_truth_input能print
             }
-
             all_results.append(chain)
 
-    # =====================================================
+    # -------------------------
     # GLOBAL SORT
-    # =====================================================
-
+    # -------------------------
     all_results.sort(key=lambda x: x["score"], reverse=True)
 
     if top_n is not None:
-        all_results = all_results[:top_n]
+        all_results = all_results[: int(top_n)]
 
     return all_results
 
@@ -608,7 +548,7 @@ if  __name__ == "__main__":
     # -----------------------------------------------------
     # 3) Run Retrieval
     # -----------------------------------------------------
-    results = build_failure_chains_from_structure(
+    results = generate_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
         top_k_per_field=15,
@@ -721,12 +661,16 @@ if  __name__ == "__main__":
                     if matches:
                         lines.append(f"  {str(field_type).upper()}:")
                         for m in matches:
-                            lines.append(f"    - {m}")
+                            display = dict(m)
+                            if display.get("kb_text"):
+                                display["structure_text"] = display["kb_text"]
+                            display.pop("kb_text", None)
 
+                            lines.append(f"    - {display}")
             lines.append("-" * 60)
 
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=5,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=25,strict_unique=True)
     print(results)

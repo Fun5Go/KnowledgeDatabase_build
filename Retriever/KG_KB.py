@@ -150,6 +150,36 @@ def _support_failure_ids_for_edge(
     return out
 
 
+def _get_semantic_neighbor_modes(
+    persist_dir: Path,
+    mode_sid: str,
+    kb: Any,
+    *,
+    top_k: int = 5,
+    min_similarity: float = 0.6,
+):
+    """
+    Given a mode semantic_id, find semantically similar mode nodes.
+    """
+
+    mode_text = _get_semantic_text(kb, mode_sid)
+    if not mode_text:
+        return []
+
+    hits = _semantic_query_hits(
+        persist_dir,
+        mode_text,
+        field_type="mode",
+        n_results=top_k + 1,
+        min_similarity=min_similarity,
+    )
+
+    # remove itself
+    neighbors = [(sid, sim) for sid, sim in hits if sid != mode_sid]
+
+    return neighbors[:top_k]
+
+
 # ------------------------------
 # Core: KG expansion per node
 # ------------------------------
@@ -172,26 +202,13 @@ def _expand_candidates_via_graph(
     mode_hits: List[Tuple[str, float]],
     cause_hits: List[Tuple[str, float]],
     effect_hits: List[Tuple[str, float]],
-    # graph expansion params
     graph_top_k: int = 10,
     graph_min_count: int = 1,
     w_sem: float = 1.0,
     w_edge: float = 0.6,
     edge_strength_mode: str = "log",
 ) -> Dict[str, List[Tuple[str, float, Dict[str, Any]]]]:
-    """
-    Build expanded candidate pools for each field:
-    returns:
-      {
-        "element": [(sid, score, meta), ...],
-        "mode":    [(sid, score, meta), ...],
-        "cause":   [(sid, score, meta), ...],
-        "effect":  [(sid, score, meta), ...],
-      }
 
-    Each entry score is a *field-local* score (not final chain score).
-    meta carries explain: semantic source + edges used.
-    """
     pools: Dict[str, Dict[str, Tuple[float, Dict[str, Any]]]] = {
         "element": {},
         "mode": {},
@@ -207,12 +224,16 @@ def _expand_candidates_via_graph(
     # ---- seed pools with semantic hits ----
     for sid, sim in element_hits:
         _add("element", sid, w_sem * sim, {"source": "semantic", "sim": sim})
+
     for sid, sim in mode_hits:
         _add("mode", sid, w_sem * sim, {"source": "semantic", "sim": sim})
+
+    # 这里建议：cause/effect 也可以 seed（但权重可略低）
     for sid, sim in cause_hits:
-        _add("cause", sid, w_sem * sim, {"source": "semantic", "sim": sim})
+        _add("cause", sid, 0.8 * w_sem * sim, {"source": "semantic", "sim": sim})
+
     for sid, sim in effect_hits:
-        _add("effect", sid, w_sem * sim, {"source": "semantic", "sim": sim})
+        _add("effect", sid, 0.8 * w_sem * sim, {"source": "semantic", "sim": sim})
 
     # ---- KG expand: element -> mode ----
     for e_sid, e_sim in element_hits:
@@ -220,45 +241,223 @@ def _expand_candidates_via_graph(
             kb, "element_to_mode", e_sid, top_k=graph_top_k, min_count=graph_min_count
         ):
             es = _edge_strength(cnt, mode=edge_strength_mode)
-            score = (w_sem * e_sim) + (w_edge * es)
+            score = (w_sem * e_sim)
+            # + (w_edge * es)
             _add(
                 "mode",
                 m_sid,
                 score,
-                {"source": "kg", "via": "element_to_mode", "src_sid": e_sid, "src_sim": e_sim, "edge_count": cnt, "edge_strength": es},
+                {
+                    "source": "kg",
+                    "via": "element_to_mode",
+                    "src_sid": e_sid,
+                    "src_sim": e_sim,
+                    "edge_count": cnt,
+                    "edge_strength": es,
+                },
             )
 
     # ---- KG expand: mode -> cause/effect ----
-    for m_sid, m_sim in mode_hits:
+    # 关键：用“当前 mode pool”作为 seed，而不是只用 mode_hits
+    # 否则 element->mode 扩出来的 mode 根本不会去扩 cause/effect
+    mode_seed_list = sorted(
+        [(sid, sc_meta[0], sc_meta[1]) for sid, sc_meta in pools["mode"].items()],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    mode_seed_list = mode_seed_list[: max(1, int(graph_top_k))]
+
+    for m_sid, m_seed_score, _m_meta in mode_seed_list:
         # mode -> cause
         for c_sid, cnt in _edge_neighbors(
             kb, "mode_to_cause", m_sid, top_k=graph_top_k, min_count=graph_min_count
         ):
             es = _edge_strength(cnt, mode=edge_strength_mode)
-            score = (w_sem * m_sim) + (w_edge * es)
+            score = float(m_seed_score) 
             _add(
                 "cause",
                 c_sid,
                 score,
-                {"source": "kg", "via": "mode_to_cause", "src_sid": m_sid, "src_sim": m_sim, "edge_count": cnt, "edge_strength": es},
+                {
+                    "source": "kg",
+                    "via": "mode_to_cause",
+                    "src_sid": m_sid,
+                    "src_mode_score": m_seed_score,
+                    "edge_count": cnt,
+                    "edge_strength": es,
+                },
             )
+
         # mode -> effect
         for ef_sid, cnt in _edge_neighbors(
             kb, "mode_to_effect", m_sid, top_k=graph_top_k, min_count=graph_min_count
         ):
             es = _edge_strength(cnt, mode=edge_strength_mode)
-            score = (w_sem * m_sim) + (w_edge * es)
+            score = float(m_seed_score) 
             _add(
                 "effect",
                 ef_sid,
                 score,
-                {"source": "kg", "via": "mode_to_effect", "src_sid": m_sid, "src_sim": m_sim, "edge_count": cnt, "edge_strength": es},
+                {
+                    "source": "kg",
+                    "via": "mode_to_effect",
+                    "src_sid": m_sid,
+                    "src_mode_score": m_seed_score,
+                    "edge_count": cnt,
+                    "edge_strength": es,
+                },
             )
 
-    # (可选) 如果你也想 “用 semantic cause/effect 去反推 mode”，需要存反向边；
-    # 当前 edge_store 没有 cause->mode/effect->mode，因此先不做。
+    # ---- convert to sorted lists ----
+    out: Dict[str, List[Tuple[str, float, Dict[str, Any]]]] = {}
+    for k, mp in pools.items():
+        lst = [(sid, sc_meta[0], sc_meta[1]) for sid, sc_meta in mp.items()]
+        lst.sort(key=lambda x: x[1], reverse=True)
+        out[k] = lst
 
-    # convert to sorted lists
+    return out
+
+def _expand_candidates_via_graph_mode_centered(
+    kb: Any,
+    persist_dir: Path,
+    *,
+    mode_hits: List[Tuple[str, float]],
+    cause_hits: List[Tuple[str, float]],
+    effect_hits: List[Tuple[str, float]],
+    graph_top_k: int = 20,
+    graph_min_count: int = 1,
+    w_sem: float = 1.0,
+    use_semantic_cause_effect_seed: bool = False,
+    semantic_mode_expand_top_k: int = 5,
+    semantic_mode_min_sim: float = 0.6,
+) -> Dict[str, List[Tuple[str, float, Dict[str, Any]]]]:
+
+    pools: Dict[str, Dict[str, Tuple[float, Dict[str, Any]]]] = {
+        "mode": {},
+        "cause": {},
+        "effect": {},
+    }
+
+    def _add(pool: str, sid: str, score: float, meta: Dict[str, Any]):
+        cur = pools[pool].get(sid)
+        if (cur is None) or (score > cur[0]):
+            pools[pool][sid] = (score, meta)
+
+    # -------------------------------------------------
+    # 1️⃣ seed mode pool (semantic hits)
+    # -------------------------------------------------
+    for m_sid, sim in mode_hits:
+        _add(
+            "mode",
+            m_sid,
+            w_sem * float(sim),
+            {"source": "semantic", "sim": float(sim)},
+        )
+
+    # optional weak seeds
+    if use_semantic_cause_effect_seed:
+        for c_sid, sim in cause_hits:
+            _add("cause", c_sid, 0.3 * w_sem * float(sim), {"source": "semantic"})
+        for e_sid, sim in effect_hits:
+            _add("effect", e_sid, 0.3 * w_sem * float(sim), {"source": "semantic"})
+
+    # -------------------------------------------------
+    # 2️⃣ Semantic Mode Expansion (关键修复点)
+    # -------------------------------------------------
+    mode_seed_list = sorted(
+        [(sid, sc_meta[0]) for sid, sc_meta in pools["mode"].items()],
+        key=lambda x: x[1],
+        reverse=True,
+    )[: max(1, int(graph_top_k))]
+
+    for m_sid, m_score in mode_seed_list:
+
+        mode_text = _get_semantic_text(kb, m_sid)
+        if not mode_text:
+            continue
+
+        semantic_neighbors = _semantic_query_hits(
+            persist_dir,
+            mode_text,
+            field_type="mode",
+            n_results=semantic_mode_expand_top_k + 1,
+            min_similarity=semantic_mode_min_sim,
+        )
+
+        semantic_neighbors = [
+            (sid, sim)
+            for sid, sim in semantic_neighbors
+            if sid != m_sid
+        ][:semantic_mode_expand_top_k]
+
+        # ✅ 关键：把 semantic 邻居 mode 加入 mode pool
+        related_modes = [(m_sid, m_score)]
+
+        for nb_sid, nb_sim in semantic_neighbors:
+            nb_score = float(m_score) * 0.8 * float(nb_sim)
+
+            _add(
+                "mode",
+                nb_sid,
+                nb_score,
+                {
+                    "source": "semantic_expand",
+                    "root_mode": m_sid,
+                    "root_score": float(m_score),
+                    "sim": float(nb_sim),
+                },
+            )
+
+            related_modes.append((nb_sid, nb_score))
+
+        # -------------------------------------------------
+        # 3️⃣ 从 related modes 扩展 cause/effect
+        # -------------------------------------------------
+        for rel_sid, rel_score in related_modes:
+
+            # mode -> cause
+            for c_sid, cnt in _edge_neighbors(
+                kb,
+                "mode_to_cause",
+                rel_sid,
+                top_k=graph_top_k,
+                min_count=graph_min_count,
+            ):
+                _add(
+                    "cause",
+                    c_sid,
+                    float(rel_score),
+                    {
+                        "source": "kg",
+                        "via": "mode_to_cause",
+                        "src_sid": rel_sid,
+                        "edge_count": int(cnt),
+                    },
+                )
+
+            # mode -> effect
+            for ef_sid, cnt in _edge_neighbors(
+                kb,
+                "mode_to_effect",
+                rel_sid,
+                top_k=graph_top_k,
+                min_count=graph_min_count,
+            ):
+                _add(
+                    "effect",
+                    ef_sid,
+                    float(rel_score),
+                    {
+                        "source": "kg",
+                        "via": "mode_to_effect",
+                        "src_sid": rel_sid,
+                        "edge_count": int(cnt),
+                    },
+                )
+
+    # -------------------------------------------------
+    # 4️⃣ convert to sorted lists
+    # -------------------------------------------------
     out: Dict[str, List[Tuple[str, float, Dict[str, Any]]]] = {}
     for k, mp in pools.items():
         lst = [(sid, sc_meta[0], sc_meta[1]) for sid, sc_meta in mp.items()]
@@ -268,132 +467,71 @@ def _expand_candidates_via_graph(
     return out
 
 
+
+
+
 def _compose_chains_from_pools(
     kb: Any,
     *,
     node_id: str,
     pools: Dict[str, List[Tuple[str, float, Dict[str, Any]]]],
-    # composition params
     beam_mode: int = 10,
-    beam_element: int = 5,
     beam_cause: int = 10,
     beam_effect: int = 10,
-    require_element_mode_edge: bool = True,
-    require_mode_cause_edge: bool = True,
-    require_mode_effect_edge: bool = False,  # 很多 FMEA cause/effect 不一定同现，是否强制由你定
-    w_element: float = 1.0,
     w_mode: float = 1.5,
     w_cause: float = 1.5,
     w_effect: float = 1.5,
-    w_edge_bonus: float = 0.8,  # 组合时再加一次 edge bonus（避免仅靠 field-local score）
-    edge_strength_mode: str = "log",
     top_n: int = 50,
-    evidence_limit_ids: int = 5,
+    mode_limit: int = 5,
 ) -> List[ExpandedChain]:
-    """
-    Combine element/mode/cause/effect pools into candidate chains,
-    enforcing KG connectivity by checking edge_store existence + counts.
-    """
-    element_pool = _cap_keep_best(pools.get("element", []), beam_element)
+
+    mode_counter = defaultdict(int)
+
     mode_pool = _cap_keep_best(pools.get("mode", []), beam_mode)
     cause_pool = _cap_keep_best(pools.get("cause", []), beam_cause)
     effect_pool = _cap_keep_best(pools.get("effect", []), beam_effect)
 
-    # quick maps for edge existence / count
-    e2m = (kb.edge_store or {}).get("element_to_mode", {}) or {}
-    m2c = (kb.edge_store or {}).get("mode_to_cause", {}) or {}
-    m2e = (kb.edge_store or {}).get("mode_to_effect", {}) or {}
-
-    def _get_cnt(store: Dict[str, Dict[str, int]], s: str, t: str) -> int:
-        return int((store.get(s, {}) or {}).get(t, 0) or 0)
-
     out: List[ExpandedChain] = []
 
-    # if element_pool empty, allow None element (some structure nodes might not provide element text)
-    if not element_pool:
-        element_pool = [(None, 0.0, {"source": "none"})]  # type: ignore
+    for m_sid, m_sc, m_meta in mode_pool:
 
-    for e_sid, e_sc, e_meta in element_pool:
-        for m_sid, m_sc, m_meta in mode_pool:
+        for c_sid, c_sc, c_meta in cause_pool:
 
-            # enforce element->mode edge if required and element exists
-            e2m_cnt = 0
-            if e_sid and require_element_mode_edge:
-                e2m_cnt = _get_cnt(e2m, e_sid, m_sid)
-                if e2m_cnt <= 0:
+            for ef_sid, ef_sc, ef_meta in effect_pool:
+
+                score = (
+                    (w_mode * float(m_sc))
+                    + (w_cause * float(c_sc))
+                    + (w_effect * float(ef_sc))
+                )
+
+                evidence = {
+                    "mode_source": m_meta,
+                    "cause_source_mode": c_meta.get("src_sid"),
+                    "effect_source_mode": ef_meta.get("src_sid"),
+                }
+
+                if mode_counter[m_sid] >= mode_limit:
                     continue
 
-            for c_sid, c_sc, c_meta in cause_pool:
-                m2c_cnt = _get_cnt(m2c, m_sid, c_sid)
-                if require_mode_cause_edge and m2c_cnt <= 0:
-                    continue
-
-                # effect optional: if no effect candidates, allow None
-                local_effect_pool = effect_pool or [(None, 0.0, {"source": "none"})]  # type: ignore
-                for ef_sid, ef_sc, ef_meta in local_effect_pool:
-                    m2e_cnt = 0
-                    if ef_sid and require_mode_effect_edge:
-                        m2e_cnt = _get_cnt(m2e, m_sid, ef_sid)
-                        if m2e_cnt <= 0:
-                            continue
-                    elif ef_sid:
-                        m2e_cnt = _get_cnt(m2e, m_sid, ef_sid)
-
-                    # chain score: weighted sum of field scores + edge bonuses (by count)
-                    score = (
-                        (w_element * float(e_sc))
-                        + (w_mode * float(m_sc))
-                        + (w_cause * float(c_sc))
-                        + (w_effect * float(ef_sc))
+                out.append(
+                    ExpandedChain(
+                        node_id=str(node_id),
+                        element_sid=None,
+                        mode_sid=m_sid,
+                        cause_sid=c_sid,
+                        effect_sid=ef_sid,
+                        score=float(score),
+                        evidence=evidence,
                     )
+                )
 
-                    # edge bonuses
-                    if e_sid and e2m_cnt > 0:
-                        score += w_edge_bonus * _edge_strength(e2m_cnt, mode=edge_strength_mode)
-                    if m2c_cnt > 0:
-                        score += w_edge_bonus * _edge_strength(m2c_cnt, mode=edge_strength_mode)
-                    if ef_sid and m2e_cnt > 0:
-                        score += w_edge_bonus * _edge_strength(m2e_cnt, mode=edge_strength_mode)
-
-                    evidence: Dict[str, Any] = {
-                        "field_meta": {
-                            "element": e_meta,
-                            "mode": m_meta,
-                            "cause": c_meta,
-                            "effect": ef_meta,
-                        },
-                        "edges": {
-                            "element_to_mode": {"count": e2m_cnt} if e_sid else None,
-                            "mode_to_cause": {"count": m2c_cnt},
-                            "mode_to_effect": {"count": m2e_cnt} if ef_sid else None,
-                        },
-                        "support_failure_ids": {
-                            "element_to_mode": _support_failure_ids_for_edge(
-                                kb, edge_type="element_to_mode", src_sid=e_sid, tgt_sid=m_sid, limit=evidence_limit_ids
-                            ) if (e_sid and e2m_cnt > 0) else [],
-                            "mode_to_cause": _support_failure_ids_for_edge(
-                                kb, edge_type="mode_to_cause", src_sid=m_sid, tgt_sid=c_sid, limit=evidence_limit_ids
-                            ) if (m2c_cnt > 0) else [],
-                            "mode_to_effect": _support_failure_ids_for_edge(
-                                kb, edge_type="mode_to_effect", src_sid=m_sid, tgt_sid=ef_sid, limit=evidence_limit_ids
-                            ) if (ef_sid and m2e_cnt > 0) else [],
-                        }
-                    }
-
-                    out.append(
-                        ExpandedChain(
-                            node_id=str(node_id),
-                            element_sid=e_sid if e_sid else None,
-                            mode_sid=m_sid,
-                            cause_sid=c_sid,
-                            effect_sid=ef_sid if ef_sid else None,
-                            score=float(score),
-                            evidence=evidence,
-                        )
-                    )
+                mode_counter[m_sid] += 1
 
     out.sort(key=lambda x: x.score, reverse=True)
     return out[: int(top_n)]
+
+
 
 
 # ------------------------------
@@ -412,20 +550,20 @@ def build_failure_chains_with_kg_expansion(
     top_n_historical: int = 50,
     # graph expansion
     enable_expansion: bool = True,
-    graph_top_k: int = 10,
+    graph_top_k: int = 50,
     graph_min_count: int = 1,
     top_n_expanded: int = 50,
     # scoring weights
-    weight_element: float = 1.0,
+    weight_element: float = 0.1,
     weight_mode: float = 1.5,
     weight_cause: float = 1.5,
     weight_effect: float = 1.5,
-    w_edge: float = 2.0,
-    w_edge_bonus: float = 1.0,
+    w_edge: float = 0.6,
+    w_edge_bonus: float = 0.0,
     edge_strength_mode: str = "log",
     # constraints
-    require_element_mode_edge: bool = True,
-    require_mode_cause_edge: bool = False,
+    require_element_mode_edge: bool = False,
+    require_mode_cause_edge: bool = True,
     require_mode_effect_edge: bool = False,
     # output
     dedupe_by_semantic_tuple: bool = True,
@@ -511,36 +649,57 @@ def build_failure_chains_with_kg_expansion(
         # print("effect_hits:", effect_hits[:3])
 
         # 3) KG expansion: build pools
-        pools = _expand_candidates_via_graph(
+        # pools = _expand_candidates_via_graph(
+        #     kb,
+        #     element_hits=element_hits,
+        #     mode_hits=mode_hits,
+        #     cause_hits=cause_hits,
+        #     effect_hits=effect_hits,
+        #     graph_top_k=graph_top_k,
+        #     graph_min_count=graph_min_count,
+        #     w_sem=1.0,
+        #     w_edge=w_edge,
+        #     edge_strength_mode=edge_strength_mode,
+        # )
+        pools_mc = _expand_candidates_via_graph_mode_centered(
             kb,
-            element_hits=element_hits,
+            persist_dir=persist_dir,  
             mode_hits=mode_hits,
             cause_hits=cause_hits,
             effect_hits=effect_hits,
-            graph_top_k=graph_top_k,
-            graph_min_count=graph_min_count,
-            w_sem=1.0,
-            w_edge=w_edge,
-            edge_strength_mode=edge_strength_mode,
+            graph_top_k=30,
+            semantic_mode_expand_top_k=5,
+            semantic_mode_min_sim=0.6,
         )
-        print("mode pool size:", len(pools["mode"]))
-        print("cause pool size:", len(pools["cause"]))
-        print("effect pool size:", len(pools["effect"]))
+
+        pools = {
+            "element": [],                     # 强制空 -> compose 会用 None element
+            "mode": pools_mc["mode"],
+            "cause": pools_mc["cause"],
+            "effect": pools_mc["effect"],
+        }
+
+
+        # print("mode pool size:", len(pools["mode"]))
+        # print("cause pool size:", len(pools["cause"]))
+        # print("effect pool size:", len(pools["effect"]))
+        print("top-5 mode sids:", [x[0] for x in pools["mode"][:5]])
+        print("top-5 mode texts:", [_get_semantic_text(kb, x[0]) for x in pools["mode"][:5]])
 
         # 4) Compose synthesized chains from pools with connectivity constraints
         expanded = _compose_chains_from_pools(
             kb,
             node_id=str(node_id),
             pools=pools,
-            require_element_mode_edge=require_element_mode_edge,
-            require_mode_cause_edge=require_mode_cause_edge,
-            require_mode_effect_edge=require_mode_effect_edge,
-            w_element=weight_element,
+            # require_element_mode_edge=require_element_mode_edge,
+            # require_mode_cause_edge=require_mode_cause_edge,
+            # require_mode_effect_edge=require_mode_effect_edge,
+            # w_element=weight_element,
             w_mode=weight_mode,
             w_cause=weight_cause,
             w_effect=weight_effect,
-            w_edge_bonus=w_edge_bonus,
-            edge_strength_mode=edge_strength_mode,
+            # w_edge_bonus=w_edge_bonus,
+            # edge_strength_mode=edge_strength_mode,
             top_n=top_n_expanded,
         )
 
@@ -625,28 +784,28 @@ def print_failure_result(
         # -------------------------
         # Historical (from failure_id)
         # -------------------------
-        hlist = hist_g.get(node_id, [])
-        print(f"\n--- Historical (KB failure_id) | count={len(hlist)} | show_top={min(len(hlist), top_n_per_node)} ---")
-        for i, r in enumerate(hlist[:top_n_per_node], 1):
-            print(f"\n[H{i}] score={r.get('score')}  failure_id={r.get('failure_id')}")
-            print(f"     element: {r.get('element')}")
-            print(f"       mode: {r.get('mode')}")
-            print(f"      cause: {r.get('cause')}")
-            print(f"     effect: {r.get('effect')}")
-            print(f" matched_fields: {r.get('matched_fields')}")
-            md = r.get("match_detail") or {}
-            # 每个field命中了哪些semantic_id
-            for ft in ["element", "mode", "cause", "effect"]:
-                hits = md.get(ft) or []
-                if hits:
-                    # hits like: {"semantic_id":..., "similarity":..., "structure_text":...}
-                    top_hits = hits[:3]
-                    pretty = [
-                        f"{h.get('semantic_id')} (sim={h.get('similarity')}, q='{h.get('structure_text')}')"
-                        for h in top_hits
-                    ]
-                    suffix = "" if len(hits) <= 3 else f" ...(+{len(hits)-3})"
-                    print(f"   {ft:>7} hits: {pretty}{suffix}")
+        # hlist = hist_g.get(node_id, [])
+        # print(f"\n--- Historical (KB failure_id) | count={len(hlist)} | show_top={min(len(hlist), top_n_per_node)} ---")
+        # for i, r in enumerate(hlist[:top_n_per_node], 1):
+        #     print(f"\n[H{i}] score={r.get('score')}  failure_id={r.get('failure_id')}")
+        #     print(f"     element: {r.get('element')}")
+        #     print(f"       mode: {r.get('mode')}")
+        #     print(f"      cause: {r.get('cause')}")
+        #     print(f"     effect: {r.get('effect')}")
+        #     print(f" matched_fields: {r.get('matched_fields')}")
+        #     md = r.get("match_detail") or {}
+        #     # 每个field命中了哪些semantic_id
+        #     for ft in ["element", "mode", "cause", "effect"]:
+        #         hits = md.get(ft) or []
+        #         if hits:
+        #             # hits like: {"semantic_id":..., "similarity":..., "structure_text":...}
+        #             top_hits = hits[:3]
+        #             pretty = [
+        #                 f"{h.get('semantic_id')} (sim={h.get('similarity')}, q='{h.get('structure_text')}')"
+        #                 for h in top_hits
+        #             ]
+        #             suffix = "" if len(hits) <= 3 else f" ...(+{len(hits)-3})"
+        #             print(f"   {ft:>7} hits: {pretty}{suffix}")
 
         # -------------------------
         # Expanded (synthesized via KG)
@@ -757,7 +916,5 @@ if  __name__ == "__main__":
         ]
     }
     result = build_failure_chains_with_kg_expansion(structure_input=structure_input, persist_dir= KB_PATH)
-    print_failure_result(result, top_n_per_node=15, show_evidence=True, show_support_ids=True)
-
-
+    print_failure_result(result, top_n_per_node=40, show_evidence=True, show_support_ids=True)
 
