@@ -305,3 +305,138 @@ Please provide the results in JSON format following this schema:
 }}
 """
 
+failure_inference_prompt_RAG_FILL = """
+=====================================================
+ROLE
+=====================================================
+
+You are a senior automotive FMEA expert specializing in motor drive systems.
+
+Your task is to REVIEW and COMPLETE the provided
+"Semi-filled Failure Entity" entries.
+
+This is a STRICT structure-based completion task.
+
+⚠ The Knowledge Base (KB) is NOT allowed to be used as final output content.
+⚠ You may NOT copy any wording from KB.
+⚠ ALL final fields MUST come ONLY from the provided Structure Analysis.
+
+
+=====================================================
+INPUT DESCRIPTION
+=====================================================
+
+You are given:
+
+1. Structure Analysis:
+   - failure elements
+   - failure modes
+   - failure causes
+   - failure effects
+
+2. Semi-filled Failure Entity:
+   Some fields may contain [KB] placeholders.
+   These must be replaced using Structure Analysis.
+
+
+=====================================================
+CORE OBJECTIVE
+=====================================================
+
+For EACH semi-filled failure entity:
+
+You must:
+
+1. Validate technical causal logic.
+2. Replace ALL [KB] fields using Structure Analysis.
+3. Ensure strict causality consistency:
+      failure_cause → failure_mode → failure_effect
+4. Keep the original failure_element and failure_function unchanged.
+
+
+=====================================================
+STRICT FIELD RULES
+=====================================================
+
+failure_element:
+- Copy from the Structure Analysis
+
+failure_function:
+- MUST remain exactly as given in the input entity.
+
+failure_mode:
+- MUST exactly match one mode from Structure Analysis.
+- MUST logically result from the selected cause.
+
+failure_cause:
+- MUST exactly match one cause from Structure Analysis.
+- MUST logically lead to the selected failure_mode.
+
+failure_effect:
+- MUST exactly match one effect from Structure Analysis.
+- Does NOT need to resemble original KB wording.
+- Must be a technically valid consequence of the selected failure_mode.
+
+
+=====================================================
+CAUSAL VALIDATION REQUIREMENT
+=====================================================
+
+Before accepting a chain, verify:
+
+1. The failure_cause can realistically produce the failure_mode.
+2. The failure_mode can realistically produce the failure_effect.
+3. The overall chain is technically coherent in motor drive systems context.
+
+If ANY causal link is invalid:
+→ Mark the entity as INVALID and provide explanation.
+
+
+=====================================================
+PROHIBITED ACTIONS
+=====================================================
+
+- Do NOT use any KB wording in final output.
+- Do NOT invent new modes, causes, or effects.
+- Do NOT merge entities.
+- Do NOT skip any entity.
+- Do NOT modify failure_element or failure_function.
+- Do NOT output partial chains.
+
+=====================================================
+INPUT FAILURE ENTITIES
+=====================================================
+
+{to_be_fill_failure}
+
+
+=====================================================
+STRUCTURE ANALYSIS (JSON)
+=====================================================
+
+{structure_analysis}
+
+
+=====================================================
+OUTPUT FORMAT
+=====================================================
+
+Return valid JSON in the following format:
+
+{{
+  "failure_candidates": [
+    {{
+      "failure_element": "...",
+      "failure_function": "...",
+      "failure_mode": "...",
+      "failure_effect": "...",
+      "failure_cause": "...",
+      "confidence": "high | medium | low",
+      "support_failure_id": [],
+      "gt_support_type": "none",
+      "inference_reason": "brief explanation"
+    }}
+  ]
+}}
+
+"""

@@ -399,11 +399,11 @@ def generate_failure_chains_from_structure(
 
             # bonus strategy
             if mce_hit_count >= 2:
-                score *= 1.5          # 强化双命中
+                score *= 0.8          # 强化双命中
             elif mce_hit_count == 1:
-                score *= 0.85         # 轻微惩罚
+                score *= 1         # 轻微惩罚
             else:
-                score *= 0.6          # 严重惩罚
+                score *= 1          # 严重惩罚
 
 
             if normalize_by_hits:

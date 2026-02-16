@@ -1,5 +1,5 @@
-from .LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE
-from Retriever.SA_query import build_failure_chains_from_structure
+from .LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE, failure_inference_generation_RAG_FILL
+from Retriever.SA_query import build_failure_chains_from_structure,generate_failure_chains_from_structure
 from typing import Dict, List, Optional
 from pathlib import Path
 from langsmith import traceable
@@ -136,6 +136,114 @@ def build_ground_truth_input(
     return "\n".join(lines)
 
 
+def build_fill_entity(
+    results: List[Dict],
+    target_n: Optional[int] = None,
+    strict_unique: bool = False,
+) -> str:
+
+    if not results:
+        return "No similar failure chains were retrieved from the knowledge base."
+
+    if target_n is None:
+        target_n = len(results)
+
+    def norm(x):
+        if x is None:
+            return ""
+        return " ".join(str(x).strip().split()).lower()
+
+    def sig(r):
+        return (
+            norm(r.get("element")),
+            norm(r.get("function")),
+            norm(r.get("mode")),
+            norm(r.get("effect")),
+            norm(r.get("cause")),
+        )
+
+    selected = []
+    seen = set()
+    duplicates = []
+
+    for r in results:
+        s = sig(r)
+        if s in seen:
+            duplicates.append(r)
+            continue
+        seen.add(s)
+        selected.append(r)
+        if len(selected) >= target_n:
+            break
+
+    if not strict_unique and len(selected) < target_n:
+        need = target_n - len(selected)
+        selected.extend(duplicates[:need])
+
+    def extract_matched_inputs(match_detail: dict) -> dict:
+        out = {}
+        for ft in ["element", "mode", "cause", "effect"]:
+            hits = (match_detail or {}).get(ft, []) or []
+            seen_txt = set()
+            texts = []
+            for h in hits:
+                t = (h.get("structure_text") or "").strip()
+                if not t:
+                    continue
+                key = norm(t)
+                if key in seen_txt:
+                    continue
+                seen_txt.add(key)
+                texts.append(t)
+            if texts:
+                out[ft] = " | ".join(texts)
+        return out
+
+    def get_tagged_text(r: dict, field: str, fallback_text: str) -> tuple[str, str]:
+        """
+        Return (text, tag) from r["tagged"][field], fallback to r[field] / fallback_text.
+        Tag defaults to "KB" if missing.
+        """
+        tagged = (r.get("tagged") or {}).get(field) or {}
+        text = (tagged.get("text") or r.get(field) or fallback_text or "N/A")
+        tag = (tagged.get("tag") or "KB")
+        return text, tag
+
+    lines = []
+
+    for idx, r in enumerate(selected, start=1):
+        # Plain values kept for compatibility, but printing uses tagged if present
+        function = r.get("function") or "N/A"
+
+        element_text, element_tag = get_tagged_text(r, "element", r.get("element"))
+        mode_text, mode_tag       = get_tagged_text(r, "mode",    r.get("mode"))
+        effect_text, effect_tag   = get_tagged_text(r, "effect",  r.get("effect"))
+        cause_text, cause_tag     = get_tagged_text(r, "cause",   r.get("cause"))
+
+        lines.append(f"To be filled failure entity: {idx}")
+        lines.append(f"Failure ID: {r.get('failure_id')}")
+
+        # g
+        lines.append(
+            f'In element "{element_text}" [{element_tag}], the function "{function}" results in effect '
+            f'"{effect_text}" [{effect_tag}] when failure mode "{mode_text}" [{mode_tag}] occurs, '
+            f'which is caused by "{cause_text}" [{cause_tag}].'
+        )
+
+        # # 你原来就有的“Matched ...”行：如果你也想保留，继续保留；不想就删掉这段即可
+        # matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
+        # if matched_inputs:
+        #     parts = []
+        #     for ft in ["element", "mode", "cause", "effect"]:
+        #         if ft in matched_inputs:
+        #             parts.append(f'{ft} "{matched_inputs[ft]}"')
+        #     lines.append("Matched structure analysis text: " + ", ".join(parts))
+
+        # lines.append("-" * 60)
+
+    return "\n".join(lines)
+
+
 def save_failure_candidates_to_json(result: dict, output_path: Path):
     """
     Save failure candidates to JSON file.
@@ -151,14 +259,14 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
 @traceable(name="RAG")
 def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10, 
     max_hits_per_field_per_failure: int = 2, require_cause: bool = False,
-    require_cause_plus: bool = False, RAG: bool = True, ):
+    require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
 
 
 
     # structure_input = build_structure_analysis_input(structure_input)
     structure_input_json = json.dumps(structure_input, ensure_ascii=False,indent=2)
 
-    if RAG == True:
+    if RAG:
         similar_failure = build_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
@@ -168,16 +276,36 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         require_cause = require_cause,
         require_cause_plus = require_cause_plus,
     )
-        failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
-        failure_candidates = failure_inference_generation_RAG.invoke({
-            "data": {
-                "structure_analysis": structure_input_json, # Sentences with annotations
-                "gt_example": failure_example, # Similar FMEA cases in text format
-            }
-        })
-        OUTPUT_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json"
-    )
+        if not FILL:
+            failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
+            failure_candidates = failure_inference_generation_RAG.invoke({
+                "data": {
+                    "structure_analysis": structure_input_json, # Sentences with annotations
+                    "gt_example": failure_example, # Similar FMEA cases in text format
+                }
+            })
+            OUTPUT_PATH = Path(
+            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json")
+        else:
+            semi_candidates = generate_failure_chains_from_structure(
+                persist_dir=KB_PATH,
+                structure_input=structure_input,
+                top_k_per_field=top_k_per_field,
+                top_n=top_n,
+                max_hits_per_field_per_failure = max_hits_per_field_per_failure,
+                require_cause = require_cause,
+                require_cause_plus = require_cause_plus,
+            )
+            semi_candidates =  build_fill_entity(semi_candidates,target_n=15,strict_unique=True)
+            failure_candidates = failure_inference_generation_RAG_FILL.invoke({
+                "data": {
+                    "structure_analysis": structure_input_json, # Sentences with annotations
+                    "fill_failure": semi_candidates
+                }
+            })
+            OUTPUT_PATH = Path(
+            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_FILL.json"
+        )
     else:
        failure_candidates = failure_inference_generation_PURE.invoke({
                        "data": {
@@ -287,7 +415,8 @@ if __name__ == "__main__":
 #     ]
 # }
 
-    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, max_hits_per_field_per_failure=8, RAG = True)
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, 
+                                      max_hits_per_field_per_failure=8, RAG = True, FILL = True)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)
