@@ -608,18 +608,18 @@ if  __name__ == "__main__":
     # -----------------------------------------------------
     # 3) Run Retrieval
     # -----------------------------------------------------
-    # results = build_failure_chains_from_structure(
-    #     persist_dir=KB_PATH,
-    #     structure_input=structure_input,
-    #     top_k_per_field=15,
-    #     # minimum_field_match=2,
-    #     top_n=50,
-    #     # source_type="old_fmea",
-    # )
-    results = generate_failure_chains_from_structure(
+    results = build_failure_chains_from_structure(
         persist_dir=KB_PATH,
-        structure_input=structure_input
+        structure_input=structure_input,
+        top_k_per_field=15,
+        # minimum_field_match=2,
+        top_n=50,
+        # source_type="old_fmea",
     )
+    # results = generate_failure_chains_from_structure(
+    #     persist_dir=KB_PATH,
+    #     structure_input=structure_input
+    # )
     # print(results)
 
     def build_ground_truth_input(
@@ -728,5 +728,5 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=45,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=5,strict_unique=True)
     print(results)
