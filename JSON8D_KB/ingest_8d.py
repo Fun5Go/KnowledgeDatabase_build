@@ -316,32 +316,12 @@ def ingest_8d_json(
 
     for node in semantic_nodes.values():
 
-        semantic_id = node["semantic_id"]
-        new_failure_ids = set(node["failure_ids"])
-
-        existing_node = failure_kb.field_store.get(semantic_id)
-
-        if existing_node:
-            # ----- MERGE -----
-            merged_ids = set(existing_node.get("failure_ids", []))
-            merged_ids.update(new_failure_ids)
-
-            failure_kb.upsert_semantic_node(
-                semantic_id=semantic_id,
-                field_type=existing_node["field_type"],  # keep old
-                text=existing_node["text"],              # keep old
-                failure_ids=list(merged_ids),
-                source_type=existing_node.get("source_type"),
-            )
-
-        else:
-            # ----- NEW NODE -----
-            failure_kb.upsert_semantic_node(
-                semantic_id=node["semantic_id"],
-                field_type=node["field_type"],
-                text=node["text"],
-                failure_ids=list(new_failure_ids),
-                source_type=node["source_type"],
-            )
+        failure_kb.upsert_semantic_node(
+            semantic_id=node["semantic_id"],
+            field_type=node["field_type"],
+            text=node["text"],
+            failure_ids=node["failure_ids"],
+            source_type="8D",   # always pass current source
+        )
 
     print(f"[OK] {json_path.name} ingested (8D)")

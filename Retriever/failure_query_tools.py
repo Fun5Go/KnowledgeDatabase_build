@@ -317,12 +317,15 @@ if  __name__ == "__main__":
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
-        query_text="Overcurrent detection incorrect",
-        field_type="cause",
+        query_text="Incorrect gear shift",
+        field_type="effect",
         n_results=5,
         min_count=1,
+        source_type=["8D"],
     )
+  
     print_semantic_results(res, kb)
+    # res =  get_semantic_by_ids(persist_dir=KB_PATH, ids="effect:eb3b72714761")
 
 #     linked = query_linked_failure_fields(
 #     persist_dir=KB_PATH,

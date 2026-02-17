@@ -81,6 +81,7 @@ class EightDSemanticNode:
 
     # All 8D failures that map to this concept
     failure_ids: List[str] = field(default_factory=list)
+    source_type: List[str] = field(default_factory=list)
 
     # bookkeeping
     source_count: int = 0
@@ -440,29 +441,46 @@ class EightDFailureKB:
     # SEMANTIC NODE UPSERT (shared)
     # =========================================================
     def upsert_semantic_node(
-        self,
-        *,
-        semantic_id: str,
-        field_type: str,  # element | mode | effect | cause
-        text: str,
-        failure_ids: list[str],
-        source_type: str
-    ) -> None:
+    self,
+    *,
+    semantic_id: str,
+    field_type: str,
+    text: str,
+    failure_ids: list[str],
+    source_type: str,
+) -> None:
 
         if not is_valid_embed_text(text):
             return
 
-        failure_ids_unique = list(dict.fromkeys(failure_ids))
+        existing = self.field_store.get(semantic_id)
+
+        if existing:
+            # merge failure_ids
+            merged_ids = set(existing.get("failure_ids", []))
+            merged_ids.update(failure_ids)
+            failure_ids_unique = sorted(merged_ids)
+
+            # merge source_type
+            existing_sources = existing.get("source_type", [])
+            if isinstance(existing_sources, str):
+                existing_sources = [existing_sources]
+
+            merged_sources = sorted(set(existing_sources + [source_type]))
+
+        else:
+            failure_ids_unique = sorted(set(failure_ids))
+            merged_sources = [source_type]
+
         count = len(failure_ids_unique)
 
-        # ---------- structured store ----------
         self.field_store[semantic_id] = {
             "semantic_id": semantic_id,
             "field_type": field_type,
             "text": text,
             "failure_ids": failure_ids_unique,
             "count": count,
-            "source_type": source_type, 
+            "source_type": merged_sources,
         }
 
         self.field_store_path.write_text(
@@ -470,17 +488,16 @@ class EightDFailureKB:
             encoding="utf-8",
         )
 
-        # ---------- vector store ----------
+        # unified vector store
         self.collection.upsert(
             ids=[semantic_id],
             documents=[text],
             metadatas=[{
                 "field_type": field_type,
                 "count": count,
-                "source_type": source_type,  # helps filtering later
+                "source_type": ",".join(merged_sources)
             }],
         )
-
     # =========================================================
     # 8D FAILURE ENTITY UPSERT
     # =========================================================

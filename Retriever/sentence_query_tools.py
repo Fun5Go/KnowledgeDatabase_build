@@ -31,7 +31,10 @@ def _build_sentence_where(
     product_domain=None,
     source_section=None,
     status=None,
+    subject = None,
     min_faithful_score=None,
+    min_year: int | None = None,
+    max_year: int | None = None,
     extra_where=None,
 ):
     def clause(k, v):
@@ -52,10 +55,16 @@ def _build_sentence_where(
         ("product_domain", product_domain),
         ("source_section", source_section),
         ("status", status),
+        ("subject",subject),
     ]:
         c = clause(k, v)
         if c:
             clauses.append(c)
+            # year range filter (numeric metadata)
+    if min_year is not None:
+        clauses.append({"released_year": {"$gte": int(min_year)}})
+    if max_year is not None:
+        clauses.append({"released_year": {"$lte": int(max_year)}})        
 
     if min_faithful_score is not None:
         clauses.append({"faithful_score": {"$gte": int(min_faithful_score)}})
@@ -86,7 +95,10 @@ def query_sentence_kb(
     product_domain: Optional[Union[str, List[str]]] = None,
     source_section: Optional[Union[str, List[str]]] = None,
     status: Optional[Union[str, List[str]]] = None,
+    subject: Optional[Union[str, List[str]]] = None,
     min_faithful_score: Optional[int] = None,
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
     extra_where: Optional[Dict[str, Any]] = None,
     include: Optional[List[str]] = None,
 ):
@@ -101,7 +113,10 @@ def query_sentence_kb(
         product_domain=product_domain,
         source_section=source_section,
         status=status,
+        subject=subject,
         min_faithful_score=min_faithful_score,
+        min_year=min_year,
+        max_year=max_year,
         extra_where=extra_where,
     )
 
@@ -129,8 +144,11 @@ def get_sentences_by_metadata(
     product_domain: Optional[Union[str, List[str]]] = None,
     source_section: Optional[Union[str, List[str]]] = None,
     status: Optional[Union[str, List[str]]] = None,
+    subject: Optional[Union[str, List[str]]] = None,
     min_faithful_score: Optional[int] = None,
     extra_where: Optional[Dict[str, Any]] = None,
+    min_year: Optional[int] = None,
+    max_year: Optional[int] = None,
     include: Optional[List[str]] = None,
 ):
     col = _get_sentence_collection(persist_dir, collection_name)
@@ -144,6 +162,9 @@ def get_sentences_by_metadata(
         product_domain=product_domain,
         source_section=source_section,
         status=status,
+        subject = subject,
+        min_year=min_year,
+        max_year=max_year,
         min_faithful_score=min_faithful_score,
         extra_where=extra_where,
     )
@@ -160,7 +181,7 @@ def get_sentences_by_metadata(
 
 
 # =========================================================
-# 3) Query by IDs
+# Query by IDs
 # =========================================================
 def get_sentences_by_ids(
     persist_dir: Union[str, Path],
@@ -176,38 +197,44 @@ def get_sentences_by_ids(
 
 def query_sentence_kb_by_chunks(
     persist_dir: Union[str, Path],
-    chunks: Dict[str, Optional[str]],
+    entity: Dict[str, Optional[str]],
     n_results_each: int = 5,
     collection_name: str = "sentences",
-    # meta filters (optional):
-    case_id: Optional[Union[str, List[str]]] = None,
-    failure_id: Optional[Union[str, List[str]]] = None,
-    cause_id: Optional[Union[str, List[str]]] = None,
-    source_section: Optional[Union[str, List[str]]] = None,
-    status: Optional[Union[str, List[str]]] = None,
-    subject: Optional[Union[str, List[str]]] = None,
-    faithful_score: Optional[Union[int, List[int], Dict[str, Any]]] = None,
-    productPnID: Optional[Union[str, List[str]]] = None,
-    product_domain: Optional[Union[str, List[str]]] = None,
-    extra_where: Optional[Dict[str, Any]] = None,
-    # aggregation:
-    group_by: str = "failure_id",  # or "case_id" / "cause_id"
+    # meta filters
+    case_id=None,
+    failure_id=None,
+    cause_id=None,
+    source_section=None,
+    status=None,
+    subject=None,
+    faithful_score=None,
+    productPnID=None,
+    product_domain=None,
+    extra_where=None,
+    # aggregation
+    group_by: str = "failure_id",
 ) -> Dict[str, Any]:
-    """
-    chunks input example:
-      {
-        "symptom": "...",
-        "context": "...",
-        "fix": "..."
-      }
 
-    For each chunk-key, we treat it as a sentence_role filter by default
-    (i.e. query text under sentence_role = chunk-key).
-    If you don't want that behavior, remove sentence_role=role in query loop.
-    """
+    QUERY_SECTION_MAP = {
+        "failure_element": ["D2", "D3"],
+        "failure_mode": ["D2", "D3"],
+        "failure_effect": ["D2", "D3"],
+        "failure_cause": ["D3", "D4"],
+    }
+
+    CHUNK_WEIGHT = {
+        "failure_mode": 1.3,
+        "failure_cause": 1.5,
+        "failure_element": 1.0,
+        "failure_effect": 1.0,
+    }
+
     by_role = {}
 
-    for role, text in chunks.items():
+    # ===============================
+    # Phase 1: query by role
+    # ===============================
+    for role, text in entity.items():
         if not text or not str(text).strip():
             continue
 
@@ -216,30 +243,37 @@ def query_sentence_kb_by_chunks(
             query_text=str(text),
             n_results=n_results_each,
             collection_name=collection_name,
-            # treat chunk key as sentence_role:
-            sentence_role=role,
-            # common filters:
+            sentence_role=None,
             case_id=case_id,
             failure_id=failure_id,
             cause_id=cause_id,
-            source_section=source_section,
+            source_section=QUERY_SECTION_MAP.get(role),
             status=status,
             subject=subject,
-            faithful_score=faithful_score,
+            min_faithful_score=faithful_score,
             productPnID=productPnID,
             product_domain=product_domain,
             extra_where=extra_where,
             include=["documents", "metadatas", "distances"],
         )
 
-    # aggregate by group_by
-    agg = defaultdict(lambda: {"group_id": None, "score": 0.0, "hits": []})
+    # ===============================
+    # Phase 2: collect best sentence contribution
+    # ===============================
+    agg = defaultdict(lambda: {
+        "group_id": None,
+        "score": 0.0,
+        "hits": [],
+        "best_by_chunk": {},   # sentence_id -> best info
+    })
 
     for role, r in by_role.items():
         ids0 = r.get("ids", [[]])[0]
         docs0 = r.get("documents", [[]])[0]
         metas0 = r.get("metadatas", [[]])[0]
         dists0 = r.get("distances", [[]])[0]
+
+        weight = CHUNK_WEIGHT.get(role, 1.0)
 
         for rid, doc, meta, dist in zip(ids0, docs0, metas0, dists0):
             gid = meta.get(group_by)
@@ -248,21 +282,245 @@ def query_sentence_kb_by_chunks(
 
             a = agg[gid]
             a["group_id"] = gid
-            a["score"] += 1.0 / (1.0 + float(dist))
-            a["hits"].append(
-                {
-                    "chunk_key_queried": role,   # which chunk produced this hit
-                    "matched_id": rid,           # chroma id = sentence.id
+
+            score = weight / (1.0 + float(dist))
+
+            best = a["best_by_chunk"].get(rid)
+            if best is None or score > best["score"]:
+                a["best_by_chunk"][rid] = {
+                    "sentence_id": rid,
+                    "score": score,
                     "distance": dist,
+                    "chunk": role,
+                    "from_chunk": role,
                     "text": doc,
                     "metadata": meta,
                 }
-            )
+
+    # ===============================
+    # Phase 3: aggregate score & hits
+    # ===============================
+    for a in agg.values():
+        total = 0.0
+        hits = []
+
+        for info in sorted(
+            a["best_by_chunk"].values(),
+            key=lambda x: x["score"],
+            reverse=True,
+        ):
+            hits.append(info)
+            total += info["score"]
+
+        a["hits"] = hits
+        a["score"] = total
 
     merged = sorted(agg.values(), key=lambda x: x["score"], reverse=True)
-    return {"by_role": by_role, "merged": merged}
+
+    return {
+        "by_role": by_role,
+        "merged": merged,
+    }
 
 
+ROLE_ORDER = ["failure_element", "failure_mode", "failure_effect", "failure_cause"]
+
+def build_concat_query(entity: Dict[str, Optional[str]]) -> str:
+    parts = []
+    for role in ROLE_ORDER:
+        v = entity.get(role)
+        if v and str(v).strip():
+            # Will role prefix
+            parts.append(f"{role.replace('failure_', '').title()}: {str(v).strip()}")
+    return ". ".join(parts)
+
+def query_sentence_kb_by_concat(
+    persist_dir: Union[str, Path],
+    entity: Dict[str, Optional[str]],
+    *,
+    top_k: int = 50,
+    collection_name: str = "sentences",
+    # meta filters
+    case_id=None,
+    failure_id=None,
+    cause_id=None,
+    status=None,
+    subject=None,
+    faithful_score=None,
+    productPnID=None,
+    product_domain=None,
+    extra_where=None,
+    # aggregation
+    group_by: str = "case_id",
+    # scoring
+    use_rank_bonus: bool = True,
+    rank_bonus_weight: float = 0.2,
+    per_group_cap: int = 20,  # Max number of sentences for each case
+) -> Dict[str, Any]:
+
+    query_text = build_concat_query(entity)
+    if not query_text.strip():
+        return {"query_text": query_text, "raw": {}, "merged": []}
+
+    # 1) Query KB by a whole sentence without senction limitation
+    raw = query_sentence_kb(
+        persist_dir=persist_dir,
+        query_text=query_text,
+        n_results=top_k,
+        collection_name=collection_name,
+        sentence_role=None,
+        case_id=case_id,
+        failure_id=failure_id,
+        cause_id=cause_id,
+        source_section=None,  
+        status=status,
+        subject=subject,
+        min_faithful_score=faithful_score,
+        productPnID=productPnID,
+        product_domain=product_domain,
+        extra_where=extra_where,
+        include=["documents", "metadatas", "distances"],
+    )
+
+    ids0 = raw.get("ids", [[]])[0]
+    docs0 = raw.get("documents", [[]])[0]
+    metas0 = raw.get("metadatas", [[]])[0]
+    dists0 = raw.get("distances", [[]])[0]
+
+    # 2) Aggregation by the case id
+    agg = defaultdict(lambda: {
+        "group_id": None,
+        "score": 0.0,
+        "hits": [],
+    })
+
+    # 
+    scored_hits = []
+    for rank, (rid, doc, meta, dist) in enumerate(zip(ids0, docs0, metas0, dists0), start=1):
+        gid = meta.get(group_by)
+        if not gid:
+            continue
+
+        # similarity（main）
+        sim = 1.0 / (1.0 + float(dist))  
+        bonus = (1.0 / rank) if use_rank_bonus else 0.0
+        item_score = sim + rank_bonus_weight * bonus
+
+        scored_hits.append({
+            "sentence_id": rid,
+            "text": doc,
+            "metadata": meta,
+            "distance": dist,
+            "rank": rank,
+            "sim": sim,
+            "item_score": item_score,
+        })
+
+    # 3) 
+    hits_by_gid = defaultdict(list)
+    for h in scored_hits:
+        hits_by_gid[h["metadata"].get(group_by)].append(h)
+
+    for gid, hs in hits_by_gid.items():
+        hs_sorted = sorted(hs, key=lambda x: x["item_score"], reverse=True)
+        hs_take = hs_sorted[:per_group_cap]
+
+        a = agg[gid]
+        a["group_id"] = gid
+        a["hits"] = hs_take
+        a["score"] = sum(x["item_score"] for x in hs_take)
+
+    merged = sorted(agg.values(), key=lambda x: x["score"], reverse=True)
+
+    return {
+        "query_text": query_text,
+        "raw": raw,
+        "merged": merged,
+    }
+
+
+def _pick(meta: Optional[Dict[str, Any]], keys: List[str]) -> Dict[str, Any]:
+    meta = meta or {}
+    return {k: meta.get(k) for k in keys if k in meta}
+
+def print_concat_result_structured(
+    result: Dict[str, Any],
+    *,
+    top_groups: int = 10,
+    top_hits_each: int = 5,
+    show_meta_keys: List[str] = None,
+):
+    if show_meta_keys is None:
+        show_meta_keys = [
+            "case_id", "failure_id", "cause_id",
+            "sentence_role", "source_section",
+            "productPnID", "product_domain",
+        ]
+
+    print("\n" + "=" * 80)
+    print("[CONCAT QUERY]")
+    print(result.get("query_text", "").strip() or "<EMPTY>")
+    print("=" * 80)
+
+    merged = result.get("merged") or []
+    if not merged:
+        print("\n[NO MERGED RESULTS]\n")
+        return
+
+    print(f"\n[MERGED GROUPS TOP {min(top_groups, len(merged))}]")
+    for gi, g in enumerate(merged[:top_groups], start=1):
+        gid = g.get("group_id")
+        gscore = g.get("score", 0.0)
+        hits = g.get("hits") or []
+
+        print(f"\n[{gi}] group_id={gid}  score={gscore:.4f}  hits={len(hits)}")
+        for hi, h in enumerate(hits[:top_hits_each], start=1):
+            sid = h.get("sentence_id")
+            rank = h.get("rank")
+            dist = h.get("distance")
+            sim = h.get("sim")
+            item_score = h.get("item_score")
+            text = (h.get("text") or "").strip().replace("\n", " ")
+            if len(text) > 180:
+                text = text[:180] + "..."
+
+            meta = h.get("metadata") or {}
+            meta_small = _pick(meta, show_meta_keys)
+
+            print(
+                f"   - ({hi}) sentence_id={sid} rank={rank} "
+                f"dist={dist:.4f} sim={sim:.4f} item_score={item_score:.4f}"
+            )
+            if meta_small:
+                print(f"       meta={meta_small}")
+            print(f"       text={text}")
+
+def print_get_result_items(res, show_all_metadata=False):
+    ids = res.get("ids", [])
+    docs = res.get("documents", [])
+    metas = res.get("metadatas", [])
+
+    n = min(len(ids), len(docs), len(metas))
+    print(f"Returned items: {n}")
+
+    for i in range(n):
+        m = metas[i] or {}
+        print("=" * 110)
+        print(f"[{i:02d}] id: {ids[i]}")
+        print(f" case id: {m.get('case_id')} | text: {docs[i]}")
+        print(f" role: {m.get('sentence_role')}  | Year:{m.get('released_year')} | subject:{m.get('subject')}"   )
+        # print(f"  productPnID: {m.get('productPnID')} | domain: {m.get('product_domain')} ")
+
+        if show_all_metadata:
+            # print any extra metadata keys that exist
+            extra = {k: v for k, v in m.items() if k not in {
+                "role","source_type","fmea_type","failure_id","cause_id",
+                "productPnID","product_domain","system"
+            }}
+            if extra:
+                print(f"  extra_metadata: {extra}")
 
 if  __name__ == "__main__":
     KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\sentence_kb")
+    result = query_sentence_kb(persist_dir=KB_PATH, query_text="motor overheats", productPnID=133427)
+    print(result)
