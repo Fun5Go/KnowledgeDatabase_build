@@ -5,78 +5,52 @@ TASK
 
 You are a senior automotive FMEA domain expert.
 
-Your task is to reconstruct the MOST LOGICALLY CONSISTENT and
-KB-ANCHORED FMEA failure chains for the given structure analysis.
+Your task is to construct the MOST PHYSICALLY AND LOGICALLY
+CONSISTENT FAILURE GRAPH based on the provided Structure Analysis.
 
-The PRIMARY objective is to MAXIMIZE reuse of Ground Truth Similar
-Examples retrieved from the Company Failure Knowledge Base.
+This is a STRUCTURE-DRIVEN reconstruction task.
 
-This is NOT a creativity task.
-This is a Knowledge-Base Reconstruction task.
+The PRIMARY objective is:
 
+→ Use Structure Analysis to generate the most technically coherent
+  and causally valid FMEA failure chains.
 
-=====================================================
-GROUND TRUTH DOMINANCE (HIGHEST PRIORITY RULE)
-=====================================================
-
-The Ground Truth Similar Example (GT) represents
-historical, validated FMEA failure entities from the company KB.
-
-You MUST treat GT as:
-
-- The PRIMARY knowledge authority in motor drives product
-- The dominant causal reference
-
-CRITICAL RULES:
-
-1. If structure fields semantically match ANY GT failure entity,
-   you MUST reuse or adapt that GT logic.
-
-2. You are NOT constrained by the same failure_element.
-   - If a GT cause→mode→effect pattern applies logically
-     to the current element, you MUST reuse it.
-   - Cross-element reuse is allowed when physics/function align.
-
-3. You SHOULD prioritize:
-   - Complete GT failure entities
-   - Then combinations of multiple GT entities
-   - Only lastly: controlled engineering inference
-
-4. The goal is HIGH COVERAGE of GT utilization,
-   while maintaining strict causal correctness.
-
-5. If a generated chain contradicts GT patterns,
-   DO NOT output it unless structure strongly enforces it.
+Ground Truth (GT) examples are SECONDARY:
+They serve as validation and enhancement references,
+NOT as the dominant source.
 
 
 =====================================================
-GT SUPPORT CLASSIFICATION (MANDATORY FIELD)
+CORE PRINCIPLE (STRUCTURE DOMINANCE)
 =====================================================
 
-Each generated failure candidate MUST include:
+1. Structure Analysis defines:
+   - available elements
+   - possible failure modes
+   - possible causes
+   - possible effects
 
-"gt_support_type": one of:
+2. ALL generated failure chains MUST use only Structure fields.
 
-- "complete_entity"
-    → Fully supported by a single GT failure entity
+3. Your first priority is:
+   - Physical correctness
+   - Motor drive engineering logic
+   - Causal consistency
 
-- "composed_from_multiple"
-    → Built by stitching multiple GT entities
-      (e.g., cause from one GT failure + mode/effect from another)
+4. GT examples are used ONLY to:
+   - Validate plausibility
+   - Reinforce known patterns
+   - Increase confidence level
 
-- "partial_pattern"
-    → Partially aligned with GT but requires small inference
-
-- "no_direct_gt"
-    → No GT support; pure engineering inference
-      (ONLY allowed if structure has no GT match)
+If GT contradicts strong structural logic:
+→ Follow Structure.
 
 
 =====================================================
-STRICT CAUSAL STRUCTURE
+FAILURE GRAPH OBJECTIVE
 =====================================================
 
-Each candidate MUST strictly follow:
+You must construct a failure graph consisting of:
 
 failure_element
    → failure_function
@@ -84,59 +58,66 @@ failure_element
          → failure_effect
             ← caused by ← failure_cause
 
-Mandatory logic rules:
+Requirements:
 
-- Cause MUST physically/technically lead to Mode
-- Mode MUST logically lead to Effect
-
-Relation:
-failure element has this function, which fails in this mode, leading to this effect. The mode is caused by the failure cause.
-
-=====================================================
-FIELD SELECTION RULE (STRICT)
-=====================================================
-
-For each node in structure:
-
-- failure_mode MUST come from "modes"
-- failure_cause MUST come from "causes"
-- failure_effect MUST come from "effects"
-- failure_element MUST match the node
-The results must come from the provided Structure Analysis list
-
-However:
-- GT patterns may originate from different elements
-- You may reuse GT causal structure even if GT element differs, but need to be logical
+- Cause MUST physically produce Mode
+- Mode MUST realistically lead to Effect
+- All chains must be motor-drive related
+- Avoid trivial or redundant combinations
+- Prefer physically meaningful chains over syntactic matches
 
 
 =====================================================
-SUPPORT FAILURE ID RULE (IMPORTANT)
+GRAPH CONSTRUCTION STRATEGY
 =====================================================
 
-- support_failure_id MUST be a list
-- It may contain:
-    - One ID
-    - Multiple IDs
-    - Or be empty []
+Step 1 — Structure-First Chain Generation
+-----------------------------------------
 
-Rules:
+For each element in Structure:
 
-1. If fully supported by one GT failure:
-      support_failure_id = ["FMEA_R1"]
-      gt_support_type = "complete_entity"
+- Evaluate all possible (cause → mode → effect) combinations.
+- Select only those that are physically consistent.
+- Discard illogical chains.
 
-2. If stitched from several GT failures:
-      support_failure_id = ["FMEA_R3", FMEA_R5"]
-      gt_support_type = "composed_from_multiple"
+Step 2 — Optimize Graph Coherence
+----------------------------------
 
-3. If partially supported:
-      support_failure_id = [""]
-      gt_support_type = "partial_pattern"
+- Avoid duplicate (mode + cause + effect) combinations.
+- Avoid overly similar chains.
+- Prefer diverse but realistic failure mechanisms.
 
-4. If no GT support:
-      support_failure_id = []
-      gt_support_type = "no_direct_gt"
-      AND insight field MUST contain detailed reasoning.
+Step 3 — GT Validation (Secondary)
+-----------------------------------
+
+Compare generated chains against GT examples.
+
+If a chain matches a GT entity:
+    → Mark as "complete_entity"
+If partially aligned:
+    → "partial_pattern"
+If composed from multiple GT:
+    → "composed_from_multiple"
+If no GT alignment:
+    → "no_direct_gt"
+
+GT must NEVER override structural physics.
+
+
+=====================================================
+GT SUPPORT CLASSIFICATION
+=====================================================
+
+"gt_support_type" must be one of:
+
+- "complete_entity"
+- "composed_from_multiple"
+- "partial_pattern"
+- "no_direct_gt"
+
+support_failure_id:
+- [] if no GT
+- list of GT IDs if aligned
 
 
 =====================================================
@@ -144,13 +125,13 @@ CONFIDENCE LEVEL
 =====================================================
 
 - "high"
-    → Direct GT entity reuse (minimal modification)
+    → Strong structural logic + direct GT match
 
 - "medium"
-    → Composed or partially aligned with GT
+    → Strong structural logic + partial GT support
 
 - "low"
-    → No direct GT support but logically valid
+    → Structurally valid but no GT reference
 
 
 =====================================================
@@ -158,16 +139,28 @@ INFERENCE LIMITATIONS
 =====================================================
 
 Allowed:
-- Minor alignment adjustments
-- Engineering-consistent bridging
-- Well-known motor_drive failure physics
+- Engineering-consistent reasoning
+- Cross-element physics reuse
+- Known motor-drive failure mechanisms
 
 NOT allowed:
-- Unrealistic physics
-- Speculative system behavior
-- Discipline mixing without basis
-- Reverse logic
-- Creativity beyond GT patterns
+- Speculative or unrealistic behavior
+- Violating physical causality
+- Random structure combinations
+
+=====================================================
+OUTPUT COUNT REQUIREMENT (MANDATORY)
+=====================================================
+
+You MUST output exactly 15 failure_candidates.
+
+- If more candidates are possible, select the best 15 by:
+  1) strongest structural causality
+  2) highest GT support
+  3) highest diversity (different mode/cause/effect)
+
+- If fewer than 15 valid candidates exist using Structure Analysis:
+  output as many as possible and explain in inference_reason why no more valid chains exist.
 
 
 =====================================================
@@ -271,8 +264,21 @@ CONFIDENCE
 
 high   – strong structural support  
 medium – partially inferred  
-low    – mostly inferred  
+low    – mostly inferred
 
+=====================================================
+OUTPUT COUNT REQUIREMENT (MANDATORY)
+=====================================================
+
+You MUST output exactly 15 failure_candidates.
+
+- If more candidates are possible, select the best 15 by:
+  1) strongest structural causality
+  2) highest GT support
+  3) highest diversity (different mode/cause/effect)
+
+- If fewer than 15 valid candidates exist using Structure Analysis:
+  output as many as possible and explain in inference_reason why no more valid chains exist.
 
 ==============================
 STRUCTURE ANALYSIS (JSON)
@@ -296,10 +302,7 @@ Please provide the results in JSON format following this schema:
       "failure_effect": "...",
       "failure_cause": "...",
       "confidence": "high | medium | low",
-      "gt_support_type": "",
-      "support_failure_id": [],
       "inference_reason": "short explanation",
-      "insight": "optional technical reasoning"
     }}
   ]
 }}
@@ -312,46 +315,66 @@ ROLE
 
 You are a senior automotive FMEA expert specializing in motor drive systems.
 
-Your task is to REVIEW and COMPLETE the provided
-"Semi-filled Failure Entity" entries.
+Your task is to REVIEW, CORRECT, COMPLETE and EXPAND the provided
+"Semi-filled Failure Entity" entries which is integrated by the Structure Anlysis entities and historical FMEA failure.
 
-This is a STRICT structure-based completion task.
+This is a structure-driven FMEA reconstruction and inference task.
+
+This is a motor-drive system context. All failures must be motor-drive related.
 
 ⚠ The Knowledge Base (KB) is NOT allowed to be used as final output content.
 ⚠ You may NOT copy any wording from KB.
-⚠ ALL final fields MUST come ONLY from the provided Structure Analysis.
+⚠ ALL final failure fields MUST come ONLY from the provided Structure Analysis.
+⚠ You may infer NEW combinations, but ONLY using existing Structure Analysis texts.
 
 
 =====================================================
-INPUT DESCRIPTION
+CORE OBJECTIVE (VERY IMPORTANT)
 =====================================================
 
-You are given:
+Step 1 — Replace KB:
+--------------------------------
+For each input failure entity:
+- Replace ALL [KB] fields using ONLY Structure Analysis texts.
+- Validate physical and engineering causality.
+- If the input chain violates real motor-drive failure physics:
+    → You MUST correct it using other appropriate Structure Analysis texts.
+    → Do NOT keep logically invalid chains.
 
-1. Structure Analysis:
-   - failure elements
-   - failure modes
-   - failure causes
-   - failure effects
+Step 2 — Logical Reconstruction:
+--------------------------------
+After correction:
+Ensure strict physical causality:
 
-2. Semi-filled Failure Entity:
-   Some fields may contain [KB] placeholders.
-   These must be replaced using Structure Analysis.
+    failure_cause → failure_mode → failure_effect
+
+The chain must:
+- Be technically realistic
+- Be motor-drive related
+- Respect engineering logic
+
+If original structure is physically wrong:
+→ Replace mode / cause / effect with better SA text.
+→ Prioritize physical correctness over input similarity.
 
 
-=====================================================
-CORE OBJECTIVE
-=====================================================
+Step 3 — Expand & Diversify
+--------------------------------
+After processing ALL input entities:
 
-For EACH semi-filled failure entity:
+You must infer additional potential FMEA failure chains using:
+- ONLY Structure Analysis texts
+- Different combinations than input ones
+- Do NOT duplicate existing (mode + cause + effect)
 
-You must:
+Purpose:
+Increase diversity of potential failure chains within this structure.
 
-1. Validate technical causal logic.
-2. Replace ALL [KB] fields using Structure Analysis.
-3. Ensure strict causality consistency:
-      failure_cause → failure_mode → failure_effect
-4. Keep the original failure_element and failure_function unchanged.
+These inferred chains:
+- Must follow physical causality
+- Must not be random combinations
+- Must be realistic motor-drive failures
+- fill_from_id must be empty for inferred chains
 
 
 =====================================================
@@ -359,24 +382,42 @@ STRICT FIELD RULES
 =====================================================
 
 failure_element:
--Directly from the Structure Analysis
+- MUST be an EXACT element text from Structure Analysis.
+- If input element is not exact SA text:
+    → Replace with best matching SA element.
+- If exact → keep.
 
 failure_function:
-- MUST remain exactly as given in the input entity.
+- MUST remain exactly as provided.
+- If deduplicated → set to "N/A"
 
 failure_mode:
 - MUST exactly match one mode from Structure Analysis.
-- MUST logically result from the selected cause.
+- Must logically result from the selected cause.
 
 failure_cause:
 - MUST exactly match one cause from Structure Analysis.
-- MUST logically lead to the selected failure_mode.
+- Must realistically produce the selected mode.
 
 failure_effect:
 - MUST exactly match one effect from Structure Analysis.
+- Must realistically result from the selected mode.
 - Does NOT need to resemble original KB wording.
-- Must be a technically valid consequence of the selected failure_mode.
 
+
+=====================================================
+DEDUPLICATION RULE 
+=====================================================
+
+If multiple entities share the SAME:
+    failure_mode + failure_cause + failure_effect
+→ Merge them into ONE candidate.
+
+After merging:
+- Keep one failure_element (most logical one)
+- Set failure_function = "N/A"
+- Do NOT output duplicates.
+- Append the failure id in "fill_from_id"
 
 =====================================================
 CAUSAL VALIDATION REQUIREMENT
@@ -384,26 +425,28 @@ CAUSAL VALIDATION REQUIREMENT
 
 Before accepting a chain, verify:
 
-1. The failure_cause can realistically produce the failure_mode.
-2. The failure_mode can realistically produce the failure_effect.
-3. The overall chain is technically coherent in motor drive systems context.
+1. Cause can physically produce Mode.
+2. Mode can physically produce Effect.
+3. The chain is coherent in motor drive systems.
+4. Effect is not abstract or unrelated.
 
-If ANY causal link is invalid:
-→ Mark the entity as INVALID and provide explanation.
+If invalid:
+→ Replace with better SA texts.
+→ If no valid correction possible:
+    Mark as INVALID and explain.
 
 
 =====================================================
 PROHIBITED ACTIONS
 =====================================================
 
-- Do NOT use any KB wording in final output.
-- Do NOT map "failure_mode" in "failure_effect"
-- Do NOT invent new modes, causes, or effects.
-- Do NOT merge entities.
-- Do NOT skip any entity.
-- Do NOT modify failure_element or failure_function.
-- Do NOT output partial chains.
-- Avoid the same text in failure_mode, failure_cause, and failure effect. 
+- Do NOT use KB wording in final output.
+- Do NOT invent new texts outside Structure Analysis.
+- Do NOT map effect into mode or vice versa.
+- Do NOT output duplicate chains.
+- Do NOT skip entities.
+- Avoid identical text across cause/mode/effect fields.
+
 
 =====================================================
 STRUCTURE ANALYSIS (JSON)
@@ -411,15 +454,11 @@ STRUCTURE ANALYSIS (JSON)
 
 {structure_analysis}
 
-
 =====================================================
 INPUT FAILURE ENTITIES
 =====================================================
-Use the specific text from the Structure Analysis above, and put them into the correct field position.
-
 
 {to_be_fill_failure}
-
 
 =====================================================
 OUTPUT FORMAT
@@ -436,9 +475,8 @@ Return valid JSON in the following format:
       "failure_effect": "...",
       "failure_cause": "...",
       "confidence": "high | medium | low",
-      "support_failure_id": [],
-      "gt_support_type": "none",
-      "inference_reason": "brief explanation"
+      "fill_from_id": [""],
+      "inference_reason": "brief explanation of physical logic, correction reason, or inference rationale"
     }}
   ]
 }}

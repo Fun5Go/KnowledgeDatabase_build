@@ -33,7 +33,115 @@ def build_structure_analysis_input(structure_input: Dict,):
         lines.append("-" * 50)
 
     return "\n".join(lines)
-    
+
+
+def build_ground_truth_input(
+    results: List[Dict],
+    target_n: Optional[int] = None,
+    strict_unique: bool = False,
+) -> str:
+
+    if not results:
+        return "GROUND TRUTH FAILURE PATTERNS (Structured Reference Only)\n\n[]"
+
+    if target_n is None:
+        target_n = len(results)
+
+    def norm(x):
+        if x is None:
+            return ""
+        return " ".join(str(x).strip().split()).lower()
+
+    def sig(r):
+        return (
+            norm(r.get("element")),
+            norm(r.get("function")),
+            norm(r.get("mode")),
+            norm(r.get("effect")),
+            norm(r.get("cause")),
+        )
+
+    # -----------------------------
+    # 1️⃣ Deduplication
+    # -----------------------------
+    selected = []
+    seen = set()
+    duplicates = []
+
+    for r in results:
+        s = sig(r)
+        if s in seen:
+            duplicates.append(r)
+            continue
+        seen.add(s)
+        selected.append(r)
+        if len(selected) >= target_n:
+            break
+
+    if not strict_unique and len(selected) < target_n:
+        need = target_n - len(selected)
+        selected.extend(duplicates[:need])
+
+    # -----------------------------
+    # 2️⃣ Extract matched SA fields
+    # -----------------------------
+    def extract_matched_inputs(match_detail: dict) -> dict:
+        """
+        Return structured dict:
+        {
+            "element": "...",
+            "mode": "...",
+            ...
+        }
+        Dedup + preserve order.
+        """
+        out = {}
+        for ft in ["element", "mode", "cause", "effect"]:
+            hits = (match_detail or {}).get(ft, []) or []
+            seen_txt = set()
+            texts = []
+            for h in hits:
+                t = (h.get("structure_text") or "").strip()
+                if not t:
+                    continue
+                key = norm(t)
+                if key in seen_txt:
+                    continue
+                seen_txt.add(key)
+                texts.append(t)
+            if texts:
+                out[ft] = " | ".join(texts)
+        return out
+
+    # -----------------------------
+    # 3️⃣ Build structured GT list
+    # -----------------------------
+    structured_patterns = []
+
+    for r in selected:
+        gt_pattern = {
+            "failure_id": r.get("failure_id"),
+            "gt_causal_pattern": {
+                "cause": r.get("cause") or "N/A",
+                "mode": r.get("mode") or "N/A",
+                "effect": r.get("effect") or "N/A",
+            },
+        }
+
+        matched_inputs = extract_matched_inputs(r.get("match_detail", {}))
+
+        if matched_inputs:
+            gt_pattern["matched_structure_fields"] = matched_inputs
+
+        structured_patterns.append(gt_pattern)
+
+    # -----------------------------
+    # 4️⃣ Return final formatted block
+    # -----------------------------
+    return (
+        "GROUND TRUTH FAILURE PATTERNS (Structured Reference Only)\n\n"
+        + json.dumps(structured_patterns, indent=2, ensure_ascii=False)
+    )
 
 def build_fill_entity(
     results: List[Dict],
@@ -150,7 +258,7 @@ def build_fill_entity(
             "failure_function": function,
             "failure_element": with_tag(element_text, element_tag),
             "failure_mode": with_tag(mode_text, mode_tag),
-            "ailure_cause": with_tag(cause_text, cause_tag),
+            "failure_cause": with_tag(cause_text, cause_tag),
             "failure_effect": with_tag(effect_text, effect_tag),
         }
 
@@ -194,7 +302,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         require_cause_plus = require_cause_plus,
     )
         if not FILL:
-            failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
+            failure_example = build_ground_truth_input(similar_failure,target_n=25, strict_unique=True)
             failure_candidates = failure_inference_generation_RAG.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -332,7 +440,7 @@ if __name__ == "__main__":
 # }
 
     result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, 
-                                      max_hits_per_field_per_failure=8, RAG = True, FILL = True)
+                                      max_hits_per_field_per_failure=8, RAG = False, FILL = False)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)

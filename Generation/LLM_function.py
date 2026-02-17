@@ -4,7 +4,7 @@ from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from .llm_init import get_llm_backend
-from .failure_schema import FailureCandidates
+from .failure_schema import FailureCandidates_RAG, FailureCandidates_PURE, FailureCandidates_RAG_FILL
 from .prompt_failure_generation import failure_inference_prompt_RAG,failure_inference_prompt_PURE,failure_inference_prompt_RAG_FILL
 
 
@@ -33,7 +33,7 @@ def failure_inference_generation_RAG(data: dict) -> dict:
     })
         # Call LLM and parse output
     resp = llm.invoke(formatted_prompt.to_messages())
-    parser = JsonOutputParser(pydantic_object=FailureCandidates)
+    parser = JsonOutputParser(pydantic_object=FailureCandidates_RAG)
     return parser.parse(resp.content)
 
 
@@ -62,7 +62,7 @@ def failure_inference_generation_RAG_FILL(data: dict) -> dict:
     })
         # Call LLM and parse output
     resp = llm.invoke(formatted_prompt.to_messages())
-    parser = JsonOutputParser(pydantic_object=FailureCandidates)
+    parser = JsonOutputParser(pydantic_object=FailureCandidates_RAG_FILL)
     return parser.parse(resp.content)
 
 
@@ -89,7 +89,7 @@ def failure_inference_generation_PURE(data: dict) -> dict:
     })
         # Call LLM and parse output
     resp = llm.invoke(formatted_prompt.to_messages())
-    parser = JsonOutputParser(pydantic_object=FailureCandidates)
+    parser = JsonOutputParser(pydantic_object=FailureCandidates_PURE)
     return parser.parse(resp.content)
 
 
