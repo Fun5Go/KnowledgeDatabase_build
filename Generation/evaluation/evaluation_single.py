@@ -227,7 +227,7 @@ def evaluate(pred_list: List[Dict], gt_list: List[Dict]):
 if __name__ == "__main__":
 
     GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\RAG\KB_motor_drives\failure_kb\fmea_cause_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG_FILL\failure_candidates_rag_fill_7.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json")
 
     gt_list = load_gt(GT_JSON)
     pred_list = load_predictions(PREDICTION_JSON)

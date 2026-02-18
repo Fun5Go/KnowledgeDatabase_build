@@ -278,6 +278,44 @@ def _accumulate_candidate_scores(
             })
 
 
+
+def _apply_controlled_reinforcement(
+    score: float,
+    matched: Dict[str, List[Dict[str, Any]]],
+    *,
+    reinforce_within_field: float = 0.05,
+    reinforce_cross_field: float = 0.15,
+    max_reinforce_ratio: float = 0.4,
+) -> float:
+    """
+    Controlled "duplicate reinforcement" for generate-ranking.
+
+    - Within-field: if a field has multiple distinct semantic hits, add small bonus
+    - Cross-field: if multiple fields hit (element/mode/cause/effect), add bonus
+    - Cap: reinforcement <= base_score * max_reinforce_ratio
+    """
+    base = float(score)
+    if base <= 0:
+        return base
+
+    reinforcement = 0.0
+
+    # 1) within-field reinforcement (distinct hits already deduped by semantic_id in _accumulate_candidate_scores)
+    for field, hits in (matched or {}).items():
+        n = len(hits or [])
+        if n > 1:
+            reinforcement += (n - 1) * float(reinforce_within_field)
+
+    # 2) cross-field reinforcement (reward completeness)
+    active_fields = [f for f, hits in (matched or {}).items() if hits]
+    if len(active_fields) >= 2:
+        reinforcement += (len(active_fields) - 1) * float(reinforce_cross_field)
+
+    # 3) cap
+    reinforcement = min(reinforcement, base * float(max_reinforce_ratio))
+    return base + reinforcement
+
+
 def generate_failure_chains_from_structure(
     persist_dir: Union[str, Path],
     structure_input: Dict[str, Any],
@@ -294,6 +332,21 @@ def generate_failure_chains_from_structure(
     min_similarity: float = 0.45,
     max_hits_per_field_per_failure: int = 10,
     normalize_by_hits: bool = False,
+
+    # ---- NEW: controlled duplicate reinforcement ----
+    allow_reinforcement: bool = True,
+    reinforce_within_field: float = 0.05,
+    reinforce_cross_field: float = 0.15,
+    max_reinforce_ratio: float = 0.4,
+
+    # ---- OPTIONAL: connection shaping (keep your current behavior) ----
+    apply_connection_bonus: bool = True,
+    # NOTE: your original code uses 0.7 for >=2 hits (actually a penalty).
+    # If you intended to "strengthen", consider changing to >1.0.
+    connection_factor_ge2: float = 1.0,
+    connection_factor_eq1: float = 1.0,
+    connection_factor_eq0: float = 1.0,
+    replace: bool = True,
 ) -> List[Dict[str, Any]]:
     """
     Graph-constrained retrieval + structure-native FMEA chain generation.
@@ -302,6 +355,12 @@ def generate_failure_chains_from_structure(
     - Relation pattern from KB
     - Semantic text from structure analysis
     - KB used only as fallback completion
+
+    Notes:
+    - Requires existing project functions:
+        _load_kb(persist_dir)
+        query_semantic_kb(persist_dir, text, field_type, n_results, min_count, source_type)
+        _accumulate_candidate_scores(kb, semantic_query_result, candidate_scores, query_text, field_type, weight, ...)
     """
 
     persist_dir = Path(persist_dir)
@@ -322,18 +381,12 @@ def generate_failure_chains_from_structure(
         candidate_scores = defaultdict(lambda: {
             "score": 0.0,
             "field_hits": set(),
-            "matched": {
-                "element": [],
-                "mode": [],
-                "cause": [],
-                "effect": []
-            }
+            "matched": {"element": [], "mode": [], "cause": [], "effect": []},
         })
 
         # -------------------------
         # SEMANTIC SEARCH
         # -------------------------
-
         def query_and_accumulate(text: str, field: str, weight: float):
             res = query_semantic_kb(
                 persist_dir,
@@ -356,26 +409,24 @@ def generate_failure_chains_from_structure(
 
         if element_text:
             query_and_accumulate(element_text, "element", weight_element)
-
         for m in modes:
             query_and_accumulate(m, "mode", weight_mode)
-
         for c in causes:
             query_and_accumulate(c, "cause", weight_cause)
-
         for e in effects:
             query_and_accumulate(e, "effect", weight_effect)
 
         # -------------------------
         # GRAPH-CONSTRAINED FILTER
         # -------------------------
-
         for fid, info in candidate_scores.items():
             fields = info["field_hits"]
 
             if require_cause and ("cause" not in fields):
                 continue
 
+            # keep your semantics: if require_cause_plus is True and cause hit exists,
+            # require at least one of (mode/effect/element) too.
             if require_cause_plus and ("cause" in fields) and not (
                 ("mode" in fields) or ("effect" in fields) or ("element" in fields)
             ):
@@ -388,24 +439,35 @@ def generate_failure_chains_from_structure(
             if product_domain and entity.get("product_domain") != product_domain:
                 continue
 
-            score = info["score"]
+            score = float(info["score"])
 
             # -------------------------
-            # CONNECTION BONUS (mode/cause/effect)
+            # NEW: CONTROLLED "DUPLICATE" REINFORCEMENT
             # -------------------------
+            if allow_reinforcement:
+                score = _apply_controlled_reinforcement(
+                    score,
+                    info.get("matched") or {},
+                    reinforce_within_field=reinforce_within_field,
+                    reinforce_cross_field=reinforce_cross_field,
+                    max_reinforce_ratio=max_reinforce_ratio,
+                )
 
-            mce_fields = {"mode", "cause", "effect"}
-            mce_hit_count = len(fields.intersection(mce_fields))
+            # -------------------------
+            # OPTIONAL: CONNECTION SHAPING (mode/cause/effect)
+            # -------------------------
+            if apply_connection_bonus:
+                mce_fields = {"mode", "cause", "effect"}
+                mce_hit_count = len(fields.intersection(mce_fields))
 
-            # bonus strategy
-            if mce_hit_count >= 2:
-                score *= 0.7          # 强化双命中
-            elif mce_hit_count == 1:
-                score *= 1         # 轻微惩罚
-            else:
-                score *= 1          # 严重惩罚
+                if mce_hit_count >= 2:
+                    score *= float(connection_factor_ge2)
+                elif mce_hit_count == 1:
+                    score *= float(connection_factor_eq1)
+                else:
+                    score *= float(connection_factor_eq0)
 
-
+            # Optional mild normalization
             if normalize_by_hits:
                 denom = max(1, min(len(fields), 4))
                 score = score / denom
@@ -413,53 +475,66 @@ def generate_failure_chains_from_structure(
             # -------------------------
             # STRUCTURE TEXT REPLACEMENT
             # -------------------------
-            def pick_best_structure_text(matched_list):
+            def pick_best_structure_text(matched_list: List[Dict[str, Any]]) -> Optional[str]:
                 if not matched_list:
                     return None
-                best = sorted(matched_list, key=lambda x: x["similarity"], reverse=True)[0]
+                best = max(matched_list, key=lambda x: float(x.get("similarity", 0.0)))
                 return best.get("structure_text")
+            if replace:
+                structure_element = pick_best_structure_text(info["matched"]["element"])
+                structure_mode    = pick_best_structure_text(info["matched"]["mode"])
+                structure_cause   = pick_best_structure_text(info["matched"]["cause"])
+                structure_effect  = pick_best_structure_text(info["matched"]["effect"])
 
-            structure_element = pick_best_structure_text(info["matched"]["element"])
-            structure_mode    = pick_best_structure_text(info["matched"]["mode"])
-            structure_cause   = pick_best_structure_text(info["matched"]["cause"])
-            structure_effect  = pick_best_structure_text(info["matched"]["effect"])
+                final_element = structure_element or entity.get("failure_element_text")
+                final_mode    = structure_mode    or entity.get("failure_mode_text")
+                final_cause   = structure_cause   or entity.get("failure_cause_text")
+                final_effect  = structure_effect  or entity.get("failure_effect_text")
 
-            # final values (structure first, kb fallback)
-            final_element = structure_element or entity.get("failure_element_text")
-            final_mode    = structure_mode    or entity.get("failure_mode_text")
-            final_cause   = structure_cause   or entity.get("failure_cause_text")
-            final_effect  = structure_effect  or entity.get("failure_effect_text")
+                tag_element = "STRUCTURE" if structure_element else "KB"
+                tag_mode    = "STRUCTURE" if structure_mode else "KB"
+                tag_cause   = "STRUCTURE" if structure_cause else "KB"
+                tag_effect  = "STRUCTURE" if structure_effect else "KB"
 
-            # tag per field
-            tag_element = "STRUCTURE" if structure_element else "KB"
-            tag_mode    = "STRUCTURE" if structure_mode else "KB"
-            tag_cause   = "STRUCTURE" if structure_cause else "KB"
-            tag_effect  = "STRUCTURE" if structure_effect else "KB"
+                chain = {
+                    "node_id": node_id,
+                    "failure_id": fid,
 
-            chain = {
-                "node_id": node_id,
-                "failure_id": fid,
+                    # plain fields
+                    "element": final_element,
+                    "function": entity.get("function"),
+                    "mode": final_mode,
+                    "cause": final_cause,
+                    "effect": final_effect,
 
-                # keep plain fields for downstream compatibility
-                "element": final_element,
-                "function": entity.get("function"),
-                "mode": final_mode,
-                "cause": final_cause,
-                "effect": final_effect,
+                    # tagged fields (for display/debug)
+                    "tagged": {
+                        "element": {"text": final_element, "tag": tag_element},
+                        "mode":    {"text": final_mode,    "tag": tag_mode},
+                        "cause":   {"text": final_cause,   "tag": tag_cause},
+                        "effect":  {"text": final_effect,  "tag": tag_effect},
+                    },
 
-                # NEW: tagged display fields
-                "tagged": {
-                    "element": {"text": final_element, "tag": tag_element},
-                    "mode":    {"text": final_mode,    "tag": tag_mode},
-                    "cause":   {"text": final_cause,   "tag": tag_cause},
-                    "effect":  {"text": final_effect,  "tag": tag_effect},
-                },
+                    "score": round(float(score), 4),
+                    "matched_fields": sorted(list(fields)),
+                    "match_detail": info["matched"],
+                }
+                all_results.append(chain)
+            else:
+                chain = {
+                    "node_id": node_id,
+                    "failure_id": fid,
+                    "element": entity.get("failure_element_text"),
+                    "function": entity.get("function"),
+                    "mode": entity.get("failure_mode_text"),
+                    "cause": entity.get("failure_cause_text"),
+                    "effect": entity.get("failure_effect_text"),
+                    "score": round(float(score), 4),
+                    "matched_fields": sorted(list(fields)),
+                    "match_detail": info["matched"],   
+                }
+                all_results.append(chain)
 
-                "score": round(float(score), 4),
-                "matched_fields": sorted(list(fields)),
-                "match_detail": info["matched"],  # 保持你build_ground_truth_input能print
-            }
-            all_results.append(chain)
 
     # -------------------------
     # GLOBAL SORT
@@ -470,6 +545,7 @@ def generate_failure_chains_from_structure(
         all_results = all_results[: int(top_n)]
 
     return all_results
+
 
 
 
@@ -548,28 +624,24 @@ if  __name__ == "__main__":
     # -----------------------------------------------------
     # 3) Run Retrieval
     # -----------------------------------------------------
-    results = build_failure_chains_from_structure(
-        persist_dir=KB_PATH,
-        structure_input=structure_input,
-        top_k_per_field=15,
-        # minimum_field_match=2,
-        top_n=70,
-        # source_type=["8D","8D,old_fmea","8D,new_fmea","8D,new_fmea,old_fmea"],
-    )
-    # re
-    # results = generate_failure_chains_from_structure(
+    # results = build_failure_chains_from_structure(
     #     persist_dir=KB_PATH,
     #     structure_input=structure_input,
     #     top_k_per_field=15,
     #     # minimum_field_match=2,
-    #     top_n=50,
-    #     source_type=["8D","8D,old_fmea","8D,new_fmea","8D,new_fmea,old_fmea"],
+    #     top_n=70,
+    #     # source_type=["8D","8D,old_fmea","8D,new_fmea","8D,new_fmea,old_fmea"],
     # )
-    # results = generate_failure_chains_from_structure(
-    #     persist_dir=KB_PATH,
-    #     structure_input=structure_input
-    # )
-    # print(results)
+    # re
+    results = generate_failure_chains_from_structure(
+        persist_dir=KB_PATH,
+        structure_input=structure_input,
+        top_k_per_field=15,
+        # minimum_field_match=2,
+        top_n=50,
+        replace=False
+    )
+
 
     def build_ground_truth_input(
         results: List[Dict],
@@ -681,5 +753,5 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=25,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=40,strict_unique=True)
     print(results)
