@@ -28,7 +28,7 @@ def build_failure_chains_from_structure(
     # ---- graph constraints / scoring controls ----
     require_cause: bool = False,
     require_cause_plus: bool = False,  # require (mode + cause) or (mode + effect) if True
-    min_similarity: float = 0.3,     # ignore weak semantic hits
+    min_similarity: float = 0.45,     # ignore weak semantic hits
     max_hits_per_field_per_failure: int = 10,  # cap to prevent score explosion from many near-duplicates
     normalize_by_hits: bool = False,  # for graph-constrained retrieval, default False
 ) -> List[Dict[str, Any]]:
@@ -548,14 +548,23 @@ if  __name__ == "__main__":
     # -----------------------------------------------------
     # 3) Run Retrieval
     # -----------------------------------------------------
-    results = generate_failure_chains_from_structure(
+    results = build_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
         top_k_per_field=15,
         # minimum_field_match=2,
-        top_n=50,
-        source_type=["8D","8D,old_fmea","8D,new_fmea","8D,new_fmea,old_fmea"],
+        top_n=70,
+        # source_type=["8D","8D,old_fmea","8D,new_fmea","8D,new_fmea,old_fmea"],
     )
+    # re
+    # results = generate_failure_chains_from_structure(
+    #     persist_dir=KB_PATH,
+    #     structure_input=structure_input,
+    #     top_k_per_field=15,
+    #     # minimum_field_match=2,
+    #     top_n=50,
+    #     source_type=["8D","8D,old_fmea","8D,new_fmea","8D,new_fmea,old_fmea"],
+    # )
     # results = generate_failure_chains_from_structure(
     #     persist_dir=KB_PATH,
     #     structure_input=structure_input

@@ -302,7 +302,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         require_cause_plus = require_cause_plus,
     )
         if not FILL:
-            failure_example = build_ground_truth_input(similar_failure,target_n=25, strict_unique=True)
+            failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
             failure_candidates = failure_inference_generation_RAG.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -321,7 +321,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 require_cause = require_cause,
                 require_cause_plus = require_cause_plus,
             )
-            semi_candidates =  build_fill_entity(semi_candidates,target_n=25,strict_unique=True)
+            semi_candidates =  build_fill_entity(semi_candidates,target_n=30,strict_unique=True)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -341,7 +341,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
     return failure_candidates,OUTPUT_PATH
 
 if __name__ == "__main__":
-        # -----------------------------------------------------
+    # -----------------------------------------------------
     # 1) KB Path
     # -----------------------------------------------------
     KB_PATH = Path(
@@ -406,8 +406,58 @@ if __name__ == "__main__":
             }
         ]
     }
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, 
+                                      max_hits_per_field_per_failure=8, RAG = False, FILL = False)
+    print("\n================ FAILURE CANDIDATES ================\n")
+    # print(json.dumps(result, indent=4))
+    save_failure_candidates_to_json(result, OUTPUT_PATH)
 
-#     structure_input = {
+    # -----------------------------------------------------
+    # 3) Batch Settings
+    # -----------------------------------------------------
+    # NUM_RUNS = 10  
+
+    # BASE_SAVE_DIR = Path(
+    #     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
+    # )
+
+    # MODES = [
+    #     # {"name": "PURE", "RAG": False, "FILL": False},
+    #     {"name": "RAG", "RAG": True, "FILL": False},
+    #     # {"name": "RAG_FILL", "RAG": True, "FILL": True},
+    # ]
+
+    # # -----------------------------------------------------
+    # # 4) Run Loop
+    # # -----------------------------------------------------
+    # for mode in MODES:
+
+    #     mode_name = mode["name"]
+    #     save_folder = BASE_SAVE_DIR / mode_name
+    #     save_folder.mkdir(parents=True, exist_ok=True)
+
+    #     print(f"\n================ RUNNING MODE: {mode_name} =================\n")
+
+    #     for i in range(1, NUM_RUNS+1):
+
+    #         print(f"\n--- Run {i} ---\n")
+
+    #         result, _ = RAG_pipeline(
+    #             structure_input=structure_input,
+    #             KB_PATH=KB_PATH,
+    #             top_k_per_field=20,
+    #             top_n=50,
+    #             max_hits_per_field_per_failure=8,
+    #             RAG=mode["RAG"],
+    #             FILL=mode["FILL"],
+    #         )
+
+    #         output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
+
+    #         save_failure_candidates_to_json(result, output_path)
+
+
+    #     structure_input = {
 #     "product_domain": "motor_drives",
 #     "nodes": [
 #         {
@@ -438,9 +488,3 @@ if __name__ == "__main__":
 #         }
 #     ]
 # }
-
-    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, 
-                                      max_hits_per_field_per_failure=8, RAG = False, FILL = False)
-    print("\n================ FAILURE CANDIDATES ================\n")
-    # print(json.dumps(result, indent=4))
-    save_failure_candidates_to_json(result, OUTPUT_PATH)

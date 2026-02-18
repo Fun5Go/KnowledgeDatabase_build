@@ -32,12 +32,12 @@ meta_kb = FileMetaStore(persist_dir=KB_DATA_ROOT)
 # 3) Ingest all FMEA JSONL files (row by row)
 # =========================================================
 
-ingest_fmea_jsonl(
-    jsonl_path=JSONL_PATH,
-    failure_kb=failure_kb,
-    # cause_kb=cause_kb,
-    meta_kb=meta_kb,
-)
+# ingest_fmea_jsonl(
+#     jsonl_path=JSONL_PATH,
+#     failure_kb=failure_kb,
+#     # cause_kb=cause_kb,
+#     meta_kb=meta_kb,
+# )
 
 
 print("[INFO] Ingest finished")

@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List, Union
 from collections import defaultdict
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 
+import numpy as np
 
 # =========================================================
 # 1) Load KB
@@ -171,7 +172,67 @@ def get_failure_entity(
     kb = _load_kb(persist_dir)
     return kb.entity_store.get(failure_id)
 
+def cosine_distance(vec1, vec2):
+    v1 = np.array(vec1)
+    v2 = np.array(vec2)
 
+    return 1 - np.dot(v1, v2) / (
+        np.linalg.norm(v1) * np.linalg.norm(v2)
+    )
+
+def get_embedding_vector(
+    persist_dir,
+    semantic_id: str,
+) -> Optional[List[float]]:
+    col = _get_collection(persist_dir)
+
+    result = col.get(
+        ids=[semantic_id],
+        include=["embeddings"],
+    )
+
+    # result 可能是 dict；embeddings 可能是 None / list / np.ndarray
+    if result is None:
+        return None
+
+    embeddings = result.get("embeddings", None)
+    if embeddings is None:
+        return None
+
+    # embeddings 可能是 np.ndarray 或 list，统一用 len 判断
+    try:
+        if len(embeddings) == 0:
+            return None
+    except TypeError:
+        # 万一 embeddings 不是可 len 的对象
+        return None
+
+    vec = embeddings[0]
+    if vec is None:
+        return None
+
+    # vec 可能是 np.ndarray，转成 python list 方便序列化/存储
+    if isinstance(vec, np.ndarray):
+        return vec.astype(float).tolist()
+
+    # vec 可能已经是 list[float]
+    return list(vec)
+def get_distance_between_semantic_nodes(
+    persist_dir: Union[str, Path],
+    semantic_id_1: str,
+    semantic_id_2: str,
+) -> float:
+
+    vec1 = get_embedding_vector(persist_dir, semantic_id_1)
+    vec2 = get_embedding_vector(persist_dir, semantic_id_2)
+
+    if vec1 is None:
+        raise ValueError(f"No embedding for {semantic_id_1}")
+
+    if vec2 is None:
+        raise ValueError(f"No embedding for {semantic_id_2}")
+
+    return float(cosine_distance(vec1, vec2))
 
 FIELD_ID_MAP = {
     "element": "element_id",
@@ -315,16 +376,19 @@ if  __name__ == "__main__":
     KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
-    res = query_semantic_kb(
-        persist_dir=KB_PATH,
-        query_text="Incorrect gear shift",
-        field_type="effect",
-        n_results=5,
-        min_count=1,
-        source_type=["8D"],
-    )
+    # res = query_semantic_kb(
+    #     persist_dir=KB_PATH,
+    #     query_text="Incorrect gear shift",
+    #     field_type="effect",
+    #     n_results=5,
+    #     min_count=1,
+    #     source_type=["8D"],
+    # )
   
-    print_semantic_results(res, kb)
+    # print_semantic_results(res, kb)
+    res =  get_distance_between_semantic_nodes(persist_dir=KB_PATH, semantic_id_1="cause:9a8640777fae",semantic_id_2="mode:39265c89e00a")
+    print(res)
+
     # res =  get_semantic_by_ids(persist_dir=KB_PATH, ids="effect:eb3b72714761")
 
 #     linked = query_linked_failure_fields(

@@ -447,6 +447,17 @@ PROHIBITED ACTIONS
 - Do NOT skip entities.
 - Avoid identical text across cause/mode/effect fields.
 
+=====================================================
+OUTPUT COUNT REQUIREMENT (MANDATORY)
+=====================================================
+
+You MUST output exactly 15 failure_candidates.
+
+- If more candidates are possible, select the best 15 by:
+  1) strongest structural causality
+  2) failure entity after filling SA text
+  3) highest diversity (different mode/cause/effect)
+
 
 =====================================================
 STRUCTURE ANALYSIS (JSON)
