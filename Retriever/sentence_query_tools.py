@@ -525,48 +525,26 @@ if __name__ == "__main__":
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\sentence_kb"
     )
 
-    FAILURE_ENTITY = {
-        "failure_mode": "Wrong motor configuration",
-        "failure_element": "ESW, CFG tool",
-        "failure_effect": "Motor not running stable",
-        "failure_cause": "Upload wrong motor configuration",
-    }
+    query_sentence = "In Analog Control, Alarm relay remains closed without error due to Alarm output switching many times in short period leading to Alarm contact not functional."
+    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20)
+    def structured_print(results):
+        ids = results["ids"][0]
+        documents = results["documents"][0]
+        metadatas = results["metadatas"][0]
+        distances = results["distances"][0]
 
-    # 🔹 Step 1: embedding recall
-    out = query_sentence_kb_by_chunks(
-        persist_dir=KB_PATH,
-        entity=FAILURE_ENTITY,
-        n_results_each=25,
-        source_section=["D2","D3","D4"]
-    )
+        print("=" * 140)
+        print(f"{'Rank':<5} | {'Failure ID':<35} | {'Distance':<10} | {'Source':<12} | Document")
+        print("=" * 140)
 
-    flat_hits = out["sentences"][:100]
+        for i, (fid, doc, meta, dist) in enumerate(zip(ids, documents, metadatas, distances), start=1):
+            source = meta.get("source_type", "8D_case")
+            doc_short = doc[:80] + "..." if len(doc) > 80 else doc
 
-    # 🔹 Step 2: build structured query text for CE
-    query_text = build_concat_query(FAILURE_ENTITY)
+            print(f"{i:<5} | {fid:<35} | {dist:<10.6f} | {source:<12} | {doc_short}")
 
-    print("\n==== CrossEncoder Query Text ====\n")
-    print(query_text)
-    print("\n=================================\n")
+        print("=" * 140)
 
-    # 🔹 Step 3: CE rerank
-    reranked_results = cross_encoder_rerank(
-        query_text=query_text,
-        hits=flat_hits,
-        top_k=20,
-    )
 
-    # 🔹 Step 4: Print results
-    print("\n====== Cross Encoder Reranked Results ======\n")
-
-    for rank, h in enumerate(reranked_results, start=1):
-        meta = h["metadata"]
-
-        print(f"Rank {rank}")
-        print(f"CE Score: {h['ce_score']:.4f}")
-        print(f"Embedding Score: {h['embedding_score']:.4f}")
-        print(f"Sentence: {h['text']}")
-        print(f"Case ID: {meta.get('case_id')}")
-        print(f"Failure ID: {meta.get('failure_id')}")
-        print(f"Sentence Role: {meta.get('sentence_role')}")
-        print("-" * 80)
+# Example usage:
+    structured_print(result)
