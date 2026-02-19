@@ -329,7 +329,7 @@ def generate_failure_chains_from_structure(
     source_type: Optional[str] = None,
     require_cause: bool = False,
     require_cause_plus: bool = False,
-    min_similarity: float = 0.45,
+    min_similarity: float = 0.3,
     max_hits_per_field_per_failure: int = 10,
     normalize_by_hits: bool = False,
 
@@ -394,7 +394,7 @@ def generate_failure_chains_from_structure(
                 field_type=field,
                 n_results=top_k_per_field,
                 min_count=min_count,
-                source_type=source_type,
+                # source_type=source_type,
             )
             _accumulate_candidate_scores(
                 kb=kb,
@@ -437,6 +437,9 @@ def generate_failure_chains_from_structure(
                 continue
 
             if product_domain and entity.get("product_domain") != product_domain:
+                continue
+
+            if source_type and entity.get("source_type") != source_type:
                 continue
 
             score = float(info["score"])
@@ -569,7 +572,7 @@ if  __name__ == "__main__":
         "nodes": [
             {
                 "element_id": "E1",
-                "failure_element": "Power train",
+                "failure_element": "",
                 "modes": [
                     "Incorrect",
                     "No pulses seen",
@@ -636,10 +639,12 @@ if  __name__ == "__main__":
     results = generate_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
-        top_k_per_field=15,
+        top_k_per_field=20,
         # minimum_field_match=2,
         top_n=50,
-        replace=False
+        replace=True,
+        source_type="8D",
+        min_similarity=0.3
     )
 
 

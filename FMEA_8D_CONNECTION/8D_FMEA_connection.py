@@ -540,7 +540,7 @@ if __name__ == "__main__":
         n_results_each=25,
         min_similarity=0.55,
         case_score_threshold=2.0,
-        verbose_progress=False,  # 不刷屏
+        verbose_progress=False,  
     )
     print_connected_results(
         results,

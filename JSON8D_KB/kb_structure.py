@@ -100,12 +100,15 @@ class EightDFailureEntity:
     mode_id: Optional[str]
     element_id: Optional[str]
     effect_id: Optional[str]
+    cause_id: Optional[str]
 
     # ===== original raw text (traceability) =====
     failure_mode_text: Optional[str]
     failure_element_text: Optional[str]
     failure_effect_text: Optional[str]
-    cause_ids: List[Dict[str, Any]] = field(default_factory=list)
+    failure_cause_text: Optional[str]
+
+    # cause_ids: List[Dict[str, Any]] = field(default_factory=list)
 
     # ===== 8D-specific =====
     status: Optional[str] = None
@@ -414,7 +417,7 @@ class EightDFailureKB:
         # =========================================================
         # 8D ENTITY STORE (separate)
         # =========================================================
-        self.entity_store_path = self.persist_dir / "8d_entity_store.json"
+        self.entity_store_path = self.persist_dir / "entity_store.json"
         self.entity_store: Dict[str, dict] = {}
 
         if self.entity_store_path.exists():
@@ -502,15 +505,16 @@ class EightDFailureKB:
     # 8D FAILURE ENTITY UPSERT
     # =========================================================
     def upsert_failure_entity(self, entity: EightDFailureEntity):
-        """
-        Store 8D failure entity (NOT embeddable)
-        """
-        self.entity_store[entity.failure_id] = asdict(entity)
+        def make_failure_uid(failure_id: str, cause_id: str | None) -> str:
+            return f"{failure_id}__{cause_id}" if cause_id else failure_id
+        uid = make_failure_uid(entity.failure_id, getattr(entity, "cause_id", None))
+        self.entity_store[uid] = asdict(entity)
 
         self.entity_store_path.write_text(
             json.dumps(self.entity_store, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+
 
 
 

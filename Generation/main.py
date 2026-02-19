@@ -321,6 +321,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 max_hits_per_field_per_failure = max_hits_per_field_per_failure,
                 require_cause = require_cause,
                 require_cause_plus = require_cause_plus,
+                replace = True,
             )
             semi_candidates =  build_fill_entity(semi_candidates,target_n=25,strict_unique=True)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke({
@@ -407,54 +408,54 @@ if __name__ == "__main__":
             }
         ]
     }
-    # result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, 
-    #                                   max_hits_per_field_per_failure=8, RAG = True, FILL = False)
-    # print("\n================ FAILURE CANDIDATES ================\n")
-    # # print(json.dumps(result, indent=4))
-    # save_failure_candidates_to_json(result, OUTPUT_PATH)
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, 
+                                      max_hits_per_field_per_failure=8, RAG = True, FILL = True)
+    print("\n================ FAILURE CANDIDATES ================\n")
+    # print(json.dumps(result, indent=4))
+    save_failure_candidates_to_json(result, OUTPUT_PATH)
 
     # -----------------------------------------------------
     # 3) Batch Settings
     # -----------------------------------------------------
-    NUM_RUNS = 10  
+    # NUM_RUNS = 10  
 
-    BASE_SAVE_DIR = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
-    )
+    # BASE_SAVE_DIR = Path(
+    #     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
+    # )
 
-    MODES = [
-        # {"name": "PURE", "RAG": False, "FILL": False},
-        {"name": "RAG", "RAG": True, "FILL": False},
-        # {"name": "RAG_FILL", "RAG": True, "FILL": True},
-    ]
+    # MODES = [
+    #     # {"name": "PURE", "RAG": False, "FILL": False},
+    #     {"name": "RAG", "RAG": True, "FILL": False},
+    #     # {"name": "RAG_FILL", "RAG": True, "FILL": True},
+    # ]
 
-    # -----------------------------------------------------
-    # 4) Run Loop
-    # -----------------------------------------------------
-    for mode in MODES:
+    # # -----------------------------------------------------
+    # # 4) Run Loop
+    # # -----------------------------------------------------
+    # for mode in MODES:
 
-        mode_name = mode["name"]
-        save_folder = BASE_SAVE_DIR / mode_name
-        save_folder.mkdir(parents=True, exist_ok=True)
+    #     mode_name = mode["name"]
+    #     save_folder = BASE_SAVE_DIR / mode_name
+    #     save_folder.mkdir(parents=True, exist_ok=True)
 
-        print(f"\n================ RUNNING MODE: {mode_name} =================\n")
+    #     print(f"\n================ RUNNING MODE: {mode_name} =================\n")
 
-        for i in range(1, NUM_RUNS+1):
+    #     for i in range(1, NUM_RUNS+1):
 
-            print(f"\n--- Run {i} ---\n")
+    #         print(f"\n--- Run {i} ---\n")
 
-            result, _ = RAG_pipeline(
-                structure_input=structure_input,
-                KB_PATH=KB_PATH,
-                top_k_per_field=20,
-                top_n=50,
-                max_hits_per_field_per_failure=8,
-                RAG=mode["RAG"],
-                FILL=mode["FILL"],
-            )
+    #         result, _ = RAG_pipeline(
+    #             structure_input=structure_input,
+    #             KB_PATH=KB_PATH,
+    #             top_k_per_field=20,
+    #             top_n=50,
+    #             max_hits_per_field_per_failure=8,
+    #             RAG=mode["RAG"],
+    #             FILL=mode["FILL"],
+    #         )
 
-            output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
+    #         output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
 
-            save_failure_candidates_to_json(result, output_path)
+    #         save_failure_candidates_to_json(result, output_path)
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from typing import Optional, Dict, Any, List, Union
 from collections import defaultdict
+from sentence_transformers import CrossEncoder
 
 def _get_sentence_collection(
     persist_dir: Union[str, Path],
@@ -36,6 +37,7 @@ def _build_sentence_where(
     min_year: int | None = None,
     max_year: int | None = None,
     extra_where=None,
+    source_type=None,
 ):
     def clause(k, v):
         if v is None:
@@ -56,6 +58,7 @@ def _build_sentence_where(
         ("source_section", source_section),
         ("status", status),
         ("subject",subject),
+        ("source_type", source_type),
     ]:
         c = clause(k, v)
         if c:
@@ -100,6 +103,7 @@ def query_sentence_kb(
     min_year: Optional[int] = None,
     max_year: Optional[int] = None,
     extra_where: Optional[Dict[str, Any]] = None,
+    source_type: Optional[Union[str, List[str]]] = None,
     include: Optional[List[str]] = None,
 ):
     col = _get_sentence_collection(persist_dir, collection_name)
@@ -118,6 +122,7 @@ def query_sentence_kb(
         min_year=min_year,
         max_year=max_year,
         extra_where=extra_where,
+        source_type=source_type
     )
 
     if include is None:
@@ -195,6 +200,11 @@ def get_sentences_by_ids(
     return col.get(ids=ids, include=include)
 
 
+from collections import defaultdict
+from typing import Dict, Optional, Union, Any, List
+from pathlib import Path
+
+
 def query_sentence_kb_by_chunks(
     persist_dir: Union[str, Path],
     entity: Dict[str, Optional[str]],
@@ -211,8 +221,6 @@ def query_sentence_kb_by_chunks(
     productPnID=None,
     product_domain=None,
     extra_where=None,
-    # aggregation
-    group_by: str = "failure_id",
 ) -> Dict[str, Any]:
 
     QUERY_SECTION_MAP = {
@@ -229,7 +237,8 @@ def query_sentence_kb_by_chunks(
         "failure_effect": 1.0,
     }
 
-    by_role = {}
+    all_hits = []
+    seen_sentence_ids = set()
 
     # ===============================
     # Phase 1: query by role
@@ -238,7 +247,7 @@ def query_sentence_kb_by_chunks(
         if not text or not str(text).strip():
             continue
 
-        by_role[role] = query_sentence_kb(
+        r = query_sentence_kb(
             persist_dir=persist_dir,
             query_text=str(text),
             n_results=n_results_each,
@@ -247,7 +256,7 @@ def query_sentence_kb_by_chunks(
             case_id=case_id,
             failure_id=failure_id,
             cause_id=cause_id,
-            source_section=QUERY_SECTION_MAP.get(role),
+            source_section=source_section,
             status=status,
             subject=subject,
             min_faithful_score=faithful_score,
@@ -257,17 +266,6 @@ def query_sentence_kb_by_chunks(
             include=["documents", "metadatas", "distances"],
         )
 
-    # ===============================
-    # Phase 2: collect best sentence contribution
-    # ===============================
-    agg = defaultdict(lambda: {
-        "group_id": None,
-        "score": 0.0,
-        "hits": [],
-        "best_by_chunk": {},   # sentence_id -> best info
-    })
-
-    for role, r in by_role.items():
         ids0 = r.get("ids", [[]])[0]
         docs0 = r.get("documents", [[]])[0]
         metas0 = r.get("metadatas", [[]])[0]
@@ -276,50 +274,27 @@ def query_sentence_kb_by_chunks(
         weight = CHUNK_WEIGHT.get(role, 1.0)
 
         for rid, doc, meta, dist in zip(ids0, docs0, metas0, dists0):
-            gid = meta.get(group_by)
-            if not gid:
+            if rid in seen_sentence_ids:
                 continue
+            seen_sentence_ids.add(rid)
 
-            a = agg[gid]
-            a["group_id"] = gid
+            sim = 1.0 / (1.0 + float(dist))
+            weighted_score = sim * weight
 
-            score = weight / (1.0 + float(dist))
+            all_hits.append({
+                "sentence_id": rid,
+                "text": doc,
+                "metadata": meta,
+                "distance": dist,
+                "role": role,
+                "embedding_score": weighted_score,
+            })
 
-            best = a["best_by_chunk"].get(rid)
-            if best is None or score > best["score"]:
-                a["best_by_chunk"][rid] = {
-                    "sentence_id": rid,
-                    "score": score,
-                    "distance": dist,
-                    "chunk": role,
-                    "from_chunk": role,
-                    "text": doc,
-                    "metadata": meta,
-                }
-
-    # ===============================
-    # Phase 3: aggregate score & hits
-    # ===============================
-    for a in agg.values():
-        total = 0.0
-        hits = []
-
-        for info in sorted(
-            a["best_by_chunk"].values(),
-            key=lambda x: x["score"],
-            reverse=True,
-        ):
-            hits.append(info)
-            total += info["score"]
-
-        a["hits"] = hits
-        a["score"] = total
-
-    merged = sorted(agg.values(), key=lambda x: x["score"], reverse=True)
+    # 先按 embedding score 排序
+    all_hits = sorted(all_hits, key=lambda x: x["embedding_score"], reverse=True)
 
     return {
-        "by_role": by_role,
-        "merged": merged,
+        "sentences": all_hits
     }
 
 
@@ -520,7 +495,78 @@ def print_get_result_items(res, show_all_metadata=False):
             if extra:
                 print(f"  extra_metadata: {extra}")
 
-if  __name__ == "__main__":
-    KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\sentence_kb")
-    result = query_sentence_kb(persist_dir=KB_PATH, query_text="motor overheats", productPnID=133427)
-    print(result)
+ROLE_ORDER = ["failure_element", "failure_mode", "failure_effect", "failure_cause"]
+
+def build_concat_query(entity: Dict[str, str]) -> str:
+    parts = []
+    for role in ROLE_ORDER:
+        value = entity.get(role)
+        if value and str(value).strip():
+            role_name = role.replace("failure_", "").title()
+            parts.append(f"{role_name}: {value.strip()}")
+    return ". ".join(parts)
+
+ce_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+def cross_encoder_rerank(query_text: str, hits: List[Dict], top_k: int = 20):
+
+    pairs = [[query_text, h["text"]] for h in hits]
+    scores = ce_model.predict(pairs)
+
+    for h, s in zip(hits, scores):
+        h["ce_score"] = float(s)
+
+    reranked = sorted(hits, key=lambda x: x["ce_score"], reverse=True)
+
+    return reranked[:top_k]
+
+if __name__ == "__main__":
+
+    KB_PATH = Path(
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\sentence_kb"
+    )
+
+    FAILURE_ENTITY = {
+        "failure_mode": "Wrong motor configuration",
+        "failure_element": "ESW, CFG tool",
+        "failure_effect": "Motor not running stable",
+        "failure_cause": "Upload wrong motor configuration",
+    }
+
+    # 🔹 Step 1: embedding recall
+    out = query_sentence_kb_by_chunks(
+        persist_dir=KB_PATH,
+        entity=FAILURE_ENTITY,
+        n_results_each=25,
+        source_section=["D2","D3","D4"]
+    )
+
+    flat_hits = out["sentences"][:100]
+
+    # 🔹 Step 2: build structured query text for CE
+    query_text = build_concat_query(FAILURE_ENTITY)
+
+    print("\n==== CrossEncoder Query Text ====\n")
+    print(query_text)
+    print("\n=================================\n")
+
+    # 🔹 Step 3: CE rerank
+    reranked_results = cross_encoder_rerank(
+        query_text=query_text,
+        hits=flat_hits,
+        top_k=20,
+    )
+
+    # 🔹 Step 4: Print results
+    print("\n====== Cross Encoder Reranked Results ======\n")
+
+    for rank, h in enumerate(reranked_results, start=1):
+        meta = h["metadata"]
+
+        print(f"Rank {rank}")
+        print(f"CE Score: {h['ce_score']:.4f}")
+        print(f"Embedding Score: {h['embedding_score']:.4f}")
+        print(f"Sentence: {h['text']}")
+        print(f"Case ID: {meta.get('case_id')}")
+        print(f"Failure ID: {meta.get('failure_id')}")
+        print(f"Sentence Role: {meta.get('sentence_role')}")
+        print("-" * 80)

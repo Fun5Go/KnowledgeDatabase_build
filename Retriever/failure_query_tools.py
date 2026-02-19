@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Union
 from collections import defaultdict
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
-
+from sentence_transformers import CrossEncoder
 import numpy as np
 
 # =========================================================
@@ -370,39 +370,64 @@ def print_semantic_results(res, kb, max_failure_ids: int = 15):
 
         print(f"  failure_ids({len(failure_ids)}): {shown}" + (f" ... (+{more})" if more > 0 else ""))
 
+semantic_reranker = CrossEncoder("BAAI/bge-reranker-base")
+def rerank_semantic_results(query_text, res, top_k=None):
+
+    ids = res.get("ids", [[]])[0]
+    docs = res.get("documents", [[]])[0]
+    metas = res.get("metadatas", [[]])[0]
+    dists = res.get("distances", [[]])[0]
+
+    pairs = [[query_text, doc] for doc in docs]
+    scores = semantic_reranker.predict(pairs)
+
+    items = []
+    for sid, doc, meta, dist, score in zip(ids, docs, metas, dists, scores):
+        items.append({
+            "id": sid,
+            "doc": doc,
+            "meta": meta,
+            "dist": dist,
+            "ce_score": float(score),
+        })
+
+    items = sorted(items, key=lambda x: x["ce_score"], reverse=True)
+
+    if top_k:
+        items = items[:top_k]
+
+    return items
 
 
 if  __name__ == "__main__":
     KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
-    # res = query_semantic_kb(
-    #     persist_dir=KB_PATH,
-    #     query_text="Incorrect gear shift",
-    #     field_type="effect",
-    #     n_results=5,
-    #     min_count=1,
-    #     source_type=["8D"],
-    # )
-  
-    # print_semantic_results(res, kb)
-    res =  get_distance_between_semantic_nodes(persist_dir=KB_PATH, semantic_id_1="cause:9a8640777fae",semantic_id_2="mode:39265c89e00a")
-    print(res)
+    query_text = "Soft start too long"
 
-    # res =  get_semantic_by_ids(persist_dir=KB_PATH, ids="effect:eb3b72714761")
+    res = query_semantic_kb(
+        persist_dir=KB_PATH,
+        query_text=query_text,
+        field_type=None,
+        n_results=100,
+        min_count=1,
+        source_type=["8D"],
+    )
+    # print_semantic_results(res,kb,max_failure_ids=10)
 
-#     linked = query_linked_failure_fields(
-#     persist_dir=KB_PATH,
-#     query_text="power train",
-#     field_type="element",
-#     linked_fields=["cause"],
-#     n_results=5,
-#     min_count=1,
-# )
+    reranked = rerank_semantic_results(query_text, res, top_k=20)
 
-# for field_type, items in linked.items():
-#     print(f"\n==== LINKED FIELD: {field_type} ====")
-#     for sid, data in items.items():
-#         print(f"{sid}")
-#         print(f"  text: {data['text']}")
-#         print(f"  count: {data['count']}")
+    print("\n====== Reranked Semantic Results ======\n")
+
+    for i, item in enumerate(reranked, start=1):
+
+        semantic_id = item["id"]
+        node = kb.field_store.get(semantic_id, {}) or {}
+        failure_ids = node.get("failure_ids", [])
+
+        print("=" * 100)
+        print(f"[{i:02d}] semantic_id: {semantic_id}")
+        print(f"  text: {item['doc']}")
+        print(f"  CE score: {item['ce_score']:.4f}")
+        print(f"  original similarity: {1 - float(item['dist']):.4f}")
+        print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")

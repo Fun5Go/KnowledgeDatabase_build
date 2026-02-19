@@ -1,5 +1,5 @@
-from kb_structure import FMEAFailureKB, FileMeta, FileMetaStore, FailureEntity, FailureSemanticNode
-
+from kb_structure import FMEAFailureKB, FileMeta, FileMetaStore, FailureEntity, FailureSemanticNode, Sentence, SentenceKB
+from sentence_builder import _build_full_chain_sentence
 import json
 from pathlib import Path
 from collections import defaultdict
@@ -319,6 +319,7 @@ def ingest_fmea_jsonl(
     jsonl_path: Path,
     failure_kb,
     meta_kb,
+    sentence_kb
 ):
     # =================================================
     # 0) Load JSONL
@@ -502,6 +503,29 @@ def ingest_fmea_jsonl(
                 released_year=released_year,
             )
             failure_kb.upsert_failure_entity(failure_entity)
+            full_chain_text = _build_full_chain_sentence(
+                element,
+                failure_mode,
+                cause_text,
+                failure_effect,
+            )
+
+            if full_chain_text:
+
+                sentence_id = failure_id
+
+                sentence_obj = Sentence(
+                    failure_id=failure_id,
+                    text=full_chain_text,
+                    source_type=source_type,
+                    product_domain=file_meta.product_domain,
+                )
+
+                sentence_kb.add_sentence(
+                    sentence_id,
+                    sentence_obj,
+                    overwrite=True
+                )
 
         # =================================================
         # 4) FLUSH semantic nodes (PER FILE)

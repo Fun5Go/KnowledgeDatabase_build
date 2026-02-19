@@ -43,13 +43,19 @@ class FileMeta: #General metadata for a FMEA worksheet
 
 @dataclass
 class Sentence:
-    id: str
+    """
+    Unified embeddable semantic unit
+    Used for both 8D and FMEA.
+    """
+    failure_id: str
+    # ---- main semantic text (what gets embedded) ----
     text: str
-    sentence_role: str          # failure | cause | effect
-    source_type: str            # old_fmea | new_fmea | 8d
-    file_name: str
-    case_id: str
-    metadata: Dict[str, Any]
+    # ---- semantic classification ----
+    source_type: str            # 8D | old_fmea | new_fmea
+    # ---- structural traceability ----
+    product_domain: Optional[str] = None
+
+
 
 
 @dataclass
@@ -144,6 +150,73 @@ class FileMetaStore:
         )
     
 
+class SentenceKB:
+    def __init__(self, persist_dir: Path):
+        self.persist_dir = Path(persist_dir)
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+
+        self.store_path = self.persist_dir / "sentence_store.json"
+        self.store: dict[str, dict] = {}
+        if self.store_path.exists():
+            self.store = json.loads(
+                self.store_path.read_text(encoding="utf-8")
+            )
+
+        self.client = chromadb.PersistentClient(path=str(self.persist_dir))
+
+        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="all-MiniLM-L6-v2"
+        )
+
+        self.collection = self.client.get_or_create_collection(
+            name="sentences",
+            embedding_function=self.embedder,
+            metadata={"hnsw:space": "cosine"},
+        )
+    def add_sentence(self, sentence_id: str, sentence: Sentence, *, overwrite: bool = False) -> None:
+        """
+        Add a sentence into:
+        1) JSON store (structured truth)
+        2) Chroma collection (vector index)
+
+        overwrite:
+            - False: skip if exists
+            - True: replace existing (store + chroma)
+        """
+        exists = sentence_id in self.store
+
+        if exists and not overwrite:
+            return
+
+        # If overwriting, remove old vector first to avoid duplicates
+        if exists and overwrite:
+            try:
+                self.collection.delete(ids=[sentence_id])
+            except Exception:
+                # tolerate if not present in chroma for some reason
+                pass
+
+        # ---- update structured store ----
+        self.store[sentence_id] = asdict(sentence)
+
+        # ---- persist structured store immediately ----
+        self.store_path.write_text(
+            json.dumps(self.store, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+
+        # ---- add to vector DB ----
+        # (Chroma will embed sentence.text via embedding_function)
+        self.collection.add(
+            ids=[sentence_id],
+            documents=[sentence.text],
+            metadatas=[{
+                "failure_id": sentence.failure_id,
+                "source_type": sentence.source_type,
+                "product_domain": sentence.product_domain,
+            }]
+        )
+
 
 class FMEAFailureKB:
     def __init__(self, persist_dir: Path):
@@ -156,7 +229,7 @@ class FMEAFailureKB:
         if self.field_store_path.exists():
             self.field_store = json.loads(self.field_store_path.read_text(encoding="utf-8"))
 
-        self.entity_store_path = self.persist_dir / "fmea_entity_store.json"
+        self.entity_store_path = self.persist_dir / "entity_store.json"
         self.entity_store: dict[str, dict] = {}
         if self.entity_store_path.exists():
             self.entity_store = json.loads(self.entity_store_path.read_text(encoding="utf-8"))

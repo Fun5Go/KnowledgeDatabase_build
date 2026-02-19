@@ -1,79 +1,87 @@
-# fmea_sentence_builder.py
-from typing import List
+from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Dict, Any
 from kb_structure import Sentence
-import uuid
+
+def _clean(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return None
+    text = str(text).strip()
+    return text if text else None
 
 
-def _sid(prefix: str) -> str:
-    return f"{prefix}_{uuid.uuid4().hex[:8]}"
+def _build_full_chain_sentence(
+    element: Optional[str],
+    mode: Optional[str],
+    cause: Optional[str],
+    effect: Optional[str],
+) -> Optional[str]:
+    """
+    Build a natural full-chain FMEA sentence.
+
+    Pattern:
+        In {element}, {mode} due to {cause} leading to {effect}.
+    Handles missing parts gracefully.
+    """
+
+    element = _clean(element)
+    mode = _clean(mode)
+    cause = _clean(cause)
+    effect = _clean(effect)
+
+    if not any([element, mode, cause, effect]):
+        return None
+
+    parts = []
+
+    if element:
+        parts.append(f"In {element},")
+
+    if mode:
+        parts.append(mode)
+
+    if cause:
+        parts.append(f"due to {cause}")
+
+    if effect:
+        parts.append(f"leading to {effect}")
+
+    sentence = " ".join(parts).strip()
+
+    if not sentence.endswith("."):
+        sentence += "."
+
+    return sentence
 
 
+# =========================================================
+# OLD FMEA → full-chain sentence
+# =========================================================
 def build_sentences_from_old_fmea(record: dict) -> List[Sentence]:
     sentences = []
-    case_id = record["file_name"]
 
-    if record.get("failure_mode"):
+    case_id = record.get("file_name")
+    if not case_id:
+        return sentences
+
+    # process_step is treated as element
+    element = record.get("process_step")
+    mode = record.get("failure_mode")
+    cause = record.get("failure_cause")
+    effect = record.get("failure_effect")
+
+    text = _build_full_chain_sentence(element, mode, cause, effect)
+
+    if text:
         sentences.append(
             Sentence(
-                id=_sid(case_id),
-                text=f"Failure mode {record['failure_mode']}.",
-                sentence_role="failure",
+                id=_sid(f"{case_id}|full_chain"),
+                text=text,
+                sentence_role="full_chain",
                 source_type="old_fmea",
-                file_name=record["file_name"],
+                file_name=case_id,
                 case_id=case_id,
                 metadata={
-                    "severity": int(record.get("severity", 0)),
-                    "occurrence": int(record.get("occurrence", 0)),
-                    "detection": int(record.get("detection", 0)),
-                    "rpn": int(record.get("rpn", 0)),
-                },
-            )
-        )
-
-    if record.get("failure_cause"):
-        sentences.append(
-            Sentence(
-                id=_sid(case_id),
-                text=f"{record['failure_cause']} causes {record['failure_mode']}.",
-                sentence_role="cause",
-                source_type="old_fmea",
-                file_name=record["file_name"],
-                case_id=case_id,
-                metadata={},
-            )
-        )
-
-    if record.get("failure_effect"):
-        sentences.append(
-            Sentence(
-                id=_sid(case_id),
-                text=f"{record['failure_mode']} leads to {record['failure_effect']}.",
-                sentence_role="effect",
-                source_type="old_fmea",
-                file_name=record["file_name"],
-                case_id=case_id,
-                metadata={},
-            )
-        )
-
-    return sentences
-
-def build_sentences_from_new_fmea(record: dict) -> List[Sentence]:
-    sentences = []
-    case_id = record["file_name"]
-
-    if record.get("failure_mode"):
-        sentences.append(
-            Sentence(
-                id=_sid(case_id),
-                text=f"{record['failure_mode']} in {record.get('function','system')}.",
-                sentence_role="failure",
-                source_type="new_fmea",
-                file_name=record["file_name"],
-                case_id=case_id,
-                metadata={
-                    "system": record.get("system_name"),
-                    "function": record.get("function"),
                     "severity": record.get("severity"),
                     "occurrence": record.get("occurrence"),
                     "detection": record.get("detection"),
@@ -82,31 +90,43 @@ def build_sentences_from_new_fmea(record: dict) -> List[Sentence]:
             )
         )
 
-    if record.get("failure_cause"):
+    return sentences
+
+
+# =========================================================
+# NEW FMEA → full-chain sentence
+# =========================================================
+def build_sentences_from_new_fmea(record: dict) -> List[Sentence]:
+    sentences = []
+
+    case_id = record.get("file_name")
+    if not case_id:
+        return sentences
+
+    # new FMEA may have explicit element/system
+    element = record.get("system_name") or record.get("system")
+    mode = record.get("failure_mode")
+    cause = record.get("failure_cause")
+    effect = record.get("failure_effect")
+
+    text = _build_full_chain_sentence(element, mode, cause, effect)
+
+    if text:
         sentences.append(
             Sentence(
-                id=_sid(case_id),
-                text=f"{record['failure_cause']} causes {record['failure_mode']}.",
-                sentence_role="cause",
+                id=_sid(f"{case_id}|full_chain"),
+                text=text,
+                sentence_role="full_chain",
                 source_type="new_fmea",
-                file_name=record["file_name"],
+                file_name=case_id,
                 case_id=case_id,
                 metadata={
-                    "discipline": record.get("cause_discipline")
+                    "severity": record.get("severity"),
+                    "occurrence": record.get("occurrence"),
+                    "detection": record.get("detection"),
+                    "rpn": record.get("rpn"),
+                    "discipline": record.get("cause_discipline"),
                 },
-            )
-        )
-
-    if record.get("failure_effect"):
-        sentences.append(
-            Sentence(
-                id=_sid(case_id),
-                text=f"{record['failure_mode']} leads to {record['failure_effect']}.",
-                sentence_role="effect",
-                source_type="new_fmea",
-                file_name=record["file_name"],
-                case_id=case_id,
-                metadata={},
             )
         )
 
