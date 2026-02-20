@@ -544,10 +544,10 @@ if  __name__ == "__main__":
 
     
     FAILURE_ENTITY = {
-    "failure_mode": "Motor overtemp false trip",
-    "failure_element": "Safety protection",
-    "failure_effect": "Pump stops",
-    "failure_cause": "Trips on short spikes"
+    "failure_mode": "Not enough torque",
+    "failure_element": "",
+    "failure_effect": " ",
+    "failure_cause": "Motor can not provide enough torque"
     }
     result = retrieve_similar_failures_from_entity(persist_dir=KB_PATH, failure_entity=FAILURE_ENTITY,top_n=20,min_similarity=0.4, top_k_per_field=15)
     def build_ground_truth_input(

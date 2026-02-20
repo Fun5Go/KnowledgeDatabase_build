@@ -4,6 +4,7 @@ from pathlib import Path
 from Retriever.failure_query_tools import _load_kb,query_semantic_kb
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 import math
+from .PPL_score import ChainPPLEvaluator
 
 
 # =========================================================
@@ -238,7 +239,6 @@ def build_failure_chains_from_structure(
 
     return all_results
 
-
 def _accumulate_candidate_scores(
     kb: Any,
     semantic_query_result: Dict[str, Any],
@@ -249,27 +249,20 @@ def _accumulate_candidate_scores(
     min_similarity: float = 0.35,
 ) -> None:
     """
-    Accumulate failure_id scores from semantic hits with graph constraint:
-    semantic_id -> failure_ids (from kb.field_store) -> candidate_scores[failure_id]
+    Accumulate failure_id scores from semantic hits with graph constraint.
 
-    Improvements:
-    - min_similarity threshold to drop weak matches
-    - cap hits per field per failure_id to prevent score explosion
-    - dedupe semantic_id per failure_id per field
+    Upgrade:
+    - Keep highest similarity per (failure_id, field_type, semantic_id)
+    - Update score by delta if better similarity found
     """
 
     ids = (semantic_query_result.get("ids", [[]]) or [[]])[0] or []
     dists = (semantic_query_result.get("distances", [[]]) or [[]])[0] or []
 
     for sid, dist in zip(ids, dists):
-        # Chroma distances are typically [0..2] depending on metric;
-        # keep your original conversion but guard.
+
         try:
-            # similarity = max(0.0, 1.0 - float(dist))
-            similarity = distance_to_similarity_exp(
-                dist,
-                alpha=1.2   
-            )
+            similarity = max(0.0, 1.0 - float(dist))
         except Exception:
             continue
 
@@ -278,24 +271,19 @@ def _accumulate_candidate_scores(
 
         node = kb.field_store.get(sid, {}) or {}
         failure_ids = node.get("failure_ids", []) or []
-        def _get_kb_text(node: dict, field_type: str) -> str:
-            for k in ("text",):
-                v = node.get(k)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-            return ""
+
         if not failure_ids:
             continue
 
+        kb_text = node.get("text", "").strip() if isinstance(node.get("text"), str) else ""
+
         for fid in failure_ids:
+
             matched_list = candidate_scores[fid]["matched"][field_type]
 
-
-            # ---- prevent duplicate semantic_id scoring ----
-            # existing_ids = {m["semantic_id"] for m in matched_list}
-            # if sid in existing_ids:
-            #     continue
-            # 查找是否已存在
+            # ------------------------------------------------
+            # Check if this semantic_id already exists
+            # ------------------------------------------------
             existing = None
             for m in matched_list:
                 if m["semantic_id"] == sid:
@@ -303,17 +291,24 @@ def _accumulate_candidate_scores(
                     break
 
             if existing:
-                # 如果新相似度更高，则替换并修正score
-                if similarity > existing["similarity"]:
-                    delta = (similarity - existing["similarity"]) * float(weight)
+                old_sim = float(existing.get("similarity", 0.0))
+
+                # Keep only if new similarity is higher
+                if similarity > old_sim:
+                    delta = (similarity - old_sim) * float(weight)
                     candidate_scores[fid]["score"] += delta
+
                     existing["similarity"] = round(float(similarity), 4)
                     existing["structure_text"] = query_text
-                continue
+                    existing["kb_text"] = kb_text
 
+                continue  # done handling this sid for this fid
+
+            # ------------------------------------------------
+            # New semantic hit for this field
+            # ------------------------------------------------
             candidate_scores[fid]["score"] += similarity * float(weight)
             candidate_scores[fid]["field_hits"].add(field_type)
-            kb_text = _get_kb_text(node, field_type)
 
             matched_list.append({
                 "semantic_id": sid,
@@ -321,7 +316,6 @@ def _accumulate_candidate_scores(
                 "structure_text": query_text,
                 "kb_text": kb_text
             })
-
 
 
 def _apply_controlled_reinforcement(
@@ -374,7 +368,7 @@ def generate_failure_chains_from_structure(
     source_type: Optional[str] = None,
     require_cause: bool = False,
     require_cause_plus: bool = False,
-    min_similarity: float = 0.3,
+    min_similarity: float = 0.45,
     normalize_by_hits: bool = False,
 
     # ---- NEW: controlled duplicate reinforcement ----
@@ -438,7 +432,7 @@ def generate_failure_chains_from_structure(
                 field_type=field,
                 n_results=top_k_per_field,
                 min_count=min_count,
-                # source_type=source_type,
+                source_type=source_type,
             )
             _accumulate_candidate_scores(
                 kb=kb,
@@ -480,9 +474,6 @@ def generate_failure_chains_from_structure(
                 continue
 
             if product_domain and entity.get("product_domain") != product_domain:
-                continue
-
-            if source_type and entity.get("source_type") != source_type:
                 continue
 
             score = float(info["score"])
@@ -592,6 +583,32 @@ def generate_failure_chains_from_structure(
 
     return all_results
 
+# PPL Evaluator
+evaluator = ChainPPLEvaluator("gpt2")
+def attach_ppl_scores(results: List[Dict]) -> List[Dict]:
+    for r in results:
+        cause = r.get("cause")
+        mode = r.get("mode")
+        effect = r.get("effect")
+
+        # 跳过缺字段
+        if not cause or not mode or not effect:
+            r["forward_ppl"] = None
+            r["reverse_ppl"] = None
+            r["delta_ppl"] = None
+            continue
+
+        ppl_result = evaluator.evaluate_chain(
+            cause=cause,
+            mode=mode,
+            effect=effect
+        )
+
+        r["forward_ppl"] = ppl_result["forward_ppl"]
+        r["reverse_ppl"] = ppl_result["reverse_ppl"]
+        r["delta_ppl"] = ppl_result["delta_ppl"]
+
+    return results
 
 
 
@@ -682,16 +699,13 @@ if  __name__ == "__main__":
     results = generate_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
-        top_k_per_field=50,
+        top_k_per_field=40,
         # minimum_field_match=2,
-        top_n=50,
-        replace=True,
-        # source_type="8D",
-        # require_cause_plus=True,
-        require_cause=True,
-        min_similarity=0.55,
+        min_similarity=0.35,
+        top_n=100,
+        replace=True
     )
-
+    results = attach_ppl_scores(results)
 
     def build_ground_truth_input(
         results: List[Dict],
@@ -771,6 +785,10 @@ if  __name__ == "__main__":
             lines.append(f"Rank {idx}")
             lines.append(f"Failure ID: {r.get('failure_id')}")
             lines.append(f"Relevance Score: {r.get('score')}")
+            if r.get("delta_ppl") is not None:
+                lines.append(f"PPL Forward: {round(r['forward_ppl'], 2)}")
+                lines.append(f"PPL Reverse: {round(r['reverse_ppl'], 2)}")
+                lines.append(f"Delta PPL  : {round(r['delta_ppl'], 2)}")
             lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
 
             lines.append("Failure Chain:")
@@ -803,5 +821,5 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=25,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=50,strict_unique=True)
     print(results)

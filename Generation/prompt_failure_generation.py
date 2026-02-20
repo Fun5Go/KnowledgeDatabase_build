@@ -451,9 +451,9 @@ PROHIBITED ACTIONS
 OUTPUT COUNT REQUIREMENT (MANDATORY)
 =====================================================
 
-You MUST output exactly 15 failure_candidates.
+You MUST output exactly 20 failure_candidates.
 
-- If more candidates are possible, select the best 15 by:
+- If more candidates are possible, select the best 20 by:
   1) strongest structural causality
   2) highest GT support
   3) highest diversity (different mode/cause/effect)

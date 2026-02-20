@@ -317,12 +317,11 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 structure_input=structure_input,
                 top_k_per_field=top_k_per_field,
                 top_n=top_n,
-                min_similarity=min_similarity,
                 require_cause = require_cause,
                 require_cause_plus = require_cause_plus,
                 replace = True,
             )
-            semi_candidates =  build_fill_entity(semi_candidates,target_n=25,strict_unique=True)
+            semi_candidates =  build_fill_entity(semi_candidates,target_n=35,strict_unique=True)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -408,7 +407,7 @@ if __name__ == "__main__":
         ]
     }
     result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
-                                       min_similarity=0.45, RAG = True, FILL = True)
+                                       min_similarity=0.35, RAG = True, FILL = True)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)

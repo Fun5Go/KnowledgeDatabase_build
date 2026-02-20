@@ -525,7 +525,7 @@ if __name__ == "__main__":
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\sentence_kb"
     )
 
-    query_sentence = "In Safety protection, Motor overtemp false trip due to Trips on short spikes leading to Pump stops."
+    query_sentence = "Incorrect torque applied due to Motor can not provide enough torque"
     result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20, source_type=["new_fmea", "old_fmea"])
     def structured_print(results):
         ids = results["ids"][0]
@@ -534,14 +534,12 @@ if __name__ == "__main__":
         distances = results["distances"][0]
 
         print("=" * 140)
-        print(f"{'Rank':<5} | {'Failure ID':<35} | {'Distance':<10} | {'Source':<12} | Document")
+        print(f"{'Rank':<3} | {'Failure ID':<25} | {'Distance':<10} | {'Source':<} | Document")
         print("=" * 140)
 
         for i, (fid, doc, meta, dist) in enumerate(zip(ids, documents, metadatas, distances), start=1):
             source = meta.get("source_type", "8D_case")
-            doc_short = doc[:80] + "..." if len(doc) > 80 else doc
-
-            print(f"{i:<5} | {fid:<35} | {dist:<10.6f} | {source:<12} | {doc_short}")
+            print(f"{i:<3} | {fid:<25} | {dist:<10.6f} | {source:<12} | {doc}")
 
         print("=" * 140)
 
