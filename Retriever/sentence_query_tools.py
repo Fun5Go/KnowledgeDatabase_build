@@ -525,8 +525,8 @@ if __name__ == "__main__":
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\sentence_kb"
     )
 
-    query_sentence = "In Analog Control, Alarm relay remains closed without error due to Alarm output switching many times in short period leading to Alarm contact not functional."
-    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20)
+    query_sentence = "In Safety protection, Motor overtemp false trip due to Trips on short spikes leading to Pump stops."
+    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20, source_type=["new_fmea", "old_fmea"])
     def structured_print(results):
         ids = results["ids"][0]
         documents = results["documents"][0]

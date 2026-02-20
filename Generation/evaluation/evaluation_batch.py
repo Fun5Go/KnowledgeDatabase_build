@@ -385,7 +385,7 @@ if __name__ == "__main__":
             f"F1_complete: {result['f1_complete']:.4f} | "
             f"F1_relaxed: {result['f1_relaxed']:.4f}"
         )
-    plot_in_batches(all_results, batch_size=10, drop_last=False)
+    # plot_in_batches(all_results, batch_size=10, drop_last=False)
 
     # =====================================================
     # Average & STD

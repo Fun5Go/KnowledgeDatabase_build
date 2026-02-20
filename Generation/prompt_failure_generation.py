@@ -448,6 +448,20 @@ PROHIBITED ACTIONS
 - Avoid identical text across cause/mode/effect fields.
 
 =====================================================
+OUTPUT COUNT REQUIREMENT (MANDATORY)
+=====================================================
+
+You MUST output exactly 15 failure_candidates.
+
+- If more candidates are possible, select the best 15 by:
+  1) strongest structural causality
+  2) highest GT support
+  3) highest diversity (different mode/cause/effect)
+
+- If fewer than 15 valid candidates exist using Structure Analysis:
+  output as many as possible and explain in inference_reason why no more valid chains exist.
+
+=====================================================
 STRUCTURE ANALYSIS (JSON)
 =====================================================
 

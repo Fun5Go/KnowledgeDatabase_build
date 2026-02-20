@@ -371,6 +371,7 @@ def print_semantic_results(res, kb, max_failure_ids: int = 15):
         print(f"  failure_ids({len(failure_ids)}): {shown}" + (f" ... (+{more})" if more > 0 else ""))
 
 semantic_reranker = CrossEncoder("BAAI/bge-reranker-base")
+
 def rerank_semantic_results(query_text, res, top_k=None):
 
     ids = res.get("ids", [[]])[0]
@@ -399,35 +400,261 @@ def rerank_semantic_results(query_text, res, top_k=None):
     return items
 
 
+def retrieve_similar_failures_from_entity(
+    persist_dir: Union[str, Path],
+    failure_entity: Dict[str, Any],
+
+    top_k_per_field: int = 25,
+    weight_element: float = 0.5,
+    weight_mode: float = 1.5,
+    weight_cause: float = 1.5,
+    weight_effect: float = 1.5,
+    top_n: int = 50,
+    min_similarity: float = 0.3,
+):
+    """
+    Simplified failure-to-failure retrieval.
+
+    For each field:
+        - Take top_k semantic hits
+        - Add similarity * weight to all mapped failure_ids
+        - Record match_detail per failure_id per field
+
+    Return top_n failures by accumulated score, with match_detail.
+    """
+
+    persist_dir = Path(persist_dir)
+    kb = _load_kb(persist_dir)
+
+    element_text = (failure_entity.get("failure_element") or "").strip()
+    mode_text    = (failure_entity.get("failure_mode") or "").strip()
+    cause_text   = (failure_entity.get("failure_cause") or "").strip()
+    effect_text  = (failure_entity.get("failure_effect") or "").strip()
+
+    # score + match_detail accumulator
+    acc = defaultdict(lambda: {
+        "score": 0.0,
+        "match_detail": {"element": [], "mode": [], "cause": [], "effect": []},
+        "_seen": {"element": set(), "mode": set(), "cause": set(), "effect": set()},  # internal dedupe
+    })
+
+    def query_and_score(text: str, field: str, weight: float):
+        if not text:
+            return
+
+        res = query_semantic_kb(
+            persist_dir,
+            text,
+            field_type=field,
+            n_results=top_k_per_field,
+        )
+
+        ids = (res.get("ids", [[]]) or [[]])[0] or []
+        dists = (res.get("distances", [[]]) or [[]])[0] or []
+
+        for sid, dist in zip(ids, dists):
+            try:
+                similarity = max(0.0, 1.0 - float(dist))
+            except Exception:
+                continue
+
+            if similarity < min_similarity:
+                continue
+
+            node = kb.field_store.get(sid, {}) or {}
+            failure_ids = node.get("failure_ids", []) or []
+            if not failure_ids:
+                continue
+
+            for fid in failure_ids:
+                item = acc[fid]
+
+                # ---- score ----
+                item["score"] += similarity * float(weight)
+
+                # ---- match_detail (dedupe by semantic_id per field per failure) ----
+                if sid in item["_seen"][field]:
+                    continue
+                item["_seen"][field].add(sid)
+
+                item["match_detail"][field].append({
+                    "semantic_id": sid,
+                    "similarity": round(float(similarity), 4),
+                    "query_text": text,
+                })
+
+    # ---- run 4 fields ----
+    query_and_score(element_text, "element", weight_element)
+    query_and_score(mode_text,    "mode",    weight_mode)
+    query_and_score(cause_text,   "cause",   weight_cause)
+    query_and_score(effect_text,  "effect",  weight_effect)
+
+    # ---- build result ----
+    results = []
+    for fid, info in acc.items():
+        entity = kb.entity_store.get(fid)
+        if not entity:
+            continue
+
+        results.append({
+            "failure_id": fid,
+            "element": entity.get("failure_element_text"),
+            "mode": entity.get("failure_mode_text"),
+            "cause": entity.get("failure_cause_text"),
+            "effect": entity.get("failure_effect_text"),
+            "score": round(float(info["score"]), 4),
+            "match_detail": info["match_detail"],
+        })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results[: int(top_n)]
+
 if  __name__ == "__main__":
     KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
-    query_text = "Soft start too long"
+    # query_text = "Trips on short spikes"
 
-    res = query_semantic_kb(
-        persist_dir=KB_PATH,
-        query_text=query_text,
-        field_type=None,
-        n_results=100,
-        min_count=1,
-        source_type=["8D"],
-    )
+    # res = query_semantic_kb(
+    #     persist_dir=KB_PATH,
+    #     query_text=query_text,
+    #     field_type="cause",
+    #     n_results=10,
+    #     min_count=1,
+    # )
     # print_semantic_results(res,kb,max_failure_ids=10)
 
-    reranked = rerank_semantic_results(query_text, res, top_k=20)
+    # reranked = rerank_semantic_results(query_text, res, top_k=20)
 
-    print("\n====== Reranked Semantic Results ======\n")
+    # print("\n====== Reranked Semantic Results ======\n")
 
-    for i, item in enumerate(reranked, start=1):
+    # for i, item in enumerate(reranked, start=1):
 
-        semantic_id = item["id"]
-        node = kb.field_store.get(semantic_id, {}) or {}
-        failure_ids = node.get("failure_ids", [])
+    #     semantic_id = item["id"]
+    #     node = kb.field_store.get(semantic_id, {}) or {}
+    #     failure_ids = node.get("failure_ids", [])
 
-        print("=" * 100)
-        print(f"[{i:02d}] semantic_id: {semantic_id}")
-        print(f"  text: {item['doc']}")
-        print(f"  CE score: {item['ce_score']:.4f}")
-        print(f"  original similarity: {1 - float(item['dist']):.4f}")
-        print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")
+    #     print("=" * 100)
+    #     print(f"[{i:02d}] semantic_id: {semantic_id}")
+    #     print(f"  text: {item['doc']}")
+    #     print(f"  CE score: {item['ce_score']:.4f}")
+    #     print(f"  original similarity: {1 - float(item['dist']):.4f}")
+    #     print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")
+
+
+    
+    FAILURE_ENTITY = {
+    "failure_mode": "Motor overtemp false trip",
+    "failure_element": "Safety protection",
+    "failure_effect": "Pump stops",
+    "failure_cause": "Trips on short spikes"
+    }
+    result = retrieve_similar_failures_from_entity(persist_dir=KB_PATH, failure_entity=FAILURE_ENTITY,top_n=20,min_similarity=0.4, top_k_per_field=15)
+    def build_ground_truth_input(
+            results: List[Dict],
+            target_n: Optional[int] = None,
+            strict_unique: bool = False,
+        ) -> str:
+            """
+            Build LLM-readable GT examples.
+
+            Args:
+                results: retrieved chains
+                target_n: desired number of output cases
+                strict_unique:
+                    False → backfill duplicates if unique not enough
+                    True  → do NOT backfill, return fewer and warn
+            """
+
+            if not results:
+                return "No similar failure chains were retrieved from the knowledge base."
+
+            if target_n is None:
+                target_n = len(results)
+
+            def norm(x):
+                if x is None:
+                    return ""
+                return " ".join(str(x).strip().split()).lower()
+
+            def sig(r):
+                return (
+                    norm(r.get("element")),
+                    norm(r.get("function")),
+                    norm(r.get("mode")),
+                    norm(r.get("effect")),
+                    norm(r.get("cause")),
+                )
+
+            # -------------------------------------------------
+            # 1️⃣ Collect unique chains
+            # -------------------------------------------------
+            selected = []
+            seen = set()
+            duplicates = []
+
+            for r in results:
+                s = sig(r)
+                if s in seen:
+                    duplicates.append(r)
+                    continue
+                seen.add(s)
+                selected.append(r)
+                if len(selected) >= target_n:
+                    break
+
+            # -------------------------------------------------
+            # 2️⃣ Backfill only if NOT strict
+            # -------------------------------------------------
+            if not strict_unique and len(selected) < target_n:
+                need = target_n - len(selected)
+                selected.extend(duplicates[:need])
+
+            # In strict mode, do nothing (may be fewer)
+
+            # -------------------------------------------------
+            # 3️⃣ Format
+            # -------------------------------------------------
+            lines = []
+            lines.append("Retrieved Similar FMEA Failure Chains:\n")
+
+            if strict_unique and len(selected) < target_n:
+                lines.append(
+                    f"⚠ WARNING: Only {len(selected)} unique chains available "
+                    f"(requested {target_n}). No duplicate backfilling applied.\n"
+                )
+
+            for idx, r in enumerate(selected, start=1):
+                lines.append(f"Rank {idx}")
+                lines.append(f"Failure ID: {r.get('failure_id')}")
+                lines.append(f"Relevance Score: {r.get('score')}")
+                lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
+
+                lines.append("Failure Chain:")
+                tagged = r.get("tagged") or {}
+                def fmt(field_name: str, fallback_key: str):
+                    obj = tagged.get(field_name)
+                    if isinstance(obj, dict) and "text" in obj:
+                        return f"{obj.get('text')}  [{obj.get('tag', 'UNKNOWN')}]"
+                    return f"{r.get(fallback_key)}"
+
+                lines.append(f"  Element : {fmt('element', 'element')}")
+                lines.append(f"  Mode    : {fmt('mode', 'mode')}")
+                lines.append(f"  Effect  : {fmt('effect', 'effect')}")
+                lines.append(f"  Cause   : {fmt('cause', 'cause')}")
+                match_detail = r.get("match_detail", {}) or {}
+                if isinstance(match_detail, dict):
+                    for field_type, matches in match_detail.items():
+                        if matches:
+                            lines.append(f"  {str(field_type).upper()}:")
+                            for m in matches:
+                                display = dict(m)
+                                lines.append(f"    - {display}")
+                lines.append("-" * 60)
+                lines.append("-" * 60)
+
+            return "\n".join(lines)
+
+
+    results = build_ground_truth_input(result,target_n=40,strict_unique=True)
+    print(results)

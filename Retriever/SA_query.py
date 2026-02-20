@@ -9,7 +9,37 @@ import math
 # =========================================================
 # Structure → Failure Chain Retrieval
 # =========================================================
+def distance_to_similarity_exp(
+    distance: float,
+    alpha: float = 1.0,
+    max_distance: float = 10.0,
+    min_similarity: float = 1e-6,
+) -> float:
+    """
+    Stable exponential distance → similarity conversion.
 
+    similarity = exp(-alpha * distance)
+
+    Enhancements:
+    - clip negative distance
+    - cap very large distance
+    - floor minimal similarity
+    """
+
+    try:
+        d = float(distance)
+    except Exception:
+        return 0.0
+
+    if d < 0:
+        d = 0.0
+
+    # avoid extreme overflow in exp
+    d = min(d, max_distance)
+
+    sim = math.exp(-alpha * d)
+
+    return max(sim, min_similarity)
 # =========================================================
 # Structure → Failure Chain Retrieval (Soft-AND Optimized)
 # =========================================================
@@ -217,7 +247,6 @@ def _accumulate_candidate_scores(
     field_type: str,
     weight: float,
     min_similarity: float = 0.35,
-    max_hits_per_field_per_failure: int = 3,
 ) -> None:
     """
     Accumulate failure_id scores from semantic hits with graph constraint:
@@ -236,7 +265,11 @@ def _accumulate_candidate_scores(
         # Chroma distances are typically [0..2] depending on metric;
         # keep your original conversion but guard.
         try:
-            similarity = max(0.0, 1.0 - float(dist))
+            # similarity = max(0.0, 1.0 - float(dist))
+            similarity = distance_to_similarity_exp(
+                dist,
+                alpha=1.2   
+            )
         except Exception:
             continue
 
@@ -257,13 +290,25 @@ def _accumulate_candidate_scores(
         for fid in failure_ids:
             matched_list = candidate_scores[fid]["matched"][field_type]
 
-            # ---- cap per-field hits per failure ----
-            if max_hits_per_field_per_failure is not None and len(matched_list) >= int(max_hits_per_field_per_failure):
-                continue
 
             # ---- prevent duplicate semantic_id scoring ----
-            existing_ids = {m["semantic_id"] for m in matched_list}
-            if sid in existing_ids:
+            # existing_ids = {m["semantic_id"] for m in matched_list}
+            # if sid in existing_ids:
+            #     continue
+            # 查找是否已存在
+            existing = None
+            for m in matched_list:
+                if m["semantic_id"] == sid:
+                    existing = m
+                    break
+
+            if existing:
+                # 如果新相似度更高，则替换并修正score
+                if similarity > existing["similarity"]:
+                    delta = (similarity - existing["similarity"]) * float(weight)
+                    candidate_scores[fid]["score"] += delta
+                    existing["similarity"] = round(float(similarity), 4)
+                    existing["structure_text"] = query_text
                 continue
 
             candidate_scores[fid]["score"] += similarity * float(weight)
@@ -330,7 +375,6 @@ def generate_failure_chains_from_structure(
     require_cause: bool = False,
     require_cause_plus: bool = False,
     min_similarity: float = 0.3,
-    max_hits_per_field_per_failure: int = 10,
     normalize_by_hits: bool = False,
 
     # ---- NEW: controlled duplicate reinforcement ----
@@ -404,7 +448,6 @@ def generate_failure_chains_from_structure(
                 field_type=field,
                 weight=weight,
                 min_similarity=min_similarity,
-                max_hits_per_field_per_failure=max_hits_per_field_per_failure,
             )
 
         if element_text:
@@ -639,12 +682,14 @@ if  __name__ == "__main__":
     results = generate_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
-        top_k_per_field=20,
+        top_k_per_field=50,
         # minimum_field_match=2,
         top_n=50,
         replace=True,
-        source_type="8D",
-        min_similarity=0.3
+        # source_type="8D",
+        # require_cause_plus=True,
+        require_cause=True,
+        min_similarity=0.55,
     )
 
 
@@ -758,5 +803,5 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=40,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=25,strict_unique=True)
     print(results)

@@ -282,9 +282,8 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
     print(f"\n Failure candidates saved to: {output_path}")
 
 @traceable(name="RAG")
-def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10, 
-    max_hits_per_field_per_failure: int = 2, require_cause: bool = False,
-    require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
+def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  require_cause: bool = False,
+                 min_similarity: float=0.55,require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
 
 
 
@@ -297,7 +296,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         structure_input=structure_input,
         top_k_per_field=top_k_per_field,
         top_n=top_n,
-        max_hits_per_field_per_failure = max_hits_per_field_per_failure,
+        min_similarity=min_similarity,
         require_cause = require_cause,
         require_cause_plus = require_cause_plus,
         replace=False
@@ -318,7 +317,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 structure_input=structure_input,
                 top_k_per_field=top_k_per_field,
                 top_n=top_n,
-                max_hits_per_field_per_failure = max_hits_per_field_per_failure,
+                min_similarity=min_similarity,
                 require_cause = require_cause,
                 require_cause_plus = require_cause_plus,
                 replace = True,
@@ -408,8 +407,8 @@ if __name__ == "__main__":
             }
         ]
     }
-    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=20, top_n=50, 
-                                      max_hits_per_field_per_failure=8, RAG = True, FILL = True)
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
+                                       min_similarity=0.45, RAG = True, FILL = True)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)
