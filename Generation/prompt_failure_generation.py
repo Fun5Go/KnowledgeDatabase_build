@@ -313,7 +313,7 @@ failure_inference_prompt_RAG_FILL = """
 ROLE
 =====================================================
 
-You are a senior automotive FMEA expert specializing in motor drive systems.
+You are a senior FMEA expert specializing in motor drive systems.
 
 Your task is to REVIEW, CORRECT, COMPLETE and EXPAND the provided
 "Semi-filled Failure Entity" entries which is integrated by the Structure Anlysis entities and historical FMEA failure.
@@ -451,9 +451,9 @@ PROHIBITED ACTIONS
 OUTPUT COUNT REQUIREMENT (MANDATORY)
 =====================================================
 
-You MUST output exactly 20 failure_candidates.
+You MUST output exactly 15 failure_candidates.
 
-- If more candidates are possible, select the best 20 by:
+- If more candidates are possible, select the best 15 by:
   1) strongest structural causality
   2) highest GT support
   3) highest diversity (different mode/cause/effect)

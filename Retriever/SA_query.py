@@ -322,7 +322,6 @@ def _apply_controlled_reinforcement(
     score: float,
     matched: Dict[str, List[Dict[str, Any]]],
     *,
-    reinforce_within_field: float = 0.05,
     reinforce_cross_field: float = 0.15,
     max_reinforce_ratio: float = 0.4,
 ) -> float:
@@ -338,12 +337,6 @@ def _apply_controlled_reinforcement(
         return base
 
     reinforcement = 0.0
-
-    # 1) within-field reinforcement (distinct hits already deduped by semantic_id in _accumulate_candidate_scores)
-    for field, hits in (matched or {}).items():
-        n = len(hits or [])
-        if n > 1:
-            reinforcement += (n - 1) * float(reinforce_within_field)
 
     # 2) cross-field reinforcement (reward completeness)
     active_fields = [f for f, hits in (matched or {}).items() if hits]
@@ -361,9 +354,9 @@ def generate_failure_chains_from_structure(
     top_k_per_field: int = 25,
     min_count: Optional[int] = None,
     weight_element: float = 0.5,
-    weight_mode: float = 1.5,
-    weight_cause: float = 1.5,
-    weight_effect: float = 1.5,
+    weight_mode: float = 1.0,
+    weight_cause: float = 1.0,
+    weight_effect: float = 1.0,
     top_n: Optional[int] = 50,
     source_type: Optional[str] = None,
     require_cause: bool = False,
@@ -373,8 +366,7 @@ def generate_failure_chains_from_structure(
 
     # ---- NEW: controlled duplicate reinforcement ----
     allow_reinforcement: bool = True,
-    reinforce_within_field: float = 0.05,
-    reinforce_cross_field: float = 0.15,
+    reinforce_cross_field: float = 0.0,
     max_reinforce_ratio: float = 0.4,
 
     # ---- OPTIONAL: connection shaping (keep your current behavior) ----
@@ -485,7 +477,6 @@ def generate_failure_chains_from_structure(
                 score = _apply_controlled_reinforcement(
                     score,
                     info.get("matched") or {},
-                    reinforce_within_field=reinforce_within_field,
                     reinforce_cross_field=reinforce_cross_field,
                     max_reinforce_ratio=max_reinforce_ratio,
                 )
@@ -591,7 +582,7 @@ def attach_ppl_scores(results: List[Dict]) -> List[Dict]:
         mode = r.get("mode")
         effect = r.get("effect")
 
-        # 跳过缺字段
+
         if not cause or not mode or not effect:
             r["forward_ppl"] = None
             r["reverse_ppl"] = None
@@ -678,7 +669,8 @@ if  __name__ == "__main__":
                     "Gear ratio drifts when battery is empty",
                     "Firmware update not possible/fails",
                     "Device bricked",
-                    "Update takes too much time (>5 minutes)"
+                    "Update takes too much time (>5 minutes)",
+                    "Too much noise",
                 ]
             }
         ]
@@ -699,9 +691,9 @@ if  __name__ == "__main__":
     results = generate_failure_chains_from_structure(
         persist_dir=KB_PATH,
         structure_input=structure_input,
-        top_k_per_field=40,
+        top_k_per_field=30,
         # minimum_field_match=2,
-        min_similarity=0.35,
+        min_similarity=0.65,
         top_n=100,
         replace=True
     )
@@ -821,5 +813,5 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=50,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=30,strict_unique=True)
     print(results)

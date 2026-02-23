@@ -401,13 +401,14 @@ if __name__ == "__main__":
                     "Gear ratio drifts when battery is empty",
                     "Firmware update not possible/fails",
                     "Device bricked",
-                    "Update takes too much time (>5 minutes)"
+                    "Update takes too much time (>5 minutes)",
+                    "Too much noise",
                 ]
             }
         ]
     }
     result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
-                                       min_similarity=0.35, RAG = True, FILL = True)
+                                       min_similarity=0.6, RAG = False, FILL = True)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)
@@ -415,45 +416,45 @@ if __name__ == "__main__":
     # -----------------------------------------------------
     # 3) Batch Settings
     # -----------------------------------------------------
-    # NUM_RUNS = 10  
+    NUM_RUNS = 10  
 
-    # BASE_SAVE_DIR = Path(
-    #     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
-    # )
+    BASE_SAVE_DIR = Path(
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
+    )
 
-    # MODES = [
-    #     # {"name": "PURE", "RAG": False, "FILL": False},
-    #     {"name": "RAG", "RAG": True, "FILL": False},
-    #     # {"name": "RAG_FILL", "RAG": True, "FILL": True},
-    # ]
+    MODES = [
+        # {"name": "PURE", "RAG": False, "FILL": False},
+        # {"name": "RAG", "RAG": True, "FILL": False},
+        {"name": "RAG_FILL", "RAG": True, "FILL": True},
+    ]
 
-    # # -----------------------------------------------------
-    # # 4) Run Loop
-    # # -----------------------------------------------------
-    # for mode in MODES:
+    # -----------------------------------------------------
+    # 4) Run Loop
+    # -----------------------------------------------------
+    for mode in MODES:
 
-    #     mode_name = mode["name"]
-    #     save_folder = BASE_SAVE_DIR / mode_name
-    #     save_folder.mkdir(parents=True, exist_ok=True)
+        mode_name = mode["name"]
+        save_folder = BASE_SAVE_DIR / mode_name / "min_similarity_0.6"
+        save_folder.mkdir(parents=True, exist_ok=True)
 
-    #     print(f"\n================ RUNNING MODE: {mode_name} =================\n")
+        print(f"\n================ RUNNING MODE: {mode_name} =================\n")
 
-    #     for i in range(1, NUM_RUNS+1):
+        for i in range(1, NUM_RUNS+1):
 
-    #         print(f"\n--- Run {i} ---\n")
+            print(f"\n--- Run {i} ---\n")
 
-    #         result, _ = RAG_pipeline(
-    #             structure_input=structure_input,
-    #             KB_PATH=KB_PATH,
-    #             top_k_per_field=20,
-    #             top_n=50,
-    #             max_hits_per_field_per_failure=8,
-    #             RAG=mode["RAG"],
-    #             FILL=mode["FILL"],
-    #         )
+            result, _ = RAG_pipeline(
+                structure_input=structure_input,
+                KB_PATH=KB_PATH,
+                top_k_per_field=30,
+                top_n=50,
+                min_similarity=0.6,
+                RAG=mode["RAG"],
+                FILL=mode["FILL"],
+            )
 
-    #         output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
+            output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
 
-    #         save_failure_candidates_to_json(result, output_path)
+            save_failure_candidates_to_json(result, output_path)
 
 

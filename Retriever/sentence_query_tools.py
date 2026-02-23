@@ -526,7 +526,7 @@ if __name__ == "__main__":
     )
 
     query_sentence = "Incorrect torque applied due to Motor can not provide enough torque"
-    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20, source_type=["new_fmea", "old_fmea"])
+    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20,)
     def structured_print(results):
         ids = results["ids"][0]
         documents = results["documents"][0]
