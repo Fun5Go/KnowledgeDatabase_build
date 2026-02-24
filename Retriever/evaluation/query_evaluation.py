@@ -37,7 +37,7 @@ def build_entity(item: Dict[str, Any]) -> Dict[str, Optional[str]]:
     """Map json item to chunks input expected by query_failure_kb_by_chunks."""
     return {
         "failure_mode_text": item.get("failure_mode_text"),
-        "failure_element_text": item.get("failure_element_text"),
+        "failure_element_text": "",
         "failure_effect_text": item.get("failure_effect_text"),
         "failure_cause_text": item.get("failure_cause_text"),
     }
@@ -77,7 +77,7 @@ def evaluate(
     # --------------------------------------------------
     # Loop over GT samples
     # --------------------------------------------------
-    for gt_failure_id, item in islice(gt_data.items(), 120):
+    for gt_failure_id, item in islice(gt_data.items(), 100):
 
         entity = build_entity(item)
 
@@ -88,13 +88,13 @@ def evaluate(
             ranked = retrieve_similar_failures_from_entity(
                 persist_dir=persist_dir,
                 failure_entity=entity,
-                top_n=max(top_k, 20),
+                top_n=30,
                 min_similarity=0.4,
                 top_k_per_field=15,
             ) or []
 
         elif method == "bm25":
-            ranked = bm25_retriever.query(entity, top_k=max(top_k, 20))
+            ranked = bm25_retriever.query(entity, top_k=30)
 
         else:
             raise ValueError(f"Unknown method: {method}")

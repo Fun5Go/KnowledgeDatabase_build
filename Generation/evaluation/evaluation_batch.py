@@ -11,7 +11,9 @@ import matplotlib.pyplot as plt
 # CONFIG
 # ============================================================
 
-TARGET_ELEMENT = "Power train"
+TARGET_ELEMENT_1 = "Motor control"
+
+TARGET_ELEMENT_2 = "Power train"
 
 
 # ============================================================
@@ -37,14 +39,22 @@ def build_signature(item: Dict[str, Any]) -> tuple:
 # Load Data
 # ============================================================
 
-def load_gt(gt_path: Path) -> List[Dict]:
+def load_gt(gt_path: Path, target_element: str) -> List[Dict]:
     with open(gt_path, "r", encoding="utf-8") as f:
         gt_raw = json.load(f)
 
+    target_norm = normalize_text(target_element)
+    is_motor_control = target_norm == normalize_text("Motor control")
+
     gt_list = []
     for v in gt_raw.values():
-        if normalize_text(v.get("failure_element")) == normalize_text(TARGET_ELEMENT):
-            gt_list.append(v)
+        if normalize_text(v.get("failure_element")) != target_norm:
+            continue
+
+        if is_motor_control and v.get("productPnID") != 287883:
+            continue
+
+        gt_list.append(v)
 
     return gt_list
 
@@ -308,10 +318,6 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
     }
 
 def plot_batch_counts(run_results, title="Batch - Match Counts"):
-    """
-    run_results: list[dict]，长度可为10或不足10
-    每个 dict 至少包含 complete_match/partial_match/no_match，最好包含 file
-    """
     n = len(run_results)
     runs = np.arange(1, n + 1)
 
@@ -343,11 +349,7 @@ def plot_batch_counts(run_results, title="Batch - Match Counts"):
 
 
 def plot_in_batches(all_results, batch_size=10, drop_last=False):
-    """
-    all_results: 你收集到的所有 evaluate_strict 结果 list
-    batch_size: 每张图包含多少次（默认10）
-    drop_last: True 则最后不足 batch_size 的不画
-    """
+
     total = len(all_results)
     for start in range(0, total, batch_size):
         batch = all_results[start:start + batch_size]
@@ -363,10 +365,10 @@ if __name__ == "__main__":
     )
 
     PRED_FOLDER = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG\min_similarity_0.6"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG_FILL\motor_control"
     )
 
-    gt_list = load_gt(GT_JSON)
+    gt_list = load_gt(GT_JSON, target_element=TARGET_ELEMENT_1)
 
     all_results = []
 

@@ -9,7 +9,9 @@ import numpy as np
 # CONFIG
 # ============================================================
 
-TARGET_ELEMENT = "Power train"
+TARGET_ELEMENT_1 = "Motor control"
+
+TARGET_ELEMENT_2 = "Power train"
 
 
 # ============================================================
@@ -33,19 +35,24 @@ def chain_signature(item: Dict[str, Any]) -> Tuple[str, str, str]:
 # ============================================================
 # Load Data
 # ============================================================
-
 def load_gt(gt_path: Path, target_element: str) -> List[Dict]:
-
     with open(gt_path, "r", encoding="utf-8") as f:
         gt_raw = json.load(f)
 
-    gt_list = [
-        v for v in gt_raw.values()
-        if normalize_text(v.get("failure_element")) == normalize_text(target_element)
-    ]
+    target_norm = normalize_text(target_element)
+    is_motor_control = target_norm == normalize_text("Motor control")
+
+    gt_list = []
+    for v in gt_raw.values():
+        if normalize_text(v.get("failure_element")) != target_norm:
+            continue
+
+        if is_motor_control and v.get("productPnID") != 287883:
+            continue
+
+        gt_list.append(v)
 
     return gt_list
-
 
 def load_predictions(pred_path: Path, target_element: str) -> List[Dict]:
 
@@ -315,10 +322,10 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 if __name__ == "__main__":
 
     GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\RAG\KB_motor_drives\failure_kb\fmea_cause_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_FILL.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_pure.json")
 
-    gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT)
-    pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT)
+    gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_1)
+    pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_1)
 
     results = evaluate_strict(pred_list, gt_list)
     print("\n========== FINAL METRICS ==========")

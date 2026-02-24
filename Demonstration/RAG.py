@@ -1,38 +1,10 @@
-from .LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE, failure_inference_generation_RAG_FILL
+from Generation.LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE, failure_inference_generation_RAG_FILL
 from Retriever.SA_query import build_failure_chains_from_structure,generate_failure_chains_from_structure
 from typing import Dict, List, Optional
 from pathlib import Path
 from langsmith import traceable
 from pprint import pprint
 import json
-
-def build_structure_analysis_input(structure_input: Dict,):
-    """
-    Convert structure analysis dict to LLM-readable formatted text.
-    """
-
-    lines = []
-    lines.append(f"Product Domain: {structure_input.get('product_domain', '')}\n")
-
-    for node in structure_input.get("nodes", []):
-        lines.append(f"Element ID: {node.get('element_id', '')}")
-        lines.append(f"Failure Element: {node.get('failure_element', '')}")
-
-        lines.append("Possible Failure Modes:")
-        for m in node.get("modes", []):
-            lines.append(f"  - {m}")
-
-        lines.append("Possible Failure Causes:")
-        for c in node.get("causes", []):
-            lines.append(f"  - {c}")
-
-        lines.append("Possible Failure Effects:")
-        for e in node.get("effects", []):
-            lines.append(f"  - {e}")
-
-        lines.append("-" * 50)
-
-    return "\n".join(lines)
 
 
 def build_ground_truth_input(
@@ -62,7 +34,7 @@ def build_ground_truth_input(
         )
 
     # -----------------------------
-    # 1️⃣ Deduplication
+    # Deduplication
     # -----------------------------
     selected = []
     seen = set()
@@ -83,7 +55,7 @@ def build_ground_truth_input(
         selected.extend(duplicates[:need])
 
     # -----------------------------
-    # 2️⃣ Extract matched SA fields
+    # Extract matched SA fields
     # -----------------------------
     def extract_matched_inputs(match_detail: dict) -> dict:
         """
@@ -114,7 +86,7 @@ def build_ground_truth_input(
         return out
 
     # -----------------------------
-    # 3️⃣ Build structured GT list
+    # Build structured GT list
     # -----------------------------
     structured_patterns = []
 
@@ -136,7 +108,7 @@ def build_ground_truth_input(
         structured_patterns.append(gt_pattern)
 
     # -----------------------------
-    # 4️⃣ Return final formatted block
+    # Return final formatted block
     # -----------------------------
     return (
         "GROUND TRUTH FAILURE PATTERNS (Structured Reference Only)\n\n"
@@ -282,7 +254,8 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
     print(f"\n Failure candidates saved to: {output_path}")
 
 @traceable(name="RAG")
-def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  require_cause: bool = False,weight_element: float = 0.3, 
+def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  
+                 require_cause: bool = False,weight_element: float = 0.3, target_n: int =30,
                  min_similarity: float=0.55,require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
 
 
@@ -303,7 +276,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         replace=False
     )
         if not FILL:
-            failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
+            failure_example = build_ground_truth_input(similar_failure,target_n=target_n, strict_unique=True)
             failure_candidates = failure_inference_generation_RAG.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -323,7 +296,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 require_cause_plus = require_cause_plus,
                 replace = True,
             )
-            semi_candidates =  build_fill_entity(semi_candidates,target_n=30,strict_unique=True)
+            semi_candidates =  build_fill_entity(semi_candidates,target_n=target_n,strict_unique=True)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -341,102 +314,3 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
        })
        OUTPUT_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_pure.json")
     return failure_candidates,OUTPUT_PATH
-
-if __name__ == "__main__":
-    # -----------------------------------------------------
-    # 1) KB Path
-    # -----------------------------------------------------
-    KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_MOTORCONTROL\failure_kb"
-    )
-
-    # -----------------------------------------------------
-    # 2) Structure Input
-    # -----------------------------------------------------
-    structure_input = {
-            "product_domain": "motor_drives",
-            "nodes": [
-                {
-                    "element_id": "E1",
-                    "failure_element": "Motor control",
-                    "modes": [
-                        "Component break-down",
-                        "Unbalanced motor currents",
-                        "Incorrect interpretation zero-crossing",
-                        "Soft start too long",
-                        "No detection",
-                        "Welded relay",
-                        "Relay cannot close",
-                        "False turn-on / turn-off"
-                    ],
-                    "causes": [
-                        "Cooling insufficient",
-                        "Compressor vibrations",
-                        "(Starting) Motor current too high for chosen components",
-                        "Overvoltage due to motor disconnect",
-                        "Under Voltage due to incorrect triggering",
-                        "Live switching of relays",
-                        "Priority zero-crossing interrupt too low",
-                        "Open loop control",
-                        "No (correctly designed) snubber design",
-                        "Too high dT junction as a result of power cycling of component"
-                    ],
-                    "effects": [
-                        "Motor cannot start",
-                        "Overcurrent towards motor",
-                        "Motor starts without soft start",
-                    ]
-                }
-            ]
-        }
-    # result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
-    #                                    weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = True)
-    # print("\n================ FAILURE CANDIDATES ================\n")
-    # # print(json.dumps(result, indent=4))
-    # save_failure_candidates_to_json(result, OUTPUT_PATH)
-
-    # -----------------------------------------------------
-    # 3) Batch Settings
-    # -----------------------------------------------------
-    NUM_RUNS = 10  
-
-    BASE_SAVE_DIR = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
-    )
-
-    MODES = [
-        {"name": "PURE", "RAG": False, "FILL": False},
-        {"name": "RAG", "RAG": True, "FILL": False},
-        {"name": "RAG_FILL", "RAG": True, "FILL": True},
-    ]
-
-    # -----------------------------------------------------
-    # 4) Run Loop
-    # -----------------------------------------------------
-    for mode in MODES:
-
-        mode_name = mode["name"]
-        save_folder = BASE_SAVE_DIR / mode_name / "motor_control"
-        save_folder.mkdir(parents=True, exist_ok=True)
-
-        print(f"\n================ RUNNING MODE: {mode_name} =================\n")
-
-        for i in range(1, NUM_RUNS+1):
-
-            print(f"\n--- Run {i} ---\n")
-
-            result, _ = RAG_pipeline(
-                structure_input=structure_input,
-                KB_PATH=KB_PATH,
-                top_k_per_field=30,
-                top_n=50,
-                min_similarity=0.55,
-                RAG=mode["RAG"],
-                FILL=mode["FILL"],
-            )
-
-            output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
-
-            save_failure_candidates_to_json(result, output_path)
-
-
