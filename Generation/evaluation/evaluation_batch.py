@@ -363,7 +363,7 @@ if __name__ == "__main__":
     )
 
     PRED_FOLDER = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG_FILL\min_similarity_0.6"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG\min_similarity_0.6"
     )
 
     gt_list = load_gt(GT_JSON)

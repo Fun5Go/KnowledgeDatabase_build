@@ -3,10 +3,10 @@ failure_inference_prompt_RAG = failure_inference_prompt_RAG = """
 TASK
 =====================================================
 
-You are a senior automotive FMEA domain expert.
+You are a senior FMEA domain expert.
 
 Your task is to construct the MOST PHYSICALLY AND LOGICALLY
-CONSISTENT FAILURE GRAPH based on the provided Structure Analysis.
+CONSISTENT FAILURE GRAPH based on the provided Structure Analysis and the ground truth examples which is semantic similar to the query.
 
 This is a STRUCTURE-DRIVEN reconstruction task.
 
@@ -15,9 +15,8 @@ The PRIMARY objective is:
 → Use Structure Analysis to generate the most technically coherent
   and causally valid FMEA failure chains.
 
-Ground Truth (GT) examples are SECONDARY:
+Ground Truth (GT) examples are IMPORTANT to infer your reasoning:
 They serve as validation and enhancement references,
-NOT as the dominant source.
 
 
 =====================================================
@@ -37,7 +36,8 @@ CORE PRINCIPLE (STRUCTURE DOMINANCE)
    - Motor drive engineering logic
    - Causal consistency
 
-4. GT examples are used ONLY to:
+4. GT examples are used to:
+   - Infer the possible failure entity
    - Validate plausibility
    - Reinforce known patterns
    - Increase confidence level

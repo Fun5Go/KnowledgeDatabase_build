@@ -353,7 +353,7 @@ def generate_failure_chains_from_structure(
     structure_input: Dict[str, Any],
     top_k_per_field: int = 25,
     min_count: Optional[int] = None,
-    weight_element: float = 0.5,
+    weight_element: float = 0.1,
     weight_mode: float = 1.0,
     weight_cause: float = 1.0,
     weight_effect: float = 1.0,
@@ -364,34 +364,20 @@ def generate_failure_chains_from_structure(
     min_similarity: float = 0.45,
     normalize_by_hits: bool = False,
 
-    # ---- NEW: controlled duplicate reinforcement ----
+    # ---- duplicate reinforcement ----
     allow_reinforcement: bool = True,
     reinforce_cross_field: float = 0.0,
     max_reinforce_ratio: float = 0.4,
 
-    # ---- OPTIONAL: connection shaping (keep your current behavior) ----
+    # ---- connection shaping ----
     apply_connection_bonus: bool = True,
-    # NOTE: your original code uses 0.7 for >=2 hits (actually a penalty).
-    # If you intended to "strengthen", consider changing to >1.0.
     connection_factor_ge2: float = 1.0,
     connection_factor_eq1: float = 1.0,
     connection_factor_eq0: float = 1.0,
+
+
     replace: bool = True,
 ) -> List[Dict[str, Any]]:
-    """
-    Graph-constrained retrieval + structure-native FMEA chain generation.
-
-    Output chains:
-    - Relation pattern from KB
-    - Semantic text from structure analysis
-    - KB used only as fallback completion
-
-    Notes:
-    - Requires existing project functions:
-        _load_kb(persist_dir)
-        query_semantic_kb(persist_dir, text, field_type, n_results, min_count, source_type)
-        _accumulate_candidate_scores(kb, semantic_query_result, candidate_scores, query_text, field_type, weight, ...)
-    """
 
     persist_dir = Path(persist_dir)
     kb = _load_kb(persist_dir)
@@ -446,16 +432,15 @@ def generate_failure_chains_from_structure(
             query_and_accumulate(e, "effect", weight_effect)
 
         # -------------------------
-        # GRAPH-CONSTRAINED FILTER
+        # PROCESS CANDIDATES
         # -------------------------
         for fid, info in candidate_scores.items():
+
             fields = info["field_hits"]
 
             if require_cause and ("cause" not in fields):
                 continue
 
-            # keep your semantics: if require_cause_plus is True and cause hit exists,
-            # require at least one of (mode/effect/element) too.
             if require_cause_plus and ("cause" in fields) and not (
                 ("mode" in fields) or ("effect" in fields) or ("element" in fields)
             ):
@@ -471,7 +456,7 @@ def generate_failure_chains_from_structure(
             score = float(info["score"])
 
             # -------------------------
-            # NEW: CONTROLLED "DUPLICATE" REINFORCEMENT
+            # CONTROLLED REINFORCEMENT
             # -------------------------
             if allow_reinforcement:
                 score = _apply_controlled_reinforcement(
@@ -482,7 +467,7 @@ def generate_failure_chains_from_structure(
                 )
 
             # -------------------------
-            # OPTIONAL: CONNECTION SHAPING (mode/cause/effect)
+            # CONNECTION SHAPING
             # -------------------------
             if apply_connection_bonus:
                 mce_fields = {"mode", "cause", "effect"}
@@ -495,59 +480,58 @@ def generate_failure_chains_from_structure(
                 else:
                     score *= float(connection_factor_eq0)
 
-            # Optional mild normalization
+            # -------------------------
+            # OPTIONAL NORMALIZATION
+            # -------------------------
             if normalize_by_hits:
                 denom = max(1, min(len(fields), 4))
                 score = score / denom
 
             # -------------------------
-            # STRUCTURE TEXT REPLACEMENT
+            # PICK BEST STRUCTURE TEXT
             # -------------------------
             def pick_best_structure_text(matched_list: List[Dict[str, Any]]) -> Optional[str]:
                 if not matched_list:
                     return None
                 best = max(matched_list, key=lambda x: float(x.get("similarity", 0.0)))
                 return best.get("structure_text")
+
             if replace:
                 structure_element = pick_best_structure_text(info["matched"]["element"])
-                structure_mode    = pick_best_structure_text(info["matched"]["mode"])
-                structure_cause   = pick_best_structure_text(info["matched"]["cause"])
-                structure_effect  = pick_best_structure_text(info["matched"]["effect"])
+                structure_mode = pick_best_structure_text(info["matched"]["mode"])
+                structure_cause = pick_best_structure_text(info["matched"]["cause"])
+                structure_effect = pick_best_structure_text(info["matched"]["effect"])
 
                 final_element = structure_element or entity.get("failure_element_text")
-                final_mode    = structure_mode    or entity.get("failure_mode_text")
-                final_cause   = structure_cause   or entity.get("failure_cause_text")
-                final_effect  = structure_effect  or entity.get("failure_effect_text")
+                final_mode = structure_mode or entity.get("failure_mode_text")
+                final_cause = structure_cause or entity.get("failure_cause_text")
+                final_effect = structure_effect or entity.get("failure_effect_text")
 
                 tag_element = "STRUCTURE" if structure_element else "KB"
-                tag_mode    = "STRUCTURE" if structure_mode else "KB"
-                tag_cause   = "STRUCTURE" if structure_cause else "KB"
-                tag_effect  = "STRUCTURE" if structure_effect else "KB"
+                tag_mode = "STRUCTURE" if structure_mode else "KB"
+                tag_cause = "STRUCTURE" if structure_cause else "KB"
+                tag_effect = "STRUCTURE" if structure_effect else "KB"
 
                 chain = {
                     "node_id": node_id,
                     "failure_id": fid,
-
-                    # plain fields
                     "element": final_element,
                     "function": entity.get("function"),
                     "mode": final_mode,
                     "cause": final_cause,
                     "effect": final_effect,
-
-                    # tagged fields (for display/debug)
                     "tagged": {
                         "element": {"text": final_element, "tag": tag_element},
-                        "mode":    {"text": final_mode,    "tag": tag_mode},
-                        "cause":   {"text": final_cause,   "tag": tag_cause},
-                        "effect":  {"text": final_effect,  "tag": tag_effect},
+                        "mode": {"text": final_mode, "tag": tag_mode},
+                        "cause": {"text": final_cause, "tag": tag_cause},
+                        "effect": {"text": final_effect, "tag": tag_effect},
                     },
-
                     "score": round(float(score), 4),
                     "matched_fields": sorted(list(fields)),
                     "match_detail": info["matched"],
                 }
                 all_results.append(chain)
+
             else:
                 chain = {
                     "node_id": node_id,
@@ -559,18 +543,17 @@ def generate_failure_chains_from_structure(
                     "effect": entity.get("failure_effect_text"),
                     "score": round(float(score), 4),
                     "matched_fields": sorted(list(fields)),
-                    "match_detail": info["matched"],   
+                    "match_detail": info["matched"],
                 }
                 all_results.append(chain)
 
-
     # -------------------------
-    # GLOBAL SORT
+    # SORT + TOP N
     # -------------------------
     all_results.sort(key=lambda x: x["score"], reverse=True)
 
-    if top_n is not None:
-        all_results = all_results[: int(top_n)]
+    if top_n:
+        all_results = all_results[:top_n]
 
     return all_results
 
@@ -623,7 +606,7 @@ if  __name__ == "__main__":
         "nodes": [
             {
                 "element_id": "E1",
-                "failure_element": "",
+                "failure_element": "Power train",
                 "modes": [
                     "Incorrect",
                     "No pulses seen",
@@ -693,7 +676,7 @@ if  __name__ == "__main__":
         structure_input=structure_input,
         top_k_per_field=30,
         # minimum_field_match=2,
-        min_similarity=0.65,
+        min_similarity=0.50,
         top_n=100,
         replace=True
     )
@@ -813,5 +796,5 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=30,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=20,strict_unique=True)
     print(results)

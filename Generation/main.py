@@ -282,7 +282,7 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
     print(f"\n Failure candidates saved to: {output_path}")
 
 @traceable(name="RAG")
-def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  require_cause: bool = False,
+def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  require_cause: bool = False,weight_element: float = 0.3, 
                  min_similarity: float=0.55,require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
 
 
@@ -299,10 +299,11 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
         min_similarity=min_similarity,
         require_cause = require_cause,
         require_cause_plus = require_cause_plus,
+        weight_element=weight_element,
         replace=False
     )
         if not FILL:
-            failure_example = build_ground_truth_input(similar_failure,target_n=25, strict_unique=True)
+            failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
             failure_candidates = failure_inference_generation_RAG.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -318,10 +319,11 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 top_k_per_field=top_k_per_field,
                 top_n=top_n,
                 require_cause = require_cause,
+                min_similarity=min_similarity,
                 require_cause_plus = require_cause_plus,
                 replace = True,
             )
-            semi_candidates =  build_fill_entity(semi_candidates,target_n=35,strict_unique=True)
+            semi_candidates =  build_fill_entity(semi_candidates,target_n=30,strict_unique=True)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke({
                 "data": {
                     "structure_analysis": structure_input_json, # Sentences with annotations
@@ -408,7 +410,7 @@ if __name__ == "__main__":
         ]
     }
     result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
-                                       min_similarity=0.6, RAG = False, FILL = True)
+                                       weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)
@@ -416,45 +418,45 @@ if __name__ == "__main__":
     # -----------------------------------------------------
     # 3) Batch Settings
     # -----------------------------------------------------
-    NUM_RUNS = 10  
+    # NUM_RUNS = 10  
 
-    BASE_SAVE_DIR = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
-    )
+    # BASE_SAVE_DIR = Path(
+    #     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
+    # )
 
-    MODES = [
-        # {"name": "PURE", "RAG": False, "FILL": False},
-        # {"name": "RAG", "RAG": True, "FILL": False},
-        {"name": "RAG_FILL", "RAG": True, "FILL": True},
-    ]
+    # MODES = [
+    #     # {"name": "PURE", "RAG": False, "FILL": False},
+    #     # {"name": "RAG", "RAG": True, "FILL": False},
+    #     # {"name": "RAG_FILL", "RAG": True, "FILL": True},
+    # ]
 
-    # -----------------------------------------------------
-    # 4) Run Loop
-    # -----------------------------------------------------
-    for mode in MODES:
+    # # -----------------------------------------------------
+    # # 4) Run Loop
+    # # -----------------------------------------------------
+    # for mode in MODES:
 
-        mode_name = mode["name"]
-        save_folder = BASE_SAVE_DIR / mode_name / "min_similarity_0.6"
-        save_folder.mkdir(parents=True, exist_ok=True)
+    #     mode_name = mode["name"]
+    #     save_folder = BASE_SAVE_DIR / mode_name / "min_similarity_0.6"
+    #     save_folder.mkdir(parents=True, exist_ok=True)
 
-        print(f"\n================ RUNNING MODE: {mode_name} =================\n")
+    #     print(f"\n================ RUNNING MODE: {mode_name} =================\n")
 
-        for i in range(1, NUM_RUNS+1):
+    #     for i in range(1, NUM_RUNS+1):
 
-            print(f"\n--- Run {i} ---\n")
+    #         print(f"\n--- Run {i} ---\n")
 
-            result, _ = RAG_pipeline(
-                structure_input=structure_input,
-                KB_PATH=KB_PATH,
-                top_k_per_field=30,
-                top_n=50,
-                min_similarity=0.6,
-                RAG=mode["RAG"],
-                FILL=mode["FILL"],
-            )
+    #         result, _ = RAG_pipeline(
+    #             structure_input=structure_input,
+    #             KB_PATH=KB_PATH,
+    #             top_k_per_field=30,
+    #             top_n=50,
+    #             min_similarity=0.55,
+    #             RAG=mode["RAG"],
+    #             FILL=mode["FILL"],
+    #         )
 
-            output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
+    #         output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
 
-            save_failure_candidates_to_json(result, output_path)
+    #         save_failure_candidates_to_json(result, output_path)
 
 
