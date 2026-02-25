@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 JSONL_PATH= Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_motor_drive_recall.jsonl")
 # Persist KB data folders
-KB_DATA_ROOT = BASE_DIR.parent/ "KB_motor_drives_MOTORCONTROL"
+KB_DATA_ROOT = BASE_DIR.parent/ "KB_motor_drives_complete"
 FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
 SENTENCE_KB_DIR = KB_DATA_ROOT / "sentence_kb"
 # CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"

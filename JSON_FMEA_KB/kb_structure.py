@@ -87,6 +87,7 @@ class FailureEntity:
 
     # ===== identifiers =====
     failure_id: str
+    file_name: str
 
     # ===== links to semantic nodes =====
     mode_id: Optional[str]
@@ -124,6 +125,8 @@ class FailureEntity:
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
     released_year: Optional[int] = None
+
+    same_id: Optional[List[str]] = field(default_factory=list)
 
 class FileMetaStore:
     def __init__(self, persist_dir: Path):

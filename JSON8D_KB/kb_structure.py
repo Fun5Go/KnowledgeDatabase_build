@@ -95,6 +95,7 @@ class EightDFailureEntity:
 
     # ===== identifiers =====
     failure_id: str
+    file_name:str
 
     # ===== links to semantic nodes =====
     mode_id: Optional[str]

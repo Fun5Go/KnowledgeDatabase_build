@@ -200,7 +200,7 @@ class BM25FailureRetriever:
 # -----------------------------
 if __name__ == "__main__":
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\failure_kb"
     )
 
     kb = FMEAFailureKB(KB_PATH)

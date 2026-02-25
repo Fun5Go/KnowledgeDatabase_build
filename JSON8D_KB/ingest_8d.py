@@ -252,6 +252,7 @@ def ingest_8d_json(
         # ------------------------------
         entity = EightDFailureEntity(
             failure_id=failure_id,
+            file_name=case_id,
             mode_id=mode_id,
             element_id=element_id,
             effect_id=effect_id,

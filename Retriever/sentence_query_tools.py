@@ -525,8 +525,10 @@ if __name__ == "__main__":
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_MOTORCONTROL\sentence_kb"
     )
 
-    query_sentence = "Soft start too long"
-    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20,source_section=["D2","D3","D4"])
+    query_sentence ="In Software, Setpoint below minimal operational speed due to FOC limitation for low speeds leading to Motor not working."
+    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20,
+                            #    source_section=["D2","D3","D4"]
+                               )
     def structured_print(results):
         ids = results["ids"][0]
         documents = results["documents"][0]

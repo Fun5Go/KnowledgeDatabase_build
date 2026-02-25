@@ -13,7 +13,7 @@ from ..bm25_baseline import BM25FailureRetriever
 
 
 GT_JSON_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\sample_10pct_rephrased.json"
-KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
+KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\failure_kb")
 
 
 TOP_K = 5

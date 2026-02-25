@@ -310,8 +310,6 @@ def collect_semantic(
         node["failure_ids"].append(failure_id)
 
 
-
-
 # =========================================================
 # Ingest
 # =========================================================
@@ -338,6 +336,11 @@ def ingest_fmea_jsonl(
     print(f"[INGEST] {jsonl_path.name}")
 
     # =================================================
+    # GLOBAL signature → master failure_id
+    # =================================================
+    signature_master_map: dict[tuple, str] = {}
+
+    # =================================================
     # 1) PRIMARY GROUP: by file_name
     # =================================================
     rows_by_file = defaultdict(list)
@@ -350,15 +353,15 @@ def ingest_fmea_jsonl(
     # =================================================
     # 2) FILE-LEVEL INGEST
     # =================================================
-    for file_name, rows in rows_by_file.items():
+    for file_name, file_rows in rows_by_file.items():
 
         # semantic accumulator (PER FILE!)
         semantic_nodes: dict[str, dict] = {}
 
         # -------------------------------------------------
-        # META
+        # META (PER FILE)
         # -------------------------------------------------
-        first = rows[0]
+        first = file_rows[0]
         metadata = first.get("metadata", {})
         labels = first.get("labels", {})
 
@@ -376,27 +379,43 @@ def ingest_fmea_jsonl(
         released_year = to_year(file_meta.released)
 
         # -------------------------------------------------
-        # SECONDARY GROUP: failure signature
+        # SECONDARY GROUP: failure signature (WITHIN FILE)
         # -------------------------------------------------
         grouped = defaultdict(list)
-        for row in rows:
+        for row in file_rows:
             sig = build_failure_signature(row)
             grouped[sig].append(row)
 
         # =================================================
         # 3) FAILURE INGEST
         # =================================================
-        for group in grouped.values():
-            first = group[0]
+        for sig, group in grouped.items():
 
+            first = group[0]
             row_index = first.get("row_index")
             if row_index is None:
                 raise ValueError(f"Missing row_index in {file_name}")
 
+            # keep original naming for traceability
             failure_id = f"{file_name}__R{row_index}"
+
             content = first.get("content", {})
             source_type = first.get("source_type")
 
+            # -------------------------------------------------
+            # determine master id (dedup across files)
+            # -------------------------------------------------
+            if sig not in signature_master_map:
+                signature_master_map[sig] = failure_id
+                master_id = failure_id
+                is_master = True
+            else:
+                master_id = signature_master_map[sig]
+                is_master = False
+
+            # -------------------------------------------------
+            # system / element
+            # -------------------------------------------------
             if source_type == "new_fmea":
                 system = content.get("system_name")
                 element = content.get("system_element")
@@ -412,8 +431,11 @@ def ingest_fmea_jsonl(
 
             failure_mode = content.get("failure_mode")
             failure_effect = content.get("failure_effect")
+            cause_text = content.get("failure_cause")
 
-            # ---------- severity / rpn ----------
+            # -------------------------------------------------
+            # severity / rpn  (within this grouped sig in THIS file)
+            # -------------------------------------------------
             severity_vals = [
                 parse_number(r.get("RPN", {}).get("severity"))
                 for r in group
@@ -428,104 +450,111 @@ def ingest_fmea_jsonl(
             ]
             rpn = max(rpn_vals) if rpn_vals else None
 
-            # ---------- semantic IDs ----------
+            # -------------------------------------------------
+            # semantic ids
+            # -------------------------------------------------
             mode_id = make_semantic_id("mode", failure_mode) if failure_mode else None
             element_id = make_semantic_id("element", element) if element else None
             effect_id = make_semantic_id("effect", failure_effect) if failure_effect else None
+            cause_id = make_semantic_id("cause", cause_text) if cause_text else None
 
-            if mode_id:
-                collect_semantic(semantic_nodes,
-                                 semantic_id=mode_id,
-                                 field_type="mode",
-                                 text=failure_mode,
-                                 failure_id=failure_id,
-                                 source_type=source_type)
-
-            if element_id:
-                collect_semantic(semantic_nodes,
-                                 semantic_id=element_id,
-                                 field_type="element",
-                                 text=element,
-                                 failure_id=failure_id,
-                                 source_type=source_type)
-
-            if effect_id:
-                collect_semantic(semantic_nodes,
-                                 semantic_id=effect_id,
-                                 field_type="effect",
-                                 text=failure_effect,
-                                 failure_id=failure_id,
-                                 source_type=source_type)
-
-            # ---------- entity ----------
-            cause_text = content.get("failure_cause")
-
-            cause_semantic_id = (
-                make_semantic_id("cause", cause_text)
-                if cause_text else None
-            )
-
-            if cause_semantic_id:
-                collect_semantic(
-                    semantic_nodes,
-                    semantic_id=cause_semantic_id,
-                    field_type="cause",
-                    text=cause_text,
+            # -------------------------------------------------
+            # MASTER BRANCH
+            #   - write entity
+            #   - write sentence
+            #   - collect semantic (so semantic failure_ids won't contain duplicates)
+            # -------------------------------------------------
+            if is_master:
+                # 1) entity
+                failure_entity = FailureEntity(
                     failure_id=failure_id,
-                    source_type=source_type
-                )
+                    file_name=file_name,
+                    same_id=[],
 
+                    mode_id=mode_id,
+                    element_id=element_id,
+                    effect_id=effect_id,
+                    cause_id=cause_id,
 
-            failure_entity = FailureEntity(
-                failure_id=failure_id,
-                mode_id=mode_id,
-                element_id=element_id,
-                effect_id=effect_id,
-                cause_id=cause_semantic_id,
+                    failure_mode_text=failure_mode,
+                    failure_element_text=element,
+                    failure_effect_text=failure_effect,
+                    failure_cause_text=cause_text,
 
-                failure_mode_text=failure_mode,
-                failure_element_text=element,
-                failure_effect_text=failure_effect,
-                failure_cause_text=cause_text,
+                    system=system,
+                    function=function,
+                    process_step=process_step,
+                    discipline=discipline,
 
-                system=system,
-                function=function,
-                process_step=process_step,
-                discipline=discipline,
+                    severity=severity,
+                    rpn=rpn,
 
-                severity=severity,
-                rpn=rpn,
-
-                source_type=source_type,
-                fmea_type=fmea_type,
-                productPnID=file_meta.productPnID,
-                product_domain=file_meta.product_domain,
-                released_year=released_year,
-            )
-            failure_kb.upsert_failure_entity(failure_entity)
-            full_chain_text = _build_full_chain_sentence(
-                element,
-                failure_mode,
-                cause_text,
-                failure_effect,
-            )
-
-            if full_chain_text:
-
-                sentence_id = failure_id
-
-                sentence_obj = Sentence(
-                    failure_id=failure_id,
-                    text=full_chain_text,
                     source_type=source_type,
+                    fmea_type=fmea_type,
+                    productPnID=file_meta.productPnID,
                     product_domain=file_meta.product_domain,
+                    released_year=released_year,
                 )
+                failure_kb.upsert_failure_entity(failure_entity)
 
-                sentence_kb.add_sentence(
-                    sentence_id,
-                    sentence_obj,
-                    overwrite=True
+                # 2) sentence
+                full_chain_text = _build_full_chain_sentence(
+                    element,
+                    failure_mode,
+                    cause_text,
+                    failure_effect,
                 )
+                if full_chain_text:
+                    sentence_obj = Sentence(
+                        failure_id=failure_id,
+                        text=full_chain_text,
+                        source_type=source_type,
+                        product_domain=file_meta.product_domain,
+                    )
+                    sentence_kb.add_sentence(
+                        failure_id,
+                        sentence_obj,
+                        overwrite=True
+                    )
+
+                # 3) semantic (only master)
+                for sid, ftype, text in [
+                    (mode_id, "mode", failure_mode),
+                    (element_id, "element", element),
+                    (effect_id, "effect", failure_effect),
+                    (cause_id, "cause", cause_text),
+                ]:
+                    if sid:
+                        collect_semantic(
+                            semantic_nodes,
+                            semantic_id=sid,
+                            field_type=ftype,
+                            text=text,
+                            failure_id=failure_id,
+                            source_type=source_type
+                        )
+
+            # -------------------------------------------------
+            # DUPLICATE BRANCH
+            #   - do NOT write entity
+            #   - do NOT write sentence
+            #   - do NOT collect semantic
+            #   - only update master.same_id and persist
+            # -------------------------------------------------
+            else:
+                master_entity = failure_kb.entity_store.get(master_id)
+                if master_entity:
+                    same_list = master_entity.get("same_id", [])
+                    if failure_id not in same_list:
+                        same_list.append(failure_id)
+                        master_entity["same_id"] = same_list
+                        failure_kb.entity_store[master_id] = master_entity
+
+                        # persist immediately (important)
+                        failure_kb.entity_store_path.write_text(
+                            json.dumps(failure_kb.entity_store, indent=2, ensure_ascii=False),
+                            encoding="utf-8",
+                        )
 
         # =================================================
         # 4) FLUSH semantic nodes (PER FILE)
@@ -536,7 +565,7 @@ def ingest_fmea_jsonl(
                 field_type=node["field_type"],
                 text=node["text"],
                 failure_ids=node["failure_ids"],
-                source_type = node["source_type"],
+                source_type=node["source_type"],
             )
 
     print(f"[OK] {jsonl_path.name} ingested")
