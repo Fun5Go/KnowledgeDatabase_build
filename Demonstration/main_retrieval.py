@@ -4,7 +4,7 @@ from collections import defaultdict
 from pathlib import Path
 from .retrieval import generate_failure_chains_from_structure, build_ground_truth_input
 
-
+# Vector KB folder
 KB_PATH = Path(
     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb"
 )
@@ -25,5 +25,5 @@ results = generate_failure_chains_from_structure(
         weight_cause = 1.0,
         weight_effect= 1.0,
     )
-structrued_res = build_ground_truth_input(results)
+structrued_res = build_ground_truth_input(results, target_n=20) # To better read
 print(structrued_res)

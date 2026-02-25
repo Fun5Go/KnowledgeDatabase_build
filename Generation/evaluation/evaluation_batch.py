@@ -59,7 +59,7 @@ def load_gt(gt_path: Path, target_element: str) -> List[Dict]:
     return gt_list
 
 
-def load_predictions(pred_path: Path) -> List[Dict]:
+def load_predictions(pred_path: Path, target_element: str) -> List[Dict]:
     with open(pred_path, "r", encoding="utf-8") as f:
         pred_raw = json.load(f)
 
@@ -67,7 +67,7 @@ def load_predictions(pred_path: Path) -> List[Dict]:
 
     pred_filtered = [
         p for p in pred_list
-        if normalize_text(p.get("failure_element")) == normalize_text(TARGET_ELEMENT)
+        if normalize_text(p.get("failure_element")) == normalize_text(target_element)
     ]
 
     return pred_filtered
@@ -365,10 +365,10 @@ if __name__ == "__main__":
     )
 
     PRED_FOLDER = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG_FILL\motor_control"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG\25_2_powertrain"
     )
 
-    gt_list = load_gt(GT_JSON, target_element=TARGET_ELEMENT_1)
+    gt_list = load_gt(GT_JSON, target_element=TARGET_ELEMENT_2)
 
     all_results = []
 
@@ -376,7 +376,7 @@ if __name__ == "__main__":
 
     for pred_file in sorted(PRED_FOLDER.glob("*.json")):
 
-        pred_list = load_predictions(pred_file)
+        pred_list = load_predictions(pred_file, target_element=TARGET_ELEMENT_2)
         result = evaluate_strict(pred_list, gt_list.copy())
 
         result["file"] = pred_file.name

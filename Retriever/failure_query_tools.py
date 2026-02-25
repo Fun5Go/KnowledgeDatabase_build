@@ -513,7 +513,7 @@ if  __name__ == "__main__":
     KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
-    query_text = "motor too hot"
+    query_text = "motor overheat"
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,

@@ -220,10 +220,10 @@ if __name__ == "__main__":
 #     for r in results:
 #         print(r)
     results = bm25_retriever.query_single_field(
-    query_text="Motor too hot",
+    query_text="Motor overheat",
     field="mode",
     top_k=10
 )
 
-for r in results:
-    print(r)
+    for r in results:
+        print(r)

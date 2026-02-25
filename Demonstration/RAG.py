@@ -253,7 +253,7 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
 
     print(f"\n Failure candidates saved to: {output_path}")
 
-@traceable(name="RAG")
+@traceable(name="RAG_demonstration")
 def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  
                  require_cause: bool = False,weight_element: float = 0.3, target_n: int =30,
                  min_similarity: float=0.55,require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
@@ -261,45 +261,58 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
 
 
     # structure_input = build_structure_analysis_input(structure_input)
-    structure_input_json = json.dumps(structure_input, ensure_ascii=False,indent=2)
+    structure_input_json = json.dumps(structure_input, ensure_ascii=False,indent=2) # Build json SA input
 
     if RAG:
-        similar_failure = generate_failure_chains_from_structure(
-        persist_dir=KB_PATH,
-        structure_input=structure_input,
-        top_k_per_field=top_k_per_field,
-        top_n=top_n,
-        min_similarity=min_similarity,
-        require_cause = require_cause,
-        require_cause_plus = require_cause_plus,
-        weight_element=weight_element,
-        replace=False
-    )
         if not FILL:
-            failure_example = build_ground_truth_input(similar_failure,target_n=target_n, strict_unique=True)
+            similar_failure = generate_failure_chains_from_structure(
+                persist_dir=KB_PATH,
+                structure_input=structure_input,
+                top_k_per_field=top_k_per_field,
+                top_n=top_n,
+                min_similarity=min_similarity,
+                require_cause=require_cause,
+                require_cause_plus=require_cause_plus,
+                weight_element=weight_element,
+                replace=False
+            )
+
+            failure_example = build_ground_truth_input(
+                similar_failure,
+                target_n=target_n,
+                strict_unique=True
+            )
+
             failure_candidates = failure_inference_generation_RAG.invoke({
                 "data": {
-                    "structure_analysis": structure_input_json, # Sentences with annotations
-                    "gt_example": failure_example, # Similar FMEA cases in text format
+                    "structure_analysis": structure_input_json,
+                    "gt_example": failure_example,
                 }
             })
             OUTPUT_PATH = Path(
             r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json")
+
         else:
             semi_candidates = generate_failure_chains_from_structure(
                 persist_dir=KB_PATH,
                 structure_input=structure_input,
                 top_k_per_field=top_k_per_field,
                 top_n=top_n,
-                require_cause = require_cause,
                 min_similarity=min_similarity,
-                require_cause_plus = require_cause_plus,
-                replace = True,
+                require_cause=require_cause,
+                require_cause_plus=require_cause_plus,
+                replace=True,
             )
-            semi_candidates =  build_fill_entity(semi_candidates,target_n=target_n,strict_unique=True)
+
+            semi_candidates = build_fill_entity(
+                semi_candidates,
+                target_n=target_n,
+                strict_unique=True
+            )
+
             failure_candidates = failure_inference_generation_RAG_FILL.invoke({
                 "data": {
-                    "structure_analysis": structure_input_json, # Sentences with annotations
+                    "structure_analysis": structure_input_json,
                     "fill_failure": semi_candidates
                 }
             })

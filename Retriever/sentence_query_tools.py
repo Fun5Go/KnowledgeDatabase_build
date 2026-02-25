@@ -522,11 +522,11 @@ def cross_encoder_rerank(query_text: str, hits: List[Dict], top_k: int = 20):
 if __name__ == "__main__":
 
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\sentence_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_MOTORCONTROL\sentence_kb"
     )
 
-    query_sentence = "Incorrect torque applied due to Motor can not provide enough torque"
-    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20,)
+    query_sentence = "Soft start too long"
+    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20,source_section=["D2","D3","D4"])
     def structured_print(results):
         ids = results["ids"][0]
         documents = results["documents"][0]

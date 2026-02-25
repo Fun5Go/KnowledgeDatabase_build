@@ -347,96 +347,110 @@ if __name__ == "__main__":
     # 1) KB Path
     # -----------------------------------------------------
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_MOTORCONTROL\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb"
     )
 
     # -----------------------------------------------------
     # 2) Structure Input
     # -----------------------------------------------------
-    structure_input = {
-            "product_domain": "motor_drives",
-            "nodes": [
-                {
-                    "element_id": "E1",
-                    "failure_element": "Motor control",
-                    "modes": [
-                        "Component break-down",
-                        "Unbalanced motor currents",
-                        "Incorrect interpretation zero-crossing",
-                        "Soft start too long",
-                        "No detection",
-                        "Welded relay",
-                        "Relay cannot close",
-                        "False turn-on / turn-off"
-                    ],
-                    "causes": [
-                        "Cooling insufficient",
-                        "Compressor vibrations",
-                        "(Starting) Motor current too high for chosen components",
-                        "Overvoltage due to motor disconnect",
-                        "Under Voltage due to incorrect triggering",
-                        "Live switching of relays",
-                        "Priority zero-crossing interrupt too low",
-                        "Open loop control",
-                        "No (correctly designed) snubber design",
-                        "Too high dT junction as a result of power cycling of component"
-                    ],
-                    "effects": [
-                        "Motor cannot start",
-                        "Overcurrent towards motor",
-                        "Motor starts without soft start",
-                    ]
-                }
-            ]
-        }
-    # result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
-    #                                    weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = True)
-    # print("\n================ FAILURE CANDIDATES ================\n")
-    # # print(json.dumps(result, indent=4))
-    # save_failure_candidates_to_json(result, OUTPUT_PATH)
+    structure_input_powertrain = {
+        "product_domain": "motor_drives",
+        "nodes": [
+            {
+                "element_id": "E1",
+                "failure_element": "Power train",
+                "modes": [
+                    "Incorrect",
+                    "No pulses seen",
+                    "No voltage applied",
+                    "Incorrect torque applied",
+                    "Not enough torque",
+                    "Motor breaks/overheats (e.g. resulting in demagnetisation)",
+                    "Unstable regulation",
+                    "High loss in torque transfer",
+                    "Gear train breaks/wears out",
+                    "Transmission ratio drifts",
+                    "creates too much noise"
+                ],
+                "causes": [
+                    "Gears loose on motor shaft (slips)",
+                    "External force on spline",
+                    "Motor can not provide enough torque",
+                    "Too much friction in gear train",
+                    "Gears material/design choice",
+                    "Manufacturing tolerances of gears",
+                    "Lubrication choice (e.g. degradation)",
+                    "Motor design (temperature spec, actuation length/duty cycle)",
+                    "Encoder circuit crosstalk",
+                    "HW cannot supply enough power",
+                    "ADC measurements incorrect (incl. bandwidth)",
+                    "Wrong motor driver dimension (current rating etc.)",
+                    "Overcurrent detection incorrect (threshold etc.)",
+                    "Incorrect control loop (bandwidth)",
+                    "Motor not shorted while device is not powered",
+                    "Control parameters incorrect",
+                    "Thermal protection fails (e.g. I2T)"
+                ],
+                "effects": [
+                    "Does not shift gear",
+                    "Incorrect gear shift",
+                    "Incorrect cadence (offset)",
+                    "Unstable cadence setting",
+                    "Unstable ratio setting",
+                    "Sets wrong gear ratio",
+                    "Too much noise",
+                ]
+            }
+        ]
+    }
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
+                                       weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = True)
+    print("\n================ FAILURE CANDIDATES ================\n")
+    # print(json.dumps(result, indent=4))
+    save_failure_candidates_to_json(result, OUTPUT_PATH)
 
     # -----------------------------------------------------
     # 3) Batch Settings
     # -----------------------------------------------------
-    NUM_RUNS = 10  
+    # NUM_RUNS = 15  
 
-    BASE_SAVE_DIR = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
-    )
+    # BASE_SAVE_DIR = Path(
+    #     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs"
+    # )
 
-    MODES = [
-        {"name": "PURE", "RAG": False, "FILL": False},
-        {"name": "RAG", "RAG": True, "FILL": False},
-        {"name": "RAG_FILL", "RAG": True, "FILL": True},
-    ]
+    # MODES = [
+    #     {"name": "PURE", "RAG": False, "FILL": False},
+    #     {"name": "RAG", "RAG": True, "FILL": False},
+    #     {"name": "RAG_FILL", "RAG": True, "FILL": True},
+    # ]
 
-    # -----------------------------------------------------
-    # 4) Run Loop
-    # -----------------------------------------------------
-    for mode in MODES:
+    # # -----------------------------------------------------
+    # # 4) Run Loop
+    # # -----------------------------------------------------
+    # for mode in MODES:
 
-        mode_name = mode["name"]
-        save_folder = BASE_SAVE_DIR / mode_name / "motor_control"
-        save_folder.mkdir(parents=True, exist_ok=True)
+    #     mode_name = mode["name"]
+    #     save_folder = BASE_SAVE_DIR / mode_name / "25_2_powertrain"
+    #     save_folder.mkdir(parents=True, exist_ok=True)
 
-        print(f"\n================ RUNNING MODE: {mode_name} =================\n")
+    #     print(f"\n================ RUNNING MODE: {mode_name} =================\n")
 
-        for i in range(1, NUM_RUNS+1):
+    #     for i in range(1, NUM_RUNS+1):
 
-            print(f"\n--- Run {i} ---\n")
+    #         print(f"\n--- Run {i} ---\n")
 
-            result, _ = RAG_pipeline(
-                structure_input=structure_input,
-                KB_PATH=KB_PATH,
-                top_k_per_field=30,
-                top_n=50,
-                min_similarity=0.55,
-                RAG=mode["RAG"],
-                FILL=mode["FILL"],
-            )
+    #         result, _ = RAG_pipeline(
+    #             structure_input=structure_input_powertrain,
+    #             KB_PATH=KB_PATH,
+    #             top_k_per_field=30,
+    #             top_n=50,
+    #             min_similarity=0.45,
+    #             RAG=mode["RAG"],
+    #             FILL=mode["FILL"],
+    #         )
 
-            output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
+    #         output_path = save_folder / f"failure_candidates_{mode_name.lower()}_{i}.json"
 
-            save_failure_candidates_to_json(result, output_path)
+    #         save_failure_candidates_to_json(result, output_path)
 
 
