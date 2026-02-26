@@ -193,8 +193,8 @@ if __name__ == "__main__":
         "cause",
         "effect"
     ]
-    for field in field_list:
-        result = compute_full_pairwise_similarity(persist_dir=KB_PATH,field_type=field)
-        print(f"Field: {field}|{result}")
+    # for field in field_list:
+    #     result = compute_full_pairwise_similarity(persist_dir=KB_PATH,field_type=field)
+    #     print(f"Field: {field}|{result}")
 
-    # print_high_similarity_pairs(persist_dir=KB_PATH, field_type = "cause", similarity_threshold=0.9,max_print=70)
+    print_high_similarity_pairs(persist_dir=KB_PATH, field_type = "cause", similarity_threshold=0.9,max_print=70)

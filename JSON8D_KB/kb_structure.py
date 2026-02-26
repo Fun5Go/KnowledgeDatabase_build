@@ -215,10 +215,9 @@ class SentenceKB:
 
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
 
-        # self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-        #     model_name="all-MiniLM-L6-v2"
-        # )
-        self.embedder = BGEEmbeddingFunction("BAAI/bge-base-en-v1.5", normalize=True)
+        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="BAAI/bge-base-en-v1.5"
+        )
         self.collection = self.client.get_or_create_collection(
             name="sentences",
             embedding_function=self.embedder,
@@ -451,10 +450,9 @@ class EightDFailureKB:
         # =========================================================
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
 
-        # self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-        #     model_name="all-MiniLM-L6-v2"
-        # )
-        self.embedder = BGEEmbeddingFunction("BAAI/bge-base-en-v1.5", normalize=True)
+        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name="BAAI/bge-base-en-v1.5"
+        )
         self.collection = self.client.get_or_create_collection(
             name="failure_semantic_kb",  # same as FMEA
             embedding_function=self.embedder,

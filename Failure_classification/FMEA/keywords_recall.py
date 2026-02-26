@@ -177,6 +177,6 @@ if __name__ == "__main__":
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_JSON_ALL"
     )
     OUTPUT_JSONL = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_motor_drive_recall.jsonl"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_motor_drive_recall_notcomplete.jsonl"
     )
     batch_process(INPUT_JSON_DIR,OUTPUT_JSONL)

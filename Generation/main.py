@@ -347,7 +347,7 @@ if __name__ == "__main__":
     # 1) KB Path
     # -----------------------------------------------------
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_bge\failure_kb"
     )
 
     # -----------------------------------------------------
@@ -392,19 +392,26 @@ if __name__ == "__main__":
                     "Thermal protection fails (e.g. I2T)"
                 ],
                 "effects": [
-                    "Does not shift gear",
+                   "Does not shift gear",
                     "Incorrect gear shift",
                     "Incorrect cadence (offset)",
                     "Unstable cadence setting",
+                    "Incorrect cadence (fixed gear ratio)",
+                    "Incorrect ratio (offset)",
                     "Unstable ratio setting",
+                    "Does not enter limp home mode",
                     "Sets wrong gear ratio",
+                    "Gear ratio drifts when battery is empty",
+                    "Firmware update not possible/fails",
+                    "Device bricked",
+                    "Update takes too much time (>5 minutes)",
                     "Too much noise",
                 ]
             }
         ]
     }
-    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
-                                       weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = True)
+    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=5, top_n=50,
+                                       weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
     print("\n================ FAILURE CANDIDATES ================\n")
     # print(json.dumps(result, indent=4))
     save_failure_candidates_to_json(result, OUTPUT_PATH)
