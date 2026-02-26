@@ -5,6 +5,7 @@ from Retriever.failure_query_tools import _load_kb,query_semantic_kb
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 import math
 from .PPL_score import ChainPPLEvaluator
+import random
 
 
 # =========================================================
@@ -584,7 +585,6 @@ def attach_ppl_scores(results: List[Dict]) -> List[Dict]:
 
     return results
 
-
 def generate_graph_inferred_chains_from_structure(
     persist_dir: Union[str, Path],
     structure_input: Dict[str, Any],
@@ -593,30 +593,12 @@ def generate_graph_inferred_chains_from_structure(
     min_similarity: float = 0.0,
     source_type: Optional[str] = None,
     top_n: int = 50,
+    # -------- new knobs --------
+    top_k_graph_expand: int = 15,     # 每个 mode 从图里扩展多少 cause/effect
+    enable_graph_expand: bool = True,
+    alpha_graph: float = 0.6,         # graph-only 候选相似度衰减
+    graph_base_sim: float = 0.35,     # graph-only 候选的“默认相似度”
 ) -> List[Dict[str, Any]]:
-    """
-    Infer (mode -> cause -> effect) chains from a structured input node list.
-
-    Assumptions based on your KB structure:
-      - kb.edge_store["mode_to_cause"][mode_id] = {cause_id: count, ...}
-      - kb.edge_store["mode_to_effect"][mode_id] = {effect_id: count, ...}
-      - kb.field_store[semantic_id] = {"text": "...", "field_type": "...", "count": int, ...}
-      - query_semantic_kb(...) returns:
-            {
-              "documents": [[...]],
-              "metadatas": [[...]],
-              "distances": [[...]],
-              "ids": [[...]]   # IMPORTANT: ids are semantic_id
-            }
-
-    structure_input example:
-      {
-        "nodes": [
-          {"element_id": "...", "modes": [...], "causes": [...], "effects": [...]},
-          ...
-        ]
-      }
-    """
 
     persist_dir = Path(persist_dir)
     kb = _load_kb(persist_dir)
@@ -626,72 +608,53 @@ def generate_graph_inferred_chains_from_structure(
 
     mode_to_cause: Dict[str, Dict[str, int]] = edge_store.get("mode_to_cause", {}) or {}
     mode_to_effect: Dict[str, Dict[str, int]] = edge_store.get("mode_to_effect", {}) or {}
+    element_to_mode: Dict[str, Dict[str, int]] = edge_store.get("element_to_mode", {}) or {}
 
-    all_results: List[Dict[str, Any]] = []
-    nodes = structure_input.get("nodes", []) or []
-
-    # ----------------------------
-    # Helpers
-    # ----------------------------
     def _safe_text(x: Any) -> str:
-        s = "" if x is None else str(x)
-        return s.strip()
+        return ("" if x is None else str(x)).strip()
 
     def _id_to_text(semantic_id: Optional[str]) -> str:
         if not semantic_id:
             return ""
         rec = field_store.get(semantic_id) or {}
-        return (rec.get("text") or "").strip()
+        return _safe_text(rec.get("text"))
 
     def semantic_nodes(text: str, field: str) -> List[Dict[str, Any]]:
-        """
-        Returns: [{"semantic_id": ..., "text": ..., "similarity": float}, ...]
-        """
         text = _safe_text(text)
         if not text:
             return []
-
         res = query_semantic_kb(
             persist_dir,
             text,
-            field_type=field,               # "mode" | "cause" | "effect"
+            field_type=field,
             n_results=top_k_per_field,
             min_count=min_count,
             source_type=source_type,
         ) or {}
 
-        documents = (res.get("documents") or [[]])[0] or []
-        metadatas = (res.get("metadatas") or [[]])[0] or []
-        distances = (res.get("distances") or [[]])[0] or []
-        ids = (res.get("ids") or [[]])[0] or []  # semantic_id lives here (collection ids)
+        docs = (res.get("documents") or [[]])[0] or []
+        metas = (res.get("metadatas") or [[]])[0] or []
+        dists = (res.get("distances") or [[]])[0] or []
+        ids = (res.get("ids") or [[]])[0] or []
 
-        out: List[Dict[str, Any]] = []
-        for doc, meta, dist, sid in zip(documents, metadatas, distances, ids):
+        out = []
+        for doc, meta, dist, sid in zip(docs, metas, dists, ids):
             try:
-                similarity = 1.0 - float(dist)
+                sim = 1.0 - float(dist)
             except Exception:
                 continue
-
-            if similarity < min_similarity:
+            if sim < min_similarity:
                 continue
-
             semantic_id = _safe_text(sid) or _safe_text((meta or {}).get("semantic_id"))
-            # Prefer canonical text from structured store if available
-            canonical_text = _id_to_text(semantic_id)
-            out.append(
-                {
-                    "semantic_id": semantic_id,
-                    "text": canonical_text if canonical_text else _safe_text(doc),
-                    "similarity": similarity,
-                }
-            )
+            out.append({
+                "semantic_id": semantic_id,
+                "text": _id_to_text(semantic_id) or _safe_text(doc),
+                "similarity": float(sim),
+                "source": "vector",
+            })
         return out
 
     def dedup_keep_best(nodes_: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Dedup by semantic_id (preferred). If semantic_id missing, fallback to text.
-        Keep the best (max similarity).
-        """
         best: Dict[str, Dict[str, Any]] = {}
         for n in nodes_:
             sid = _safe_text(n.get("semantic_id"))
@@ -703,45 +666,68 @@ def generate_graph_inferred_chains_from_structure(
                 best[key] = n
         return list(best.values())
 
-    # ----------------------------
-    # Main loop
-    # ----------------------------
+    def expand_neighbors(edge_map: Dict[str, Dict[str, int]], src_id: str, top_k: int) -> List[Dict[str, Any]]:
+        """
+        从 edge_store 扩展邻居：返回 graph-only candidates
+        """
+        nbrs = edge_map.get(src_id) or {}
+        if not nbrs:
+            return []
+        # 按 count 降序取 top_k
+        items = sorted(nbrs.items(), key=lambda kv: kv[1], reverse=True)[:top_k]
+        out = []
+        for tgt_id, cnt in items:
+            out.append({
+                "semantic_id": tgt_id,
+                "text": _id_to_text(tgt_id),
+                "similarity": graph_base_sim,   # graph-only 默认相似度
+                "source": "graph_expand",
+                "edge_count": int(cnt),
+            })
+        return out
+
+    all_results: List[Dict[str, Any]] = []
+    nodes = structure_input.get("nodes", []) or []
+
     for node in nodes:
         node_id = _safe_text(node.get("element_id"))
+        failure_element_text = _safe_text(node.get("failure_element"))
 
-        modes = [_safe_text(x) for x in (node.get("modes") or []) if _safe_text(x)]
-        causes = [_safe_text(x) for x in (node.get("causes") or []) if _safe_text(x)]
-        effects = [_safe_text(x) for x in (node.get("effects") or []) if _safe_text(x)]
+        # query texts
+        modes_txt = [_safe_text(x) for x in (node.get("modes") or []) if _safe_text(x)]
+        causes_txt = [_safe_text(x) for x in (node.get("causes") or []) if _safe_text(x)]
+        effects_txt = [_safe_text(x) for x in (node.get("effects") or []) if _safe_text(x)]
 
-        candidate_modes: List[Dict[str, Any]] = []
-        candidate_causes: List[Dict[str, Any]] = []
-        candidate_effects: List[Dict[str, Any]] = []
+        # 1) Vector retrieval candidates
+        candidate_modes = []
+        candidate_causes = []
+        candidate_effects = []
 
-        for m in modes:
+        for m in modes_txt:
             candidate_modes.extend(semantic_nodes(m, "mode"))
-        for c in causes:
+        for c in causes_txt:
             candidate_causes.extend(semantic_nodes(c, "cause"))
-        for e in effects:
+        for e in effects_txt:
             candidate_effects.extend(semantic_nodes(e, "effect"))
 
         candidate_modes = dedup_keep_best(candidate_modes)
         candidate_causes = dedup_keep_best(candidate_causes)
         candidate_effects = dedup_keep_best(candidate_effects)
 
+        # 1.5) (optional) element -> mode expansion (如果你希望 element 也能驱动推理)
+        # 如果 node_id 是 element_id（语义id），可以直接用 element_to_mode；如果不是，需你先把 element text 向量召回到 element_id
+        # 这里不强行加，避免你当前 node_id=E1 这种不是 semantic_id 的情况出错。
+
         inferred_chains: List[Dict[str, Any]] = []
 
-        # If user gave no causes/effects, we can’t form chains reliably without expanding.
-        # (You can extend here to auto-expand from graph neighbors if you want.)
-        if not candidate_modes or not candidate_causes or not candidate_effects:
-            continue
-
+        # 2) For each mode, do graph expansion and infer chains
         for mode_node in candidate_modes:
             mode_id = _safe_text(mode_node.get("semantic_id"))
             if not mode_id:
                 continue
 
-            connected_causes = mode_to_cause.get(mode_id)
-            connected_effects = mode_to_effect.get(mode_id)
+            connected_causes = mode_to_cause.get(mode_id) or {}
+            connected_effects = mode_to_effect.get(mode_id) or {}
             if not connected_causes or not connected_effects:
                 continue
 
@@ -750,57 +736,78 @@ def generate_graph_inferred_chains_from_structure(
             if total_cause <= 0 or total_effect <= 0:
                 continue
 
-            sim_mode = float(mode_node.get("similarity", 0.0))
+            # --- graph expand causes/effects ---
+            expanded_causes = []
+            expanded_effects = []
+            if enable_graph_expand:
+                expanded_causes = expand_neighbors(mode_to_cause, mode_id, top_k_graph_expand)
+                expanded_effects = expand_neighbors(mode_to_effect, mode_id, top_k_graph_expand)
+
+                # 合并（vector + graph），并去重保留更高 similarity（vector 通常更高）
+                candidate_causes_merged = dedup_keep_best(candidate_causes + expanded_causes)
+                candidate_effects_merged = dedup_keep_best(candidate_effects + expanded_effects)
+            else:
+                candidate_causes_merged = candidate_causes
+                candidate_effects_merged = candidate_effects
+
+            sim_mode_raw = float(mode_node.get("similarity", 0.0))
+            sim_mode = sim_mode_raw if mode_node.get("source") == "vector" else sim_mode_raw * alpha_graph
             mode_text = _id_to_text(mode_id) or _safe_text(mode_node.get("text"))
 
-            for cause_node in candidate_causes:
+            for cause_node in candidate_causes_merged:
                 cause_id = _safe_text(cause_node.get("semantic_id"))
                 if not cause_id:
                     continue
                 if cause_id not in connected_causes:
                     continue
 
-                sim_cause = float(cause_node.get("similarity", 0.0))
+                sim_cause_raw = float(cause_node.get("similarity", 0.0))
+                sim_cause = sim_cause_raw if cause_node.get("source") == "vector" else sim_cause_raw * alpha_graph
                 p_c_given_m = connected_causes[cause_id] / total_cause
                 cause_text = _id_to_text(cause_id) or _safe_text(cause_node.get("text"))
 
-                for effect_node in candidate_effects:
+                for effect_node in candidate_effects_merged:
                     effect_id = _safe_text(effect_node.get("semantic_id"))
                     if not effect_id:
                         continue
                     if effect_id not in connected_effects:
                         continue
 
-                    sim_effect = float(effect_node.get("similarity", 0.0))
+                    sim_effect_raw = float(effect_node.get("similarity", 0.0))
+                    sim_effect = sim_effect_raw if effect_node.get("source") == "vector" else sim_effect_raw * alpha_graph
                     p_e_given_m = connected_effects[effect_id] / total_effect
                     effect_text = _id_to_text(effect_id) or _safe_text(effect_node.get("text"))
 
                     score = sim_mode * sim_cause * sim_effect * p_c_given_m * p_e_given_m
 
-                    inferred_chains.append(
-                        {
-                            "node_id": node_id,
-                            "chain_type": "INFERRED",
-                            "mode_id": mode_id,
-                            "cause_id": cause_id,
-                            "effect_id": effect_id,
-                            "mode": mode_text,
-                            "cause": cause_text,
-                            "effect": effect_text,
-                            "score": round(float(score), 6),
-                            "debug": {
-                                "sim_mode": sim_mode,
-                                "sim_cause": sim_cause,
-                                "sim_effect": sim_effect,
-                                "P(cause|mode)": p_c_given_m,
-                                "P(effect|mode)": p_e_given_m,
-                                "cause_edge_count": int(connected_causes[cause_id]),
-                                "effect_edge_count": int(connected_effects[effect_id]),
-                                "total_cause_edges_for_mode": int(total_cause),
-                                "total_effect_edges_for_mode": int(total_effect),
-                            },
+                    inferred_chains.append({
+                        "node_id": node_id,
+                        "failure_element": failure_element_text,
+                        "chain_type": "INFERRED",
+                        "mode_id": mode_id,
+                        "cause_id": cause_id,
+                        "effect_id": effect_id,
+                        "mode": mode_text,
+                        "cause": cause_text,
+                        "effect": effect_text,
+                        "score": round(float(score), 6),
+                        "sources": {
+                            "mode": mode_node.get("source"),
+                            "cause": cause_node.get("source"),
+                            "effect": effect_node.get("source"),
+                        },
+                        "debug": {
+                            "sim_mode": sim_mode,
+                            "sim_cause": sim_cause,
+                            "sim_effect": sim_effect,
+                            "P(cause|mode)": p_c_given_m,
+                            "P(effect|mode)": p_e_given_m,
+                            "cause_edge_count": int(connected_causes[cause_id]),
+                            "effect_edge_count": int(connected_effects[effect_id]),
+                            "total_cause_edges_for_mode": int(total_cause),
+                            "total_effect_edges_for_mode": int(total_effect),
                         }
-                    )
+                    })
 
         inferred_chains.sort(key=lambda x: x["score"], reverse=True)
         all_results.extend(inferred_chains[:top_n])
@@ -809,20 +816,18 @@ def generate_graph_inferred_chains_from_structure(
 def print_inferred_structure(results, top_n=None):
     """
     Pretty print inferred graph chains.
-
-    results: List[Dict]
-    top_n:   Optional[int]  -> 每个 node 只打印前 N 条
+    Now also prints source (vector / graph_expand)
     """
 
     if not results:
         print("No inferred chains.")
         return
 
+    from collections import defaultdict
+
     # --------------------------------------------------
     # 1️⃣ group by node_id
     # --------------------------------------------------
-    from collections import defaultdict
-
     grouped = defaultdict(list)
     for r in results:
         grouped[r.get("node_id", "UNKNOWN")].append(r)
@@ -837,23 +842,33 @@ def print_inferred_structure(results, top_n=None):
         if top_n:
             chains = chains[:top_n]
 
-        print("=" * 80)
+        print("=" * 90)
         print(f"NODE: {node_id}")
         print(f"Total Chains: {len(chains)}")
-        print("=" * 80)
+        print("=" * 90)
 
         for idx, c in enumerate(chains, 1):
 
             print(f"\n[{idx}] Score: {c['score']:.6f}")
-            print(f"  Mode   : {c['mode']}")
-            print(f"  Cause  : {c['cause']}")
-            print(f"  Effect : {c['effect']}")
+
+            sources = c.get("sources", {})
+
+            mode_src = sources.get("mode", "unknown")
+            cause_src = sources.get("cause", "unknown")
+            effect_src = sources.get("effect", "unknown")
+
+            print(f"  Mode   : {c['mode']}      (source: {mode_src})")
+            print(f"  Cause  : {c['cause']}     (source: {cause_src})")
+            print(f"  Effect : {c['effect']}    (source: {effect_src})")
+
+            # Optional: print IDs
+            print(f"  IDs    : {c.get('mode_id')} | {c.get('cause_id')} | {c.get('effect_id')}")
 
             debug = c.get("debug", {})
             if debug:
                 print("  ---- Debug ----")
                 for k, v in debug.items():
-                    print(f"    {k:<30} {v}")
+                    print(f"    {k:<35} {v}")
 
         print("\n")
 
@@ -915,15 +930,15 @@ if  __name__ == "__main__":
                     "Incorrect gear shift",
                     "Incorrect cadence (offset)",
                     "Unstable cadence setting",
-                    # "Incorrect cadence (fixed gear ratio)",
-                    # "Incorrect ratio (offset)",
-                    # "Unstable ratio setting",
-                    # "Does not enter limp home mode",
-                    # "Sets wrong gear ratio",
-                    # "Gear ratio drifts when battery is empty",
-                    # "Firmware update not possible/fails",
-                    # "Device bricked",
-                    # "Update takes too much time (>5 minutes)",
+                    "Incorrect cadence (fixed gear ratio)",
+                    "Incorrect ratio (offset)",
+                    "Unstable ratio setting",
+                    "Does not enter limp home mode",
+                    "Sets wrong gear ratio",
+                    "Gear ratio drifts when battery is empty",
+                    "Firmware update not possible/fails",
+                    "Device bricked",
+                    "Update takes too much time (>5 minutes)",
                     "Too much noise",
                 ]
             }
@@ -1107,5 +1122,6 @@ if  __name__ == "__main__":
     # results = build_ground_truth_input(results,target_n=20,strict_unique=True)
     # print(results)
 
-    results_graph = generate_graph_inferred_chains_from_structure(persist_dir=KB_PATH,structure_input=structure_input,min_similarity=0.3)
-    print_inferred_structure(results_graph)
+    # results_graph = generate_graph_inferred_chains_from_structure(persist_dir=KB_PATH,structure_input=structure_input,min_similarity=0.3)
+    # print_inferred_structure(results_graph,top_n=25)
+

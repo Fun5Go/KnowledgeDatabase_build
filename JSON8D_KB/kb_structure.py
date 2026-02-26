@@ -3,12 +3,30 @@ from typing import List, Dict, Any
 
 import chromadb
 from chromadb.utils import embedding_functions
+from sentence_transformers import SentenceTransformer
 from pathlib import Path
 import json
 from typing import Optional
 from dataclasses import asdict,field
 from collections import defaultdict
 
+class BGEEmbeddingFunction:
+    def __init__(self, model_name="BAAI/bge-base-en-v1.5", normalize=True):
+        self.model_name = model_name
+        self.normalize = normalize
+        self.model = SentenceTransformer(model_name)
+
+    # 
+    def __call__(self, input):
+        # input: List[str]
+        return self.model.encode(
+            input,
+            normalize_embeddings=self.normalize,
+            show_progress_bar=False,
+        ).tolist()
+
+    def name(self) -> str:
+        return f"st::{self.model_name}::norm={self.normalize}"
 
 #======= Helper =========
 def is_valid_embed_text(text: Optional[str]) -> bool:
@@ -59,12 +77,14 @@ class Sentence:
     annotations: Dict[str, Any]
 
     failure_id: str = ""
+    source_type: str = "8D"
     cause_id: Optional[str] = None
     sentence_role: str = ""
     #is_activate: bool = True # Keep the invalid sentences
     productPnID: Optional[int] = None
     product_domain: Optional[str] = None
     released_year: Optional[int] = None
+ 
 
 
 @dataclass
@@ -195,10 +215,10 @@ class SentenceKB:
 
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
 
-        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
-
+        # self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+        #     model_name="all-MiniLM-L6-v2"
+        # )
+        self.embedder = BGEEmbeddingFunction("BAAI/bge-base-en-v1.5", normalize=True)
         self.collection = self.client.get_or_create_collection(
             name="sentences",
             embedding_function=self.embedder,
@@ -431,10 +451,10 @@ class EightDFailureKB:
         # =========================================================
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
 
-        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
-
+        # self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+        #     model_name="all-MiniLM-L6-v2"
+        # )
+        self.embedder = BGEEmbeddingFunction("BAAI/bge-base-en-v1.5", normalize=True)
         self.collection = self.client.get_or_create_collection(
             name="failure_semantic_kb",  # same as FMEA
             embedding_function=self.embedder,

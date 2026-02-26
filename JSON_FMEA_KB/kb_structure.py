@@ -3,7 +3,7 @@ from typing import Dict, Any, List, Optional, Union, Literal,Iterable
 
 from pathlib import Path
 import json
-
+from sentence_transformers import SentenceTransformer
 import chromadb
 from chromadb.utils import embedding_functions
 
@@ -14,6 +14,25 @@ from dataclasses import asdict, is_dataclass, field
 FilterValue = Union[str, List[str]]
 DStage = Literal["D2", "D4"]
 FailureFieldType = Literal["element", "mode", "effect", "cause"]
+
+
+class BGEEmbeddingFunction:
+    def __init__(self, model_name="BAAI/bge-base-en-v1.5", normalize=True):
+        self.model_name = model_name
+        self.normalize = normalize
+        self.model = SentenceTransformer(model_name)
+
+    # 
+    def __call__(self, input):
+        # input: List[str]
+        return self.model.encode(
+            input,
+            normalize_embeddings=self.normalize,
+            show_progress_bar=False,
+        ).tolist()
+
+    def name(self) -> str:
+        return f"st::{self.model_name}::norm={self.normalize}"
 
 #======= Helper =========
 def is_valid_embed_text(text: Optional[str]) -> bool:
@@ -167,9 +186,7 @@ class SentenceKB:
 
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
 
-        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
+        self.embedder = BGEEmbeddingFunction("BAAI/bge-base-en-v1.5", normalize=True)
 
         self.collection = self.client.get_or_create_collection(
             name="sentences",
@@ -250,9 +267,10 @@ class FMEAFailureKB:
 
         # ---------- vector store ----------
         self.client = chromadb.PersistentClient(path=str(self.persist_dir))
-        self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name="all-MiniLM-L6-v2"
-        )
+        # self.embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+        #     # model_name="all-MiniLM-L6-v2"
+        # )
+        self.embedder = BGEEmbeddingFunction("BAAI/bge-base-en-v1.5", normalize=True)
         self.collection = self.client.get_or_create_collection(
             name="failure_semantic_kb",
             embedding_function=self.embedder,
@@ -286,7 +304,7 @@ class FMEAFailureKB:
             merged_ids.update(failure_ids)
             failure_ids_unique = sorted(merged_ids)
 
-            # merge source_type（可选增强）
+            # merge source_type
             if existing.get("source_type") != source_type:
                 existing_source = existing.get("source_type")
                 if isinstance(existing_source, list):

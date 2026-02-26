@@ -510,16 +510,16 @@ def retrieve_similar_failures_from_entity(
     return results[: int(top_n)]
 
 if  __name__ == "__main__":
-    KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
+    KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_bge\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
-    query_text = "motor overheat"
+    query_text = "Transmission ratio drifts"
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
         field_type=["mode"],
-        n_results=10,
+        n_results=100,
         min_count=1,
     )
 
@@ -529,7 +529,7 @@ if  __name__ == "__main__":
     #     field_type="mode",
     #     linked_fields=["element","effect","cause"]
     # )
-    print_semantic_results(res,kb,max_failure_ids=10)
+    print_semantic_results(res,kb,max_failure_ids=50)
 
     # reranked = rerank_semantic_results(query_text, res, top_k=20)
 
