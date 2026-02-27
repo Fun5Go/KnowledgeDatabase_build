@@ -2,13 +2,12 @@ from typing import Dict, List, Union, Optional, Any
 from collections import defaultdict
 from pathlib import Path
 from Retriever.failure_query_tools import _load_kb,query_semantic_kb
-from JSON_FMEA_KB.kb_structure import FMEAFailureKB
-import math
 import random
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import json
-from rank_bm25 import BM25Okapi
+import re
+
 
 BASE_DIR = Path(__file__).resolve().parent
 KB_PATH = Path(
@@ -345,91 +344,186 @@ def merge_semantic_nodes_to_groups(
 
     return group_results
 
-class GroupBM25Retriever:
-    """
-    BM25 retriever built on merged semantic groups.
-    One group = one BM25 document.
-    """
+def _tokenize(text: str):
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return set(t for t in text.split() if t)
 
-    def __init__(
-        self,
-        group_json_path: Path,
-    ):
 
-        self.group_json_path = Path(group_json_path)
+def refine_and_regroup(
+    persist_dir: str,
+    group_json_path: str,
+    field_type: str,
+    embed_threshold: float = 0.6,
+    lexical_threshold: float = 0.3,
+    regroup_threshold: float = 0.8,
+):
 
-        with self.group_json_path.open("r", encoding="utf-8") as f:
-            self.groups = json.load(f)
+    persist_dir = Path(persist_dir)
+    group_json_path = Path(group_json_path)
 
-        self.group_ids = []
-        self.group_text = {}
-        corpus = []
+    kb = _load_kb(persist_dir)
 
-        print(f"\n[INFO] Building Group BM25 from {self.group_json_path.name}")
+    with group_json_path.open("r", encoding="utf-8") as f:
+        groups = json.load(f)
 
-        for group in self.groups:
+    print("\n[INFO] Refining and regrouping...")
 
-            gid = group["group_id"]
+    outlier_ids = []
+    refined_groups = []
 
-            # 合并 canonical + variants
-            combined_text = (
-                group.get("canonical_text", "") + " "
-                + " ".join(group.get("variant_texts", []))
+    # -------------------------------------------------
+    # STEP 1: refine existing groups
+    # -------------------------------------------------
+    for group in groups:
+
+        canonical_text = group["canonical_text"]
+        canonical_tokens = _tokenize(canonical_text)
+
+        canonical_id = None
+        for sid in group["member_node_ids"]:
+            if kb.field_store[sid]["text"] == canonical_text:
+                canonical_id = sid
+                break
+
+        if canonical_id is None:
+            continue
+
+        canonical_emb = kb.collection.get(
+            ids=[canonical_id],
+            include=["embeddings"]
+        )["embeddings"][0]
+
+        canonical_emb = np.array(canonical_emb).reshape(1, -1)
+
+        core_members = []
+        core_texts = []
+        core_failure_ids = []
+
+        for sid in group["member_node_ids"]:
+
+            node_text = kb.field_store[sid]["text"]
+            node_tokens = _tokenize(node_text)
+
+            node_emb = kb.collection.get(
+                ids=[sid],
+                include=["embeddings"]
+            )["embeddings"][0]
+
+            node_emb = np.array(node_emb).reshape(1, -1)
+
+            emb_sim = cosine_similarity(
+                canonical_emb,
+                node_emb
+            )[0][0]
+
+            intersection = canonical_tokens.intersection(node_tokens)
+            overlap_ratio = len(intersection) / max(len(canonical_tokens), 1)
+
+            if emb_sim >= embed_threshold and overlap_ratio >= lexical_threshold:
+                core_members.append(sid)
+                core_texts.append(node_text)
+                core_failure_ids.extend(
+                    kb.field_store[sid].get("failure_ids", [])
+                )
+            else:
+                outlier_ids.append(sid)
+
+        if core_members:
+            refined_groups.append(
+                {
+                    "group_id": group["group_id"],
+                    "field_type": field_type,
+                    "canonical_text": canonical_text,
+                    "member_node_ids": core_members,
+                    "variant_texts": core_texts,
+                    "failure_ids": list(set(core_failure_ids)),
+                    "count": len(set(core_failure_ids)),
+                    "group_size": len(core_members),
+                }
             )
 
-            self.group_ids.append(gid)
-            self.group_text[gid] = combined_text
+    print(f"[INFO] Outliers collected: {len(outlier_ids)}")
 
-            corpus.append(self._tokenize(combined_text))
+    # -------------------------------------------------
+    # STEP 2: regroup outliers strictly
+    # -------------------------------------------------
+    if outlier_ids:
 
-        self.bm25 = BM25Okapi(corpus)
+        print("[INFO] Regrouping outliers...")
 
-        print(f"[INFO] Total groups indexed: {len(self.group_ids)}")
-        print("[INFO] Group BM25 built successfully.")
+        res = kb.collection.get(
+            ids=outlier_ids,
+            include=["embeddings", "documents"]
+        )
 
-    # -----------------------------
-    # Tokenizer
-    # -----------------------------
-    def _tokenize(self, text: str) -> List[str]:
-        import re
-        text = text.lower()
-        text = re.sub(r"[^a-z0-9\s]", " ", text)
-        return [t for t in text.split() if t]
+        embeddings = np.array(res["embeddings"], dtype=np.float32)
+        ids = res["ids"]
+        documents = res["documents"]
 
-    # -----------------------------
-    # Query
-    # -----------------------------
-    def query(
-        self,
-        query_text: str,
-        top_k: int = 10,
-    ) -> List[Dict[str, Any]]:
+        sim_matrix = cosine_similarity(embeddings)
 
-        tokens = self._tokenize(query_text)
-        scores = self.bm25.get_scores(tokens)
+        visited = set()
+        new_groups = []
 
-        ranked_idx = np.argsort(scores)[::-1][:top_k]
+        for i in range(len(ids)):
 
-        results = []
+            if ids[i] in visited:
+                continue
 
-        for idx in ranked_idx:
+            center = ids[i]
+            group = [center]
+            visited.add(center)
 
-            gid = self.group_ids[idx]
-            score = float(scores[idx])
+            for j in range(len(ids)):
+                if i == j:
+                    continue
+                if ids[j] in visited:
+                    continue
 
-            group_data = next(
-                g for g in self.groups if g["group_id"] == gid
+                if sim_matrix[i, j] >= regroup_threshold:
+                    group.append(ids[j])
+                    visited.add(ids[j])
+
+            new_groups.append(group)
+
+        # build new group structures
+        for idx, comp in enumerate(new_groups, start=1):
+
+            texts = []
+            fids = []
+
+            for sid in comp:
+                texts.append(kb.field_store[sid]["text"])
+                fids.extend(
+                    kb.field_store[sid].get("failure_ids", [])
+                )
+
+            refined_groups.append(
+                {
+                    "group_id": f"{field_type}_regroup_{idx:04d}",
+                    "field_type": field_type,
+                    "canonical_text": texts[0],
+                    "member_node_ids": comp,
+                    "variant_texts": texts,
+                    "failure_ids": list(set(fids)),
+                    "count": len(set(fids)),
+                    "group_size": len(comp),
+                }
             )
 
-            results.append({
-                "group_id": gid,
-                "score": score,
-                "canonical_text": group_data["canonical_text"],
-                "failure_ids": group_data["failure_ids"],
-                "group_size": group_data["group_size"],
-            })
+    # -------------------------------------------------
+    # Save
+    # -------------------------------------------------
+    output_path = group_json_path.parent / f"{field_type}_groups_refined_v2.json"
 
-        return results
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(refined_groups, f, indent=2, ensure_ascii=False)
+
+    print("\n[INFO] Refinement + regroup completed.")
+    print(output_path)
+
+    return refined_groups
 
 if __name__ == "__main__":
     field_list = [
@@ -444,11 +538,11 @@ if __name__ == "__main__":
 
     # print_high_similarity_pairs(persist_dir=KB_PATH, field_type = "cause", similarity_threshold=0.85,max_print=70)
 
-    merge_semantic_nodes_to_groups(
-    persist_dir=KB_PATH,
-    field_type="effect",
-    similarity_threshold=0.75,
-    )
+    # merge_semantic_nodes_to_groups(
+    # persist_dir=KB_PATH,
+    # field_type="element",
+    # similarity_threshold=0.75,
+    # )
     # retriever = GroupBM25Retriever(
     #     Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\cause_groups.json")
     # )
@@ -460,3 +554,12 @@ if __name__ == "__main__":
 
     # for r in results:
     #     print(r)
+    GROUP_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\element_groups.json")
+    refine_and_regroup(
+    persist_dir=KB_PATH,
+    group_json_path=GROUP_PATH,
+    field_type="element",
+    embed_threshold=0.6,
+    lexical_threshold=0.0,
+    regroup_threshold=0.7,
+)

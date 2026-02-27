@@ -5,12 +5,13 @@ from typing import Optional, Any, Dict, List, Union
 import chromadb
 from chromadb.utils import embedding_functions
 from pathlib import Path
-
+import json
 from typing import Optional, Dict, Any, List, Union
 from collections import defaultdict
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 from sentence_transformers import CrossEncoder
 import numpy as np
+from .utils import load_group_maps,print_semantic_results_with_group, print_semantic_results, compute_bm25
 
 # =========================================================
 # 1) Load KB
@@ -58,9 +59,41 @@ def _build_where(
     return {"$and": clauses}
 
 
+
 # =========================================================
 # 1) Semantic search
 # =========================================================
+# -------------------------------------------------
+# Hybrid Retrieval Function
+# -------------------------------------------------
+
+def normalize(scores):
+    scores = np.array(scores, dtype=float)
+
+    if len(scores) == 0:
+        return scores
+
+    min_s = scores.min()
+    max_s = scores.max()
+
+    if max_s - min_s < 1e-8:
+        return np.zeros_like(scores)
+
+    return (scores - min_s) / (max_s - min_s)
+def sort_by_score(documents, metadatas, scores):
+    items = []
+
+    for doc, meta, score in zip(documents, metadatas, scores):
+        items.append({
+            "text": doc,
+            "metadata": meta,
+            "score": float(score)
+        })
+
+    items.sort(key=lambda x: x["score"], reverse=True)
+    return items
+
+
 def query_semantic_kb(
     persist_dir: Union[str, Path],
     query_text: str,
@@ -69,6 +102,8 @@ def query_semantic_kb(
     source_type: Optional[Union[str, List[str]]] = None,
     min_count: Optional[int] = None,
     include: Optional[List[str]] = None,
+    alpha: float = 0.6,
+    hybrid: bool = True,
 ):
     col = _get_collection(persist_dir)
 
@@ -81,13 +116,75 @@ def query_semantic_kb(
     if include is None:
         include = ["documents", "metadatas", "distances"]
 
-    return col.query(
+    results: Dict[str, Any] = col.query(
         query_texts=[query_text],
         n_results=n_results,
         where=where,
         include=include,
     )
 
+    # If not hybrid -> keep original output exactly (do nothing)
+    if not hybrid:
+        return results
+
+    # Hybrid rerank: add fields only when hybrid=True
+    # Keep chroma distances semantics (cosine distance), but reorder them.
+    if "documents" not in results or not results["documents"]:
+        return results
+
+    # Prepare hybrid fields with same outer shape: List[List[...]]
+    results["hybrid_scores"] = []
+    results["hybrid_distances"] = []
+
+    num_queries = len(results["documents"])
+
+    for qi in range(num_queries):
+        docs = results["documents"][qi] or []
+        if not docs:
+            results["hybrid_scores"].append([])
+            results["hybrid_distances"].append([])
+            continue
+
+        ids = results["ids"][qi] if "ids" in results and results["ids"] else []
+        metas = results["metadatas"][qi] if results.get("metadatas") else [{}] * len(docs)
+        dists = results["distances"][qi] if results.get("distances") else [1.0] * len(docs)
+
+        # ---- semantic similarity (cosine) ----
+        sem = 1.0 - np.array(dists, dtype=float)
+        sem = np.clip(sem, 0.0, 1.0)
+
+        # ---- bm25 ----
+        bm25 = compute_bm25(query_text, docs)
+
+        # ---- normalize ----
+        sem_n = normalize(sem)
+        bm25_n = normalize(bm25)
+
+        # ---- hybrid score ----
+        final = alpha * sem_n + (1.0 - alpha) * bm25_n  # 0..1
+
+        # ---- sort index ----
+        order = np.argsort(-final)
+
+        # ---- reorder all aligned fields ----
+        if ids:
+            results["ids"][qi] = [ids[i] for i in order]
+
+        results["documents"][qi] = [docs[i] for i in order]
+
+        if results.get("metadatas"):
+            results["metadatas"][qi] = [metas[i] for i in order]
+
+        if results.get("distances"):
+            # IMPORTANT: keep original cosine distances, only reorder
+            results["distances"][qi] = [float(dists[i]) for i in order]
+
+        # ---- add hybrid fields (aligned to reranked order) ----
+        hyb_scores = [float(final[i]) for i in order]
+        results["hybrid_scores"].append(hyb_scores)
+        results["hybrid_distances"].append([float(1.0 - s) for s in hyb_scores])
+
+    return results
 
 
 # =========================================================
@@ -217,6 +314,7 @@ def get_embedding_vector(
 
     # vec 可能已经是 list[float]
     return list(vec)
+
 def get_distance_between_semantic_nodes(
     persist_dir: Union[str, Path],
     semantic_id_1: str,
@@ -334,41 +432,6 @@ def query_linked_failure_fields(
 
     return result
 
-
-def print_semantic_results(res, kb, max_failure_ids: int = 15):
-    """
-    res: chroma query result
-    kb: FMEAFailureKB or EightDFailureKB (must have .field_store)
-    """
-    ids = res.get("ids", [[]])[0]
-    docs = res.get("documents", [[]])[0]
-    metas = res.get("metadatas", [[]])[0]
-    dists = res.get("distances", [[]])[0]
-
-    n = min(len(ids), len(docs), len(metas), len(dists))
-    print(f"Returned semantic nodes: {n}")
-
-    for i in range(n):
-        semantic_id = ids[i]
-        meta = metas[i] or {}
-
-        # ---- get failure_ids from structured store ----
-        node = kb.field_store.get(semantic_id, {}) or {}
-        failure_ids = node.get("failure_ids", []) or []
-
-        # ---- optional truncate ----
-        shown = failure_ids[:max_failure_ids]
-        more = len(failure_ids) - len(shown)
-
-        print("=" * 100)
-        print(f"[{i:02d}] semantic_id: {semantic_id}")
-        print(f"  text: {docs[i]}")
-        print(f"  similarity: {1 - float(dists[i]):.4f}")
-        print(f"  field_type: {meta.get('field_type')}")
-        print(f"  source_type: {meta.get('source_type')}")
-        print(f"  count: {meta.get('count')}")
-
-        print(f"  failure_ids({len(failure_ids)}): {shown}" + (f" ... (+{more})" if more > 0 else ""))
 
 semantic_reranker = CrossEncoder("BAAI/bge-reranker-base")
 
@@ -509,19 +572,35 @@ def retrieve_similar_failures_from_entity(
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[: int(top_n)]
 
+
+
 if  __name__ == "__main__":
     KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
-    query_text = "Incorrect gear shift"
+    group_files = {
+    "mode": r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\mode_groups_refined_v2.json",
+    "cause": r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\cause_groups_refined_v2.json",
+    "effect": r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\effect_groups_refined_v2.json",
+    "element": r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\element_groups_refined_v2.json",
+}
+    group_maps = load_group_maps(group_files)
+
+    query_text = "creates too much noise"  
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
-        field_type=["effect"],
+        field_type=["mode"],
         n_results=10,
         min_count=1,
+        hybrid=False,
+        source_type="8D"
     )
+    # for r in res[:30]:
+    #     print(r["score"], r["text"])
+    print_semantic_results(res,kb,max_failure_ids=5)
+    # print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=10)
 
     # result = query_linked_failure_fields(
     #     persist_dir=KB_PATH,
@@ -529,7 +608,7 @@ if  __name__ == "__main__":
     #     field_type="mode",
     #     linked_fields=["element","effect","cause"]
     # )
-    print_semantic_results(res,kb,max_failure_ids=10)
+
 
     # reranked = rerank_semantic_results(query_text, res, top_k=20)
 
@@ -549,7 +628,7 @@ if  __name__ == "__main__":
     #     print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")
 
 
-    
+#--------------Entity retrieval
 #     FAILURE_ENTITY = {
 #     "failure_mode_text": "Motor stalls during operation",
 #     "failure_element_text": "Conveyor mechanism",

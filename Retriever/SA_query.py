@@ -269,29 +269,33 @@ def _accumulate_candidate_scores(
     min_similarity: float = 0.35,
 ) -> None:
     """
-    Accumulate failure_id scores from semantic hits with graph constraint.
-
-    Upgrade:
-    - Keep highest similarity per (failure_id, field_type, semantic_id)
-    - Update score by delta if better similarity found
+    - threshold uses semantic similarity
+    - "better" uses semantic similarity
+    - score accumulation uses hybrid_score if available else semantic
+    - stored 'similarity' is semantic (for replace/pick_best)
     """
 
     ids = (semantic_query_result.get("ids", [[]]) or [[]])[0] or []
     dists = (semantic_query_result.get("distances", [[]]) or [[]])[0] or []
 
-    for sid, dist in zip(ids, dists):
+    hyb_scores = (semantic_query_result.get("hybrid_scores", [[]]) or [[]])[0]
+    has_hybrid = isinstance(hyb_scores, list) and len(hyb_scores) == len(ids)
 
+    for idx, (sid, dist) in enumerate(zip(ids, dists)):
         try:
-            similarity = max(0.0, 1.0 - float(dist))
+            sem_sim = max(0.0, 1.0 - float(dist))
         except Exception:
             continue
 
-        if similarity < min_similarity:
+        # threshold by semantic
+        if sem_sim < min_similarity:
             continue
+
+        # scoring uses hybrid if available, else semantic
+        used_score = float(hyb_scores[idx]) if has_hybrid else float(sem_sim)
 
         node = kb.field_store.get(sid, {}) or {}
         failure_ids = node.get("failure_ids", []) or []
-
         if not failure_ids:
             continue
 
@@ -300,14 +304,6 @@ def _accumulate_candidate_scores(
         for fid in failure_ids:
             matched_list = candidate_scores[fid]["matched"][field_type]
 
-            # normalize the similarity score
-            norm_sim = normalize_similarity(similarity, field_type)
-            if norm_sim <= 0:
-                continue
-
-            # ------------------------------------------------
-            # Check if this semantic_id already exists
-            # ------------------------------------------------
             existing = None
             for m in matched_list:
                 if m.get("semantic_id") == sid:
@@ -315,35 +311,31 @@ def _accumulate_candidate_scores(
                     break
 
             if existing:
-                old_norm = float(existing.get("score_sim", 0.0))
+                old_sem = float(existing.get("similarity", 0.0))          # semantic
+                old_used = float(existing.get("hybrid_score", old_sem))   # used for scoring
 
-                # Keep only if new norm score is higher
-                if norm_sim > old_norm:
-                    delta = (norm_sim - old_norm) * float(weight)
+                # better judged by semantic only
+                if sem_sim > old_sem:
+                    delta = max(0.0, (used_score - old_used) * float(weight))
                     candidate_scores[fid]["score"] += delta
 
-                    existing["similarity"] = round(float(similarity), 4)   # raw for display
-                    existing["score_sim"] = round(float(norm_sim), 6)      # norm for scoring
+                    existing["similarity"] = round(float(sem_sim), 4)         # semantic (for replace)
+                    existing["hybrid_score"] = round(float(used_score), 4)    # for ranking/score
                     existing["structure_text"] = query_text
                     existing["kb_text"] = kb_text
+                continue
 
-                continue  # done handling this sid for this fid
-
-            # ------------------------------------------------
-            # New semantic hit for this field
-            # ------------------------------------------------
-            candidate_scores[fid]["score"] += norm_sim * float(weight)
+            # new hit
+            candidate_scores[fid]["score"] += used_score * float(weight)
             candidate_scores[fid]["field_hits"].add(field_type)
 
             matched_list.append({
                 "semantic_id": sid,
-                "similarity": round(float(similarity), 4),   # raw
-                "score_sim": round(float(norm_sim), 6),      # norm
+                "similarity": round(float(sem_sim), 4),        # semantic only (for replace)
+                "hybrid_score": round(float(used_score), 4),   # for ranking/score
                 "structure_text": query_text,
-                "kb_text": kb_text
+                "kb_text": kb_text,
             })
-
-
 
 def _apply_controlled_reinforcement(
     score: float,
@@ -401,8 +393,7 @@ def generate_failure_chains_from_structure(
     connection_factor_ge2: float = 1.0,
     connection_factor_eq1: float = 1.0,
     connection_factor_eq0: float = 1.0,
-
-
+    hybrid_score: bool = True,
     replace: bool = True,
 ) -> List[Dict[str, Any]]:
 
@@ -430,7 +421,7 @@ def generate_failure_chains_from_structure(
         # -------------------------
         # SEMANTIC SEARCH
         # -------------------------
-        def query_and_accumulate(text: str, field: str, weight: float):
+        def query_and_accumulate(text: str, field: str, weight: float,hybrid_score):
             res = query_semantic_kb(
                 persist_dir,
                 text,
@@ -438,6 +429,8 @@ def generate_failure_chains_from_structure(
                 n_results=top_k_per_field,
                 min_count=min_count,
                 source_type=source_type,
+                hybrid=hybrid_score,
+                alpha = 0.8,
             )
             _accumulate_candidate_scores(
                 kb=kb,
@@ -450,13 +443,13 @@ def generate_failure_chains_from_structure(
             )
 
         if element_text:
-            query_and_accumulate(element_text, "element", weight_element)
+            query_and_accumulate(element_text, "element", weight_element, hybrid_score)
         for m in modes:
-            query_and_accumulate(m, "mode", weight_mode)
+            query_and_accumulate(m, "mode", weight_mode, hybrid_score)
         for c in causes:
-            query_and_accumulate(c, "cause", weight_cause)
+            query_and_accumulate(c, "cause", weight_cause, hybrid_score)
         for e in effects:
-            query_and_accumulate(e, "effect", weight_effect)
+            query_and_accumulate(e, "effect", weight_effect, hybrid_score)
 
         # -------------------------
         # PROCESS CANDIDATES
@@ -522,7 +515,6 @@ def generate_failure_chains_from_structure(
                     return None
                 best = max(matched_list, key=lambda x: float(x.get("similarity", 0.0)))
                 return best.get("structure_text")
-
             if replace:
                 structure_element = pick_best_structure_text(info["matched"]["element"])
                 structure_mode = pick_best_structure_text(info["matched"]["mode"])
@@ -741,7 +733,8 @@ if  __name__ == "__main__":
         # minimum_field_match=2,
         min_similarity=0.45,
         top_n=100,
-        replace=True
+        replace=True,
+        hybrid_score=True,
     )
     results = attach_ppl_scores(results)
 

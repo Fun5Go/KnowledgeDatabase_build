@@ -548,8 +548,8 @@ if __name__ == "__main__":
         }
     ]
 }
-    RAG_pipeline(structure_input=structure_input_motorcontrol, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,object = "motorcontrol",
-                 target_n = 30, weight_element = 0.5, min_similarity=0.45, RAG = False, FILL = False)
+    RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,object = "powertrain",
+                 target_n = 30, weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
 
     # -----------------------------------------------------
     # 3) Batch Settings
