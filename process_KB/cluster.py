@@ -7,9 +7,12 @@ import math
 import random
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
+import json
+from rank_bm25 import BM25Okapi
 
+BASE_DIR = Path(__file__).resolve().parent
 KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_bge\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
     )
 
 
@@ -186,6 +189,248 @@ def print_high_similarity_pairs(persist_dir: str, field_type: str,
 
     print(f"\nTotal high-similarity pairs found: {found}")
 
+def merge_semantic_nodes_to_groups(
+    persist_dir: str,
+    field_type: str,
+    similarity_threshold: float = 0.8,
+):
+    """
+    Merge highly similar semantic nodes into groups
+    and export result to JSON file.
+
+    Does NOT modify KB.
+    """
+
+    persist_dir = Path(persist_dir)
+    kb = _load_kb(persist_dir)
+
+    BASE_DIR = Path(__file__).resolve().parent
+  
+    print(f"\n[INFO] Loading nodes for field_type = {field_type}")
+
+    res = kb.collection.get(
+        where={"field_type": field_type},
+        include=["embeddings", "documents"],
+    )
+
+    embeddings = np.array(res["embeddings"], dtype=np.float32)
+    ids = res["ids"]
+    documents = res["documents"]
+
+    n = len(ids)
+    if n == 0:
+        print("No nodes found.")
+        return
+
+    print(f"[INFO] Total nodes: {n}")
+    print("[INFO] Computing cosine similarity...")
+
+    sim_matrix = cosine_similarity(embeddings)
+
+    # -------------------------------------------------
+    # 1️⃣ Build similarity graph
+    # -------------------------------------------------
+    adj = defaultdict(set)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if sim_matrix[i, j] >= similarity_threshold:
+                adj[ids[i]].add(ids[j])
+                adj[ids[j]].add(ids[i])
+
+    # -------------------------------------------------
+    # 2️⃣ Find connected components
+    # -------------------------------------------------
+    visited = set()
+    groups = []
+
+    for sid in ids:
+        if sid in visited:
+            continue
+
+        stack = [sid]
+        comp = []
+
+        while stack:
+            cur = stack.pop()
+            if cur in visited:
+                continue
+
+            visited.add(cur)
+            comp.append(cur)
+            stack.extend(adj[cur])
+
+        groups.append(comp)
+
+    print(f"[INFO] Total groups formed: {len(groups)}")
+
+    # -------------------------------------------------
+    # 3️⃣ Build group JSON structure
+    # -------------------------------------------------
+    id_to_index = {sid: idx for idx, sid in enumerate(ids)}
+
+    group_results = []
+
+    for gid, comp in enumerate(groups, start=1):
+
+        member_texts = []
+        all_failure_ids = []
+        node_info = []
+
+        for sid in comp:
+            idx = id_to_index[sid]
+            text = documents[idx]
+
+            node_data = kb.field_store.get(sid, {}) or {}
+            fids = node_data.get("failure_ids", []) or []
+
+            member_texts.append(text)
+            all_failure_ids.extend(fids)
+
+            node_info.append(
+                {
+                    "node_id": sid,
+                    "text": text,
+                    "failure_count": len(fids),
+                }
+            )
+
+        # remove duplicate failure_ids
+        all_failure_ids = list(set(all_failure_ids))
+
+        # -------------------------------------------------
+        # 4️⃣ Choose canonical text
+        # rule: most failure_ids → shortest length
+        # -------------------------------------------------
+        node_info_sorted = sorted(
+            node_info,
+            key=lambda x: (x["failure_count"], -len(x["text"])),
+            reverse=True,
+        )
+
+        canonical_node = node_info_sorted[0]
+        canonical_text = canonical_node["text"]
+
+        group_results.append(
+            {
+                "group_id": f"{field_type}_group_{gid:04d}",
+                "field_type": field_type,
+                "canonical_text": canonical_text,
+                "member_node_ids": comp,
+                "variant_texts": member_texts,
+                "failure_ids": all_failure_ids,
+                "count": len(all_failure_ids),
+                "group_size": len(comp),
+            }
+        )
+
+    # sort groups by count descending
+    group_results = sorted(
+        group_results,
+        key=lambda x: x["count"],
+        reverse=True,
+    )
+
+    # -------------------------------------------------
+    # 5️⃣ Save JSON
+    # -------------------------------------------------
+    output_path = BASE_DIR / f"{field_type}_groups.json"
+
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(group_results, f, indent=2, ensure_ascii=False)
+
+    print(f"\n[INFO] Group file saved to:")
+    print(output_path)
+    print(f"[INFO] Total groups saved: {len(group_results)}")
+
+    return group_results
+
+class GroupBM25Retriever:
+    """
+    BM25 retriever built on merged semantic groups.
+    One group = one BM25 document.
+    """
+
+    def __init__(
+        self,
+        group_json_path: Path,
+    ):
+
+        self.group_json_path = Path(group_json_path)
+
+        with self.group_json_path.open("r", encoding="utf-8") as f:
+            self.groups = json.load(f)
+
+        self.group_ids = []
+        self.group_text = {}
+        corpus = []
+
+        print(f"\n[INFO] Building Group BM25 from {self.group_json_path.name}")
+
+        for group in self.groups:
+
+            gid = group["group_id"]
+
+            # 合并 canonical + variants
+            combined_text = (
+                group.get("canonical_text", "") + " "
+                + " ".join(group.get("variant_texts", []))
+            )
+
+            self.group_ids.append(gid)
+            self.group_text[gid] = combined_text
+
+            corpus.append(self._tokenize(combined_text))
+
+        self.bm25 = BM25Okapi(corpus)
+
+        print(f"[INFO] Total groups indexed: {len(self.group_ids)}")
+        print("[INFO] Group BM25 built successfully.")
+
+    # -----------------------------
+    # Tokenizer
+    # -----------------------------
+    def _tokenize(self, text: str) -> List[str]:
+        import re
+        text = text.lower()
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        return [t for t in text.split() if t]
+
+    # -----------------------------
+    # Query
+    # -----------------------------
+    def query(
+        self,
+        query_text: str,
+        top_k: int = 10,
+    ) -> List[Dict[str, Any]]:
+
+        tokens = self._tokenize(query_text)
+        scores = self.bm25.get_scores(tokens)
+
+        ranked_idx = np.argsort(scores)[::-1][:top_k]
+
+        results = []
+
+        for idx in ranked_idx:
+
+            gid = self.group_ids[idx]
+            score = float(scores[idx])
+
+            group_data = next(
+                g for g in self.groups if g["group_id"] == gid
+            )
+
+            results.append({
+                "group_id": gid,
+                "score": score,
+                "canonical_text": group_data["canonical_text"],
+                "failure_ids": group_data["failure_ids"],
+                "group_size": group_data["group_size"],
+            })
+
+        return results
+
 if __name__ == "__main__":
     field_list = [
         "element",
@@ -197,4 +442,21 @@ if __name__ == "__main__":
     #     result = compute_full_pairwise_similarity(persist_dir=KB_PATH,field_type=field)
     #     print(f"Field: {field}|{result}")
 
-    print_high_similarity_pairs(persist_dir=KB_PATH, field_type = "cause", similarity_threshold=0.9,max_print=70)
+    # print_high_similarity_pairs(persist_dir=KB_PATH, field_type = "cause", similarity_threshold=0.85,max_print=70)
+
+    merge_semantic_nodes_to_groups(
+    persist_dir=KB_PATH,
+    field_type="effect",
+    similarity_threshold=0.75,
+    )
+    # retriever = GroupBM25Retriever(
+    #     Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\cause_groups.json")
+    # )
+
+    # results = retriever.query(
+    #     query_text="short circuit",
+    #     top_k=5
+    # )
+
+    # for r in results:
+    #     print(r)

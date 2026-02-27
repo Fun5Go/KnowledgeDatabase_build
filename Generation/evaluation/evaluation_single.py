@@ -59,11 +59,26 @@ def load_predictions(pred_path: Path, target_element: str) -> List[Dict]:
     with open(pred_path, "r", encoding="utf-8") as f:
         pred_raw = json.load(f)
 
-    pred_list = pred_raw.get("failure_candidates", [])
+    # -------------------------------
+    # 新结构读取方式
+    # -------------------------------
+    failure_block = pred_raw.get("failure_candidates", {})
 
+    if isinstance(failure_block, dict):
+        pred_list = failure_block.get("failure_candidates", [])
+    else:
+        pred_list = []
+
+    # 确保是 dict 列表
+    pred_list = [p for p in pred_list if isinstance(p, dict)]
+
+    # -------------------------------
+    # 按 failure_element 过滤
+    # -------------------------------
     pred_filtered = [
         p for p in pred_list
-        if normalize_text(p.get("failure_element")) == normalize_text(target_element)
+        if normalize_text(p.get("failure_element", "")) ==
+           normalize_text(target_element)
     ]
 
     return pred_filtered
@@ -322,10 +337,10 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 if __name__ == "__main__":
 
     GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\RAG\KB_motor_drives\failure_kb\fmea_cause_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_PURE_motorcontrol.json")
 
-    gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_2)
-    pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_2)
+    gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_1)
+    pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_1)
 
     results = evaluate_strict(pred_list, gt_list)
     print("\n========== FINAL METRICS ==========")

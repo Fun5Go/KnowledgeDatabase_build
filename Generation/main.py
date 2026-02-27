@@ -1,10 +1,11 @@
 from .LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE, failure_inference_generation_RAG_FILL
 from Retriever.SA_query import build_failure_chains_from_structure,generate_failure_chains_from_structure
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pathlib import Path
 from langsmith import traceable
 from pprint import pprint
 import json
+import re
 
 def build_structure_analysis_input(structure_input: Dict,):
     """
@@ -142,6 +143,11 @@ def build_ground_truth_input(
         "GROUND TRUTH FAILURE PATTERNS (Structured Reference Only)\n\n"
         + json.dumps(structured_patterns, indent=2, ensure_ascii=False)
     )
+def _safe_filename(s: str) -> str:
+    # 避免文件名包含空格/特殊字符（Windows 更稳）
+    s = s.strip().lower()
+    s = re.sub(r"[^\w\-]+", "_", s)   # 只保留 字母数字下划线连字符，其余变 _
+    return s
 
 def build_fill_entity(
     results: List[Dict],
@@ -269,85 +275,175 @@ def build_fill_entity(
 
 
 
-def save_failure_candidates_to_json(result: dict, output_path: Path):
-    """
-    Save failure candidates to JSON file.
-    """
+# def save_failure_candidates_to_json(result: dict, output_path: Path):
+#     """
+#     Save failure candidates to JSON file.
+#     """
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+#     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(result, f, indent=4)
+#     with output_path.open("w", encoding="utf-8") as f:
+#         json.dump(result, f, indent=4)
 
-    print(f"\n Failure candidates saved to: {output_path}")
+#     print(f"\n Failure candidates saved to: {output_path}")
 
 @traceable(name="RAG")
-def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  require_cause: bool = False,weight_element: float = 0.3, 
-                 min_similarity: float=0.55,require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
+def RAG_pipeline(
+    structure_input: Dict,
+    KB_PATH: str,
+    top_n: int = 25,
+    top_k_per_field: int = 10,
+    require_cause: bool = False,
+    weight_element: float = 0.3,
+    target_n: int = 30,
+    min_similarity: float = 0.55,
+    require_cause_plus: bool = False,
+    RAG: bool = True,
+    FILL: bool = True,
+    object: str = "powertrain",
+):
+    structure_input_json = json.dumps(structure_input, ensure_ascii=False, indent=2)
+    obj = _safe_filename(object)
 
-
-
-    # structure_input = build_structure_analysis_input(structure_input)
-    structure_input_json = json.dumps(structure_input, ensure_ascii=False,indent=2)
+    # To store the retrieval results
+    retrieval_payload = None
 
     if RAG:
-        similar_failure = generate_failure_chains_from_structure(
-        persist_dir=KB_PATH,
-        structure_input=structure_input,
-        top_k_per_field=top_k_per_field,
-        top_n=top_n,
-        min_similarity=min_similarity,
-        require_cause = require_cause,
-        require_cause_plus = require_cause_plus,
-        weight_element=weight_element,
-        replace=False
-    )
         if not FILL:
-            failure_example = build_ground_truth_input(similar_failure,target_n=30, strict_unique=True)
-            failure_candidates = failure_inference_generation_RAG.invoke({
-                "data": {
-                    "structure_analysis": structure_input_json, # Sentences with annotations
-                    "gt_example": failure_example, # Similar FMEA cases in text format
+            similar_failure = generate_failure_chains_from_structure(
+                persist_dir=KB_PATH,
+                structure_input=structure_input,
+                top_k_per_field=top_k_per_field,
+                top_n=top_n,
+                min_similarity=min_similarity,
+                require_cause=require_cause,
+                require_cause_plus=require_cause_plus,
+                weight_element=weight_element,
+                replace=False,
+            )
+            retrieval_payload = similar_failure  
+
+            failure_example = build_ground_truth_input(
+                similar_failure,
+                target_n=target_n,
+                strict_unique=True,
+            )
+
+            failure_candidates = failure_inference_generation_RAG.invoke(
+                {
+                    "data": {
+                        "structure_analysis": structure_input_json,
+                        "gt_example": failure_example,
+                    }
                 }
-            })
+            )
+
             OUTPUT_PATH = Path(
-            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json")
+                fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_{obj}.json"
+            )
+
         else:
             semi_candidates = generate_failure_chains_from_structure(
                 persist_dir=KB_PATH,
                 structure_input=structure_input,
                 top_k_per_field=top_k_per_field,
                 top_n=top_n,
-                require_cause = require_cause,
                 min_similarity=min_similarity,
-                require_cause_plus = require_cause_plus,
-                replace = True,
+                require_cause=require_cause,
+                require_cause_plus=require_cause_plus,
+                weight_element=weight_element,
+                replace=True,
             )
-            semi_candidates =  build_fill_entity(semi_candidates,target_n=30,strict_unique=True)
-            failure_candidates = failure_inference_generation_RAG_FILL.invoke({
-                "data": {
-                    "structure_analysis": structure_input_json, # Sentences with annotations
-                    "fill_failure": semi_candidates
+
+            semi_candidates = build_fill_entity(
+                semi_candidates,
+                target_n=target_n,
+                strict_unique=True,
+            )
+            retrieval_payload = semi_candidates  
+
+            failure_candidates = failure_inference_generation_RAG_FILL.invoke(
+                {
+                    "data": {
+                        "structure_analysis": structure_input_json,
+                        "fill_failure": semi_candidates,
+                    }
                 }
-            })
+            )
             OUTPUT_PATH = Path(
-            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_FILL.json"
-        )
+                fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_FILL_{obj}.json"
+            )
+
     else:
-       failure_candidates = failure_inference_generation_PURE.invoke({
-                       "data": {
-                "structure_analysis": structure_input_json, # Sentences with annotations
+        failure_candidates = failure_inference_generation_PURE.invoke(
+            {
+                "data": {
+                    "structure_analysis": structure_input_json,
+                }
             }
-       })
-       OUTPUT_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_pure.json")
-    return failure_candidates,OUTPUT_PATH
+        )
+        OUTPUT_PATH = Path(
+            fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_PURE_{obj}.json"
+        )
+
+    # -------- 序列化工具：避免 LangChain / Pydantic 对象无法 json.dump ----------
+    def _to_jsonable(x: Any):
+        if x is None:
+            return None
+        # 常见：Pydantic v2
+        if hasattr(x, "model_dump"):
+            try:
+                return x.model_dump()
+            except Exception:
+                pass
+        # 常见：Pydantic v1
+        if hasattr(x, "dict"):
+            try:
+                return x.dict()
+            except Exception:
+                pass
+        # 常见：LangChain message / generation
+        if hasattr(x, "to_dict"):
+            try:
+                return x.to_dict()
+            except Exception:
+                pass
+        # 兜底：字符串化（至少不炸）
+        try:
+            json.dumps(x, ensure_ascii=False)
+            return x
+        except Exception:
+            return str(x)
+
+    # -------- 最终落盘内容：把 retrieval 一起写进 json ----------
+    bundle = {
+        "failure_candidates": _to_jsonable(failure_candidates),          # LLM OUTPUT
+        "meta": {
+            "RAG": RAG,
+            "FILL": FILL,
+            "top_n": top_n,
+            "top_k_per_field": top_k_per_field,
+            "min_similarity": min_similarity,
+            "require_cause": require_cause,
+            "require_cause_plus": require_cause_plus,
+            "weight_element": weight_element,
+            "target_n": target_n,
+            "KB_PATH": str(KB_PATH),
+        },
+        "structure_analysis": structure_input,           # 原始结构输入
+        "retrieval_candidates": _to_jsonable(retrieval_payload),  # ✅ similar_failure / semi_candidates
+
+    }
+
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT_PATH.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
 
 if __name__ == "__main__":
     # -----------------------------------------------------
     # 1) KB Path
     # -----------------------------------------------------
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_bge\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
     )
 
     # -----------------------------------------------------
@@ -410,11 +506,50 @@ if __name__ == "__main__":
             }
         ]
     }
-    result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=5, top_n=50,
-                                       weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
-    print("\n================ FAILURE CANDIDATES ================\n")
-    # print(json.dumps(result, indent=4))
-    save_failure_candidates_to_json(result, OUTPUT_PATH)
+
+    structure_input_motorcontrol = {
+    "product_domain": "motor_drives",
+    "nodes": [
+        {
+            "element_id": "E1",
+            "failure_element": "Motor control",
+            "modes": [
+                "Component break-down",
+                "Unbalanced motor currents",
+                "Incorrect interpretation zero-crossing",
+                "Soft start too long",
+                "No detection",
+                "Welded relay",
+                "Relay cannot close",
+                "False turn-on / turn-off"
+            ],
+            "causes": [
+                "Cooling insufficient",
+                "Compressor vibrations",
+                "(Starting) Motor current too high for chosen components",
+                "Overvoltage due to motor disconnect",
+                "Under Voltage due to incorrect triggering",
+                "Live switching of relays",
+                "Priority zero-crossing interrupt too low",
+                "Open loop control",
+                "No (correctly designed) snubber design",
+                "Too high dT junction as a result of power cycling of component"
+            ],
+            "effects": [
+                "Motor cannot start",
+                "Overcurrent towards motor",
+                "Motor starts without soft start",
+                #Extra
+                # "(Final) Pressure deviates from setpoints",
+                # "Overpressure",
+                # "No pressure build-up",
+                # "No user control",
+            ]
+        }
+    ]
+}
+    RAG_pipeline(structure_input=structure_input_motorcontrol, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,object = "motorcontrol",
+                 target_n = 30, weight_element = 0.5, min_similarity=0.45, RAG = False, FILL = False)
 
     # -----------------------------------------------------
     # 3) Batch Settings

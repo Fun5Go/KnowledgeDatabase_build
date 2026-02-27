@@ -13,9 +13,7 @@ def _accumulate_candidate_scores(
     min_similarity: float = 0.35,
 ) -> None:
     """
-    Accumulate failure_id scores from semantic hits with graph constraint.
-
-    Upgrade:
+    Accumulate failure_id scores from semantic hits.
     - Keep highest similarity per (failure_id, field_type, semantic_id)
     - Update score by delta if better similarity found
     """
@@ -26,14 +24,14 @@ def _accumulate_candidate_scores(
     for sid, dist in zip(ids, dists):
 
         try:
-            similarity = max(0.0, 1.0 - float(dist))
+            similarity = max(0.0, 1.0 - float(dist)) # Similarity = 1-distance
         except Exception:
             continue
 
-        if similarity < min_similarity:
+        if similarity < min_similarity: # Threshold
             continue
 
-        node = kb.field_store.get(sid, {}) or {}
+        node = kb.field_store.get(sid, {}) or {} # Get from id
         failure_ids = node.get("failure_ids", []) or []
 
         if not failure_ids:
@@ -46,7 +44,7 @@ def _accumulate_candidate_scores(
             matched_list = candidate_scores[fid]["matched"][field_type]
 
             # ------------------------------------------------
-            # Check if this semantic_id already exists
+            # Check if this semantic_id already exists, avoid one text in a failure is accumuated by different query texts
             # ------------------------------------------------
             existing = None
             for m in matched_list:
@@ -91,8 +89,6 @@ def _apply_controlled_reinforcement(
 ) -> float:
     """
     Controlled "duplicate reinforcement" for generate-ranking.
-
-    - Within-field: if a field has multiple distinct semantic hits, add small bonus
     - Cross-field: if multiple fields hit (element/mode/cause/effect), add bonus
     - Cap: reinforcement <= base_score * max_reinforce_ratio
     """
@@ -102,12 +98,12 @@ def _apply_controlled_reinforcement(
 
     reinforcement = 0.0
 
-    # 2) cross-field reinforcement (reward completeness)
+    # cross-field reinforcement (reward completeness)
     active_fields = [f for f, hits in (matched or {}).items() if hits]
     if len(active_fields) >= 2:
         reinforcement += (len(active_fields) - 1) * float(reinforce_cross_field)
 
-    # 3) cap
+    #cap
     reinforcement = min(reinforcement, base * float(max_reinforce_ratio))
     return base + reinforcement
 

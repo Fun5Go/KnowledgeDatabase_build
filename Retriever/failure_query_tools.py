@@ -510,15 +510,15 @@ def retrieve_similar_failures_from_entity(
     return results[: int(top_n)]
 
 if  __name__ == "__main__":
-    KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_bge\failure_kb")
+    KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
-    query_text = "ADC measurements incorrect (incl. bandwidth)"
+    query_text = "Incorrect gear shift"
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
-        field_type=["cause"],
+        field_type=["effect"],
         n_results=10,
         min_count=1,
     )

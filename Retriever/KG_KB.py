@@ -467,9 +467,6 @@ def _expand_candidates_via_graph_mode_centered(
     return out
 
 
-
-
-
 def _compose_chains_from_pools(
     kb: Any,
     *,

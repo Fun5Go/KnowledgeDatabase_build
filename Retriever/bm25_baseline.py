@@ -3,6 +3,7 @@ import re
 from typing import List, Dict, Any
 from pathlib import Path
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
+import numpy as np
 
 
 # -----------------------------
@@ -22,7 +23,10 @@ def _safe_text(x: Any) -> str:
 # -----------------------------
 # Field-aware BM25
 # -----------------------------
-class BM25FailureRetriever:
+class BM25SemanticFieldRetriever:
+    """
+    BM25 retriever built on field_store (semantic-level, deduplicated).
+    """
     def __init__(
         self,
         kb,
@@ -32,18 +36,19 @@ class BM25FailureRetriever:
         weight_effect: float = 1.5,
     ):
         self.kb = kb
-        self.failure_ids: List[str] = []
 
         self.weight_element = weight_element
         self.weight_mode = weight_mode
         self.weight_cause = weight_cause
         self.weight_effect = weight_effect
 
-        # Separate corpora per field
-        corpus_element = []
-        corpus_mode = []
-        corpus_cause = []
-        corpus_effect = []
+        self.semantic_ids = {
+            "element": [],
+            "mode": [],
+            "cause": [],
+            "effect": [],
+        }
+
         self.field_text = {
             "element": {},
             "mode": {},
@@ -51,163 +56,154 @@ class BM25FailureRetriever:
             "effect": {},
         }
 
-        for fid, entity in kb.entity_store.items():
-            self.failure_ids.append(fid)
+        corpus = {
+            "element": [],
+            "mode": [],
+            "cause": [],
+            "effect": [],
+        }
 
-            corpus_element.append(
-                simple_tokenize(_safe_text(entity.get("failure_element_text")))
-            )
-            corpus_mode.append(
-                simple_tokenize(_safe_text(entity.get("failure_mode_text")))
-            )
-            corpus_cause.append(
-                simple_tokenize(_safe_text(entity.get("failure_cause_text")))
-            )
-            corpus_effect.append(
-                simple_tokenize(_safe_text(entity.get("failure_effect_text")))
-            )
+        print("Building semantic-level BM25 from field_store...")
 
-        print(f"Building field-wise BM25 for {len(self.failure_ids)} failures...")
+        # ✅ 正确遍历平铺结构
+        for sid, node in kb.field_store.items():
 
-        self.bm25_element = BM25Okapi(corpus_element)
-        self.bm25_mode = BM25Okapi(corpus_mode)
-        self.bm25_cause = BM25Okapi(corpus_cause)
-        self.bm25_effect = BM25Okapi(corpus_effect)
-        print("Field-wise BM25 index built successfully.")
+            field = node.get("field_type")
 
-        for fid, entity in kb.entity_store.items():
-            self.failure_ids.append(fid)
+            if field not in self.semantic_ids:
+                continue
 
-            element_text = _safe_text(entity.get("failure_element_text"))
-            mode_text = _safe_text(entity.get("failure_mode_text"))
-            cause_text = _safe_text(entity.get("failure_cause_text"))
-            effect_text = _safe_text(entity.get("failure_effect_text"))
+            text = _safe_text(node.get("text", ""))
 
-            # cache raw text
-            self.field_text["element"][fid] = element_text
-            self.field_text["mode"][fid] = mode_text
-            self.field_text["cause"][fid] = cause_text
-            self.field_text["effect"][fid] = effect_text
+            self.semantic_ids[field].append(sid)
+            self.field_text[field][sid] = text
+            corpus[field].append(simple_tokenize(text))
 
-            corpus_element.append(simple_tokenize(element_text))
-            corpus_mode.append(simple_tokenize(mode_text))
-            corpus_cause.append(simple_tokenize(cause_text))
-            corpus_effect.append(simple_tokenize(effect_text))
+        # Debug
+        for f in corpus:
+            print(f"{f} node count:", len(corpus[f]))
+
+        # Build BM25
+        self.bm25 = {
+            f: BM25Okapi(corpus[f]) if corpus[f] else None
+            for f in corpus
+        }
+
+        print("Semantic BM25 built successfully.")
 
 
 
     # -----------------------------
     # Query
     # -----------------------------
-    def query(self, failure_entity: Dict[str, Any], top_k: int = 20):
+    def query(
+        self,
+        failure_entity: Dict[str, Any],
+        top_k: int = 30,
+    ) -> List[Dict[str, Any]]:
 
-        q_element = simple_tokenize(
-            _safe_text(failure_entity.get("failure_element_text"))
-        )
-        q_mode = simple_tokenize(
-            _safe_text(failure_entity.get("failure_mode_text"))
-        )
-        q_cause = simple_tokenize(
-            _safe_text(failure_entity.get("failure_cause_text"))
-        )
-        q_effect = simple_tokenize(
-            _safe_text(failure_entity.get("failure_effect_text"))
-        )
+        queries = {
+            "element": failure_entity.get("failure_element_text", ""),
+            "mode": failure_entity.get("failure_mode_text", ""),
+            "cause": failure_entity.get("failure_cause_text", ""),
+            "effect": failure_entity.get("failure_effect_text", ""),
+        }
 
-        # Get per-field scores
-        scores_element = self.bm25_element.get_scores(q_element)
-        scores_mode = self.bm25_mode.get_scores(q_mode)
-        scores_cause = self.bm25_cause.get_scores(q_cause)
-        scores_effect = self.bm25_effect.get_scores(q_effect)
+        weights = {
+            "element": self.weight_element,
+            "mode": self.weight_mode,
+            "cause": self.weight_cause,
+            "effect": self.weight_effect,
+        }
 
-        # Weighted fusion
-        final_scores = []
-        for i in range(len(self.failure_ids)):
-            score = (
-                self.weight_element * scores_element[i] +
-                self.weight_mode * scores_mode[i] +
-                self.weight_cause * scores_cause[i] +
-                self.weight_effect * scores_effect[i]
-            )
-            final_scores.append(score)
+        # semantic-level score aggregation
+        semantic_scores = {}
 
+        for field, query_text in queries.items():
+
+            if not query_text or self.bm25[field] is None:
+                continue
+
+            tokens = simple_tokenize(_safe_text(query_text))
+            scores = self.bm25[field].get_scores(tokens)
+
+            for idx, score in enumerate(scores):
+
+                if score <= 0:
+                    continue
+
+                sid = self.semantic_ids[field][idx]
+
+                semantic_scores.setdefault(sid, 0.0)
+                semantic_scores[sid] += weights[field] * float(score)
+
+        # rank semantic nodes
         ranked = sorted(
-            zip(self.failure_ids, final_scores),
+            semantic_scores.items(),
             key=lambda x: x[1],
             reverse=True
         )[:top_k]
 
-        return [
-            {"failure_id": fid, "score": float(score)}
-            for fid, score in ranked
-        ]
-    def query_single_field(
-    self,
-    query_text: str,
-    field: str,
-    top_k: int = 20
-):
-        """
-        Single-field BM25 retrieval.
+        results = []
+        for sid, score in ranked:
 
-        Args:
-            query_text: raw text query
-            field: one of ["element", "mode", "cause", "effect"]
-            top_k: number of results
+            # detect field from prefix if needed
+            field = sid.split(":")[0]
 
-        Returns:
-            List[{"failure_id": str, "score": float}]
-        """
-
-        tokens = simple_tokenize(_safe_text(query_text))
-
-        if field == "element":
-            scores = self.bm25_element.get_scores(tokens)
-
-        elif field == "mode":
-            scores = self.bm25_mode.get_scores(tokens)
-
-        elif field == "cause":
-            scores = self.bm25_cause.get_scores(tokens)
-
-        elif field == "effect":
-            scores = self.bm25_effect.get_scores(tokens)
-
-        else:
-            raise ValueError(
-                "field must be one of ['element', 'mode', 'cause', 'effect']"
-            )
-
-        ranked = sorted(
-            zip(self.failure_ids, scores),
-            key=lambda x: x[1],
-            reverse=True
-        )[:top_k]
-
-        return [
-            {
-                "failure_id": fid,
+            results.append({
+                "semantic_id": sid,
                 "score": float(score),
                 "field": field,
-                "text": self.field_text[field][fid],  # specific text
-            }
-            for fid, score in ranked
-        ]
+                "text": self.field_text[field][sid],
+                "failure_ids": self.kb.field_store[field][sid].get("failure_ids", [])
+            })
 
+        return results
+    def query_single_field(
+        self,
+        query_text: str,
+        field: str,
+        top_k: int = 20,
+    ) -> List[Dict[str, Any]]:
+
+        if field not in self.bm25 or self.bm25[field] is None:
+            return []
+
+        tokens = simple_tokenize(_safe_text(query_text))
+        scores = self.bm25[field].get_scores(tokens)
+
+        ranked_idx = np.argsort(scores)[::-1][:top_k]
+
+        results = []
+        for idx in ranked_idx:
+
+            sid = self.semantic_ids[field][idx]
+            score = float(scores[idx])
+
+            results.append({
+                "semantic_id": sid,
+                "score": score,
+                "field": field,
+                "text": self.field_text[field][sid],
+
+                "failure_ids": self.kb.field_store[sid].get("failure_ids", [])
+            })
+
+        return results
 
 # -----------------------------
 # Example standalone usage
 # -----------------------------
 if __name__ == "__main__":
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
     )
 
     kb = FMEAFailureKB(KB_PATH)
 
-    bm25_retriever = BM25FailureRetriever(kb)
+    bm25_retriever = BM25SemanticFieldRetriever(kb)
 
-    # Example query
+#     Example query
 #     FAILURE_ENTITY = {
 #         "failure_mode_text": "Soft-start time too long",
 #         "failure_element_text": "Motor control",
@@ -223,7 +219,8 @@ if __name__ == "__main__":
     query_text="Motor overheat",
     field="mode",
     top_k=10
-)
+    )
+    # print(results)
 
     for r in results:
         print(r)
