@@ -13,6 +13,7 @@ def failure_inference_generation_RAG(data: dict) -> dict:
     """Generate failure candidates according to GT example and structure analysis"""
     structure_analysis =  data.get("structure_analysis", "")
     gt_example = data.get("gt_example", "")
+    sentences =  data.get("sentences", "")
     llm = get_llm_backend(
         backend="openai",
         model="azure/gpt-4.1",
@@ -20,8 +21,14 @@ def failure_inference_generation_RAG(data: dict) -> dict:
         temperature=0, # deterministic output
     )
     # System prompt
-    system_prompt = """You are an expert in motor drive systems, reliability engineering,
-        and FMEA classification. Only perform infer most relevant FMEA failure chain from the given structure analysis according to the ground truth example."""
+    system_prompt = """You are a senior motor-drive system reliability engineer and FMEA architect.
+    This is NOT a semantic similarity task.
+    This is a physics-driven failure mechanism reconstruction task.
+    You must think like a system failure investigator:
+    Infer the most technically coherent and causally valid failure graph.
+    Output strictly valid JSON according to the required schema.
+    No explanations outside JSON.
+    """
     #     # Build a chat prompt template with: system + user messages
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -29,6 +36,7 @@ def failure_inference_generation_RAG(data: dict) -> dict:
     ])
     formatted_prompt = prompt.invoke({
         "gt_example": gt_example,
+        "8D_sentences": sentences,
         "structure_analysis": structure_analysis,
     })
         # Call LLM and parse output

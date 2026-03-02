@@ -6,11 +6,11 @@ import chromadb
 from chromadb.utils import embedding_functions
 from pathlib import Path
 
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Tuple
 from collections import defaultdict
 from sentence_transformers import CrossEncoder
 
-from entity import structure_input_powertrain
+from .entity import structure_input_powertrain
 
 def _get_sentence_collection(
     persist_dir: Union[str, Path],
@@ -526,119 +526,141 @@ def cross_encoder_rerank(query_text: str, hits: List[Dict], top_k: int = 20):
 def query_sentence_kb_from_structure(
     persist_dir: Union[str, Path],
     structure_input: Dict[str, Any],
-    n_results_per_query: int = 15,
+    n_results_per_query: int = 10,
     top_k: int = 20,
-    similarity_threshold: float = 0.35,
+    similarity_threshold: float = 0.4,
     collection_name: str = "sentences",
 
-    # ---- where filters ----
-    productPnID: Optional[int] = None,
+    # -------- where filters --------
+    productPnID: Optional[Union[str, List[str]]] = None,
     product_domain: Optional[Union[str, List[str]]] = None,
     case_id: Optional[str] = None,
     source_type: Optional[Union[str, List[str]]] = None,
     extra_where: Optional[Dict[str, Any]] = None,
 
+    # -------- role separation --------
+    use_role_separation: bool = True,
+
     include: Optional[List[str]] = None,
 ):
     """
     Multi-query semantic search from structure input.
-    Uses pure semantic similarity = 1 - distance.
-    Accumulates similarity score per sentence.
-    Supports where filters (productPnID etc.).
+
+    - Pure semantic similarity = 1 - distance
+    - Accumulate similarity per sentence
+    - Optional role separation:
+        * element/mode/effect → sentence_role="failure_sentence"
+        * cause → sentence_role="cause_sentence"
+    - Supports where filters (productPnID etc.)
     """
 
-    # -------------------------------------------------
-    # 1️⃣ Load collection
-    # -------------------------------------------------
     col = _get_sentence_collection(persist_dir, collection_name)
 
     if include is None:
         include = ["documents", "metadatas", "distances"]
 
     # -------------------------------------------------
-    # 2️⃣ Build WHERE filter
+    # 1️⃣ Prepare query groups
     # -------------------------------------------------
-    where = _build_sentence_where(
-        productPnID=productPnID,
-        product_domain=product_domain,
-        case_id=case_id,
-        source_type=source_type,
-        extra_where=extra_where,
-    )
-
-    # -------------------------------------------------
-    # 3️⃣ Extract query texts from structure
-    # -------------------------------------------------
-    query_texts: List[str] = []
+    failure_queries: List[str] = []
+    cause_queries: List[str] = []
 
     for node in structure_input.get("nodes", []):
         if node.get("failure_element"):
-            query_texts.append(node["failure_element"])
+            failure_queries.append(node["failure_element"])
 
-        query_texts.extend(node.get("modes", []))
-        query_texts.extend(node.get("causes", []))
-        query_texts.extend(node.get("effects", []))
+        failure_queries.extend(node.get("modes", []))
+        failure_queries.extend(node.get("effects", []))
+        cause_queries.extend(node.get("causes", []))
 
-    # 去重 + 清理
-    query_texts = list(
-        set(q.strip() for q in query_texts if isinstance(q, str) and q.strip())
+    # 清理 + 去重
+    failure_queries = list(
+        set(q.strip() for q in failure_queries if isinstance(q, str) and q.strip())
+    )
+    cause_queries = list(
+        set(q.strip() for q in cause_queries if isinstance(q, str) and q.strip())
     )
 
-    if not query_texts:
-        return []
-
     # -------------------------------------------------
-    # 4️⃣ sentence_id -> accumulated score
+    # 2️⃣ sentence_id -> accumulated score
     # -------------------------------------------------
     candidate_scores: Dict[str, Dict[str, Any]] = {}
 
     # -------------------------------------------------
-    # 5️⃣ Loop each query text
+    # 3️⃣ 内部函数：执行单组查询
     # -------------------------------------------------
-    for query_text in query_texts:
+    def _run_queries(query_texts: List[str], sentence_role_value: Optional[str]):
 
-        res = col.query(
-            query_texts=[query_text],
-            n_results=n_results_per_query,
-            where=where if where else None,
-            include=include,
+        for query_text in query_texts:
+
+            # build where dynamically
+            where = _build_sentence_where(
+                productPnID=productPnID,
+                product_domain=product_domain,
+                case_id=case_id,
+                source_type=source_type,
+                extra_where=extra_where,
+                sentence_role=sentence_role_value if use_role_separation else None,
+            )
+
+            res = col.query(
+                query_texts=[query_text],
+                n_results=n_results_per_query,
+                where=where if where else None,
+                include=include,
+            )
+
+            ids = (res.get("ids", [[]]) or [[]])[0] or []
+            docs = (res.get("documents", [[]]) or [[]])[0] or []
+            metas = (res.get("metadatas", [[]]) or [[]])[0] or []
+            dists = (res.get("distances", [[]]) or [[]])[0] or []
+
+            for idx, (sid, dist) in enumerate(zip(ids, dists)):
+
+                try:
+                    similarity = max(0.0, 1.0 - float(dist))
+                except Exception:
+                    continue
+
+                if similarity < similarity_threshold:
+                    continue
+
+                if sid not in candidate_scores:
+                    candidate_scores[sid] = {
+                        "score": 0.0,
+                        "text": docs[idx] if idx < len(docs) else "",
+                        "metadata": metas[idx] if idx < len(metas) else {},
+                        "matched_queries": []
+                    }
+
+                candidate_scores[sid]["score"] += similarity
+
+                candidate_scores[sid]["matched_queries"].append({
+                    "query_text": query_text,
+                    "similarity": round(similarity, 4),
+                    "role": sentence_role_value if use_role_separation else "any"
+                })
+
+    # -------------------------------------------------
+    # 4️⃣ Run failure queries
+    # -------------------------------------------------
+    if failure_queries:
+        _run_queries(
+            failure_queries,
+            sentence_role_value="failure_sentence"
         )
 
-        ids = (res.get("ids", [[]]) or [[]])[0] or []
-        docs = (res.get("documents", [[]]) or [[]])[0] or []
-        metas = (res.get("metadatas", [[]]) or [[]])[0] or []
-        dists = (res.get("distances", [[]]) or [[]])[0] or []
-
-        for idx, (sid, dist) in enumerate(zip(ids, dists)):
-
-            try:
-                similarity = max(0.0, 1.0 - float(dist))
-            except Exception:
-                continue
-
-            # threshold
-            if similarity < similarity_threshold:
-                continue
-
-            if sid not in candidate_scores:
-                candidate_scores[sid] = {
-                    "score": 0.0,
-                    "text": docs[idx] if idx < len(docs) else "",
-                    "metadata": metas[idx] if idx < len(metas) else {},
-                    "matched_queries": []
-                }
-
-            # 累加 similarity
-            candidate_scores[sid]["score"] += similarity
-
-            # 记录匹配的 query
-            candidate_scores[sid]["matched_queries"].append({
-                "query_text": query_text,
-                "similarity": round(similarity, 4),
-            })
+    # -------------------------------------------------
+    # 5️⃣ Run cause queries
+    # -------------------------------------------------
+    if cause_queries:
+        _run_queries(
+            cause_queries,
+            sentence_role_value="cause_sentence"
+        )
 
     # -------------------------------------------------
-    # 6️⃣ Rerank by accumulated score
+    # 6️⃣ Rerank
     # -------------------------------------------------
     ranked = sorted(
         candidate_scores.items(),
@@ -660,6 +682,119 @@ def query_sentence_kb_from_structure(
         })
 
     return results
+
+def build_llm_case_context(
+    sentence_results: List[Dict[str, Any]],
+    unknown_case_label: str = "unknown_case",
+    sort_cases_by_sentence_count: bool = True,
+    max_cases: Optional[int] = None,
+    max_sentences_per_case: Optional[int] = None,
+    dedup_within_case: bool = True,
+    truncate_text_chars: Optional[int] = None,
+) -> str:
+    """
+    Integrated function:
+    1. Group sentences by metadata.case_id
+    2. Keep only sentence_id + text
+    3. Format into LLM-friendly structured block
+
+    sentence_results item example:
+        {
+            "sentence_id": "...",
+            "text": "...",
+            "metadata": {"case_id": "..."}
+        }
+    """
+
+    if not sentence_results:
+        return ""
+
+    # -------------------------------------------------
+    # 1️⃣ Group by case_id
+    # -------------------------------------------------
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+
+    for r in sentence_results:
+        sid = str(r.get("sentence_id", "")).strip()
+        text = str(r.get("text", "")).strip()
+
+        if not sid or not text:
+            continue
+
+        meta = r.get("metadata") or {}
+        case_id = None
+        if isinstance(meta, dict):
+            case_id = meta.get("case_id")
+
+        case_id = str(case_id).strip() if case_id else unknown_case_label
+
+        grouped.setdefault(case_id, []).append({
+            "sentence_id": sid,
+            "text": text
+        })
+
+    if not grouped:
+        return ""
+
+    # -------------------------------------------------
+    # 2️⃣ Sort case order
+    # -------------------------------------------------
+    case_ids = list(grouped.keys())
+
+    if sort_cases_by_sentence_count:
+        case_ids.sort(key=lambda cid: len(grouped[cid]), reverse=True)
+    else:
+        case_ids.sort()
+
+    if max_cases is not None:
+        case_ids = case_ids[: max(0, int(max_cases))]
+
+    # -------------------------------------------------
+    # 3️⃣ Helper: truncate
+    # -------------------------------------------------
+    def _truncate(s: str) -> str:
+        if truncate_text_chars is None:
+            return s
+        n = int(truncate_text_chars)
+        if n <= 0 or len(s) <= n:
+            return s
+        return s[: n - 1].rstrip() + "…"
+
+    # -------------------------------------------------
+    # 4️⃣ Build final prompt block
+    # -------------------------------------------------
+    output_lines: List[str] = []
+
+    for idx, cid in enumerate(case_ids, start=1):
+
+        sentences = grouped[cid]
+
+        # optional de-dup inside case
+        if dedup_within_case:
+            seen: set[Tuple[str, str]] = set()
+            unique = []
+            for s in sentences:
+                key = (s["sentence_id"], s["text"])
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(s)
+            sentences = unique
+
+        if max_sentences_per_case is not None:
+            sentences = sentences[: max(0, int(max_sentences_per_case))]
+
+        output_lines.append(f"# Case {idx}: {cid}")
+        output_lines.append(f"- Sentence count: {len(sentences)}")
+
+        for i, s in enumerate(sentences, start=1):
+            sid = s["sentence_id"]
+            text = _truncate(s["text"])
+            output_lines.append(f"  {i}. [{sid}] {text}")
+
+        output_lines.append("")  # blank line between cases
+
+    return "\n".join(output_lines).strip()
+
 
 if __name__ == "__main__":
 
@@ -693,14 +828,17 @@ if __name__ == "__main__":
     persist_dir=KB_PATH,
     structure_input=structure_input_powertrain,
     n_results_per_query=5,
-    top_k=10,
-    similarity_threshold=0.45,
+    top_k=15,
+    similarity_threshold=0.3,
     # WHERE 过滤
     productPnID=133427,
+    use_role_separation=False
 )
-    for r in results:
-        print("Sentence ID:", r["sentence_id"])
-        print("Total Score:", r["total_score"])
-        print("Text:", r["text"])
-        print("Matched Queries:", r["matched_queries"])
-        print("-" * 70)
+    print(build_llm_case_context(results))
+    
+    # for r in results:
+    #     print("Sentence ID:", r["sentence_id"])
+    #     print("Total Score:", r["total_score"])
+    #     print("Text:", r["text"])
+    #     print("Matched Queries:", r["matched_queries"])
+    #     print("-" * 70)

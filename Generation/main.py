@@ -1,11 +1,13 @@
 from .LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE, failure_inference_generation_RAG_FILL
 from Retriever.SA_query import build_failure_chains_from_structure,generate_failure_chains_from_structure
-from typing import Dict, List, Optional, Any
+from Retriever.sentence_query_tools import query_sentence_kb_from_structure
+from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from langsmith import traceable
 from pprint import pprint
 import json
 import re
+
 
 def build_structure_analysis_input(structure_input: Dict,):
     """
@@ -274,6 +276,180 @@ def build_fill_entity(
     return json.dumps(llm_entities, indent=2, ensure_ascii=False)
 
 
+def format_sentences_grouped_by_case_id(
+    sentence_results: List[Dict[str, Any]],
+    unknown_case_label: str = "unknown_case",
+    max_cases: Optional[int] = None,
+    max_sentences_per_case: Optional[int] = None,
+) -> str:
+    """
+    Reformat sentence retrieval output for LLM prompt:
+    - keep only sentence_id + text
+    - group by metadata.case_id
+    - return a prompt-friendly string
+
+    sentence_results item example:
+      {
+        "sentence_id": "...",
+        "text": "...",
+        "metadata": {"case_id": "...", ...},
+        ...
+      }
+    """
+
+    # ---- group by case_id ----
+    grouped: Dict[str, List[Tuple[str, str]]] = {}
+
+    for r in sentence_results or []:
+        sid = (r.get("sentence_id") or "").strip()
+        text = (r.get("text") or "").strip()
+        if not sid or not text:
+            continue
+
+        meta = r.get("metadata") or {}
+        case_id = meta.get("case_id") if isinstance(meta, dict) else None
+        case_id = str(case_id).strip() if case_id is not None else ""
+        if not case_id:
+            case_id = unknown_case_label
+
+        grouped.setdefault(case_id, []).append((sid, text))
+
+    if not grouped:
+        return ""
+
+    # ---- optionally limit cases by "how many sentences they have" ----
+    case_ids = sorted(grouped.keys(), key=lambda cid: len(grouped[cid]), reverse=True)
+    if max_cases is not None:
+        case_ids = case_ids[: max(0, int(max_cases))]
+
+    # ---- build prompt text ----
+    lines: List[str] = []
+    for cid in case_ids:
+        sents = grouped[cid]
+        if max_sentences_per_case is not None:
+            sents = sents[: max(0, int(max_sentences_per_case))]
+
+        lines.append(f"## case_id: {cid}")
+        for sid, text in sents:
+            # 一行一个句子，便于LLM引用
+            lines.append(f"- [{sid}] {text}")
+        lines.append("")  # blank line between cases
+
+    return "\n".join(lines).strip()
+
+
+def build_llm_case_context(
+    sentence_results: List[Dict[str, Any]],
+    unknown_case_label: str = "unknown_case",
+    sort_cases_by_sentence_count: bool = True,
+    max_cases: Optional[int] = None,
+    max_sentences_per_case: Optional[int] = None,
+    dedup_within_case: bool = True,
+    truncate_text_chars: Optional[int] = None,
+) -> str:
+    """
+    Integrated function:
+    1. Group sentences by metadata.case_id
+    2. Keep only sentence_id + text
+    3. Format into LLM-friendly structured block
+
+    sentence_results item example:
+        {
+            "sentence_id": "...",
+            "text": "...",
+            "metadata": {"case_id": "..."}
+        }
+    """
+
+    if not sentence_results:
+        return ""
+
+    # -------------------------------------------------
+    # 1️⃣ Group by case_id
+    # -------------------------------------------------
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+
+    for r in sentence_results:
+        sid = str(r.get("sentence_id", "")).strip()
+        text = str(r.get("text", "")).strip()
+
+        if not sid or not text:
+            continue
+
+        meta = r.get("metadata") or {}
+        case_id = None
+        if isinstance(meta, dict):
+            case_id = meta.get("case_id")
+
+        case_id = str(case_id).strip() if case_id else unknown_case_label
+
+        grouped.setdefault(case_id, []).append({
+            "sentence_id": sid,
+            "text": text
+        })
+
+    if not grouped:
+        return ""
+
+    # -------------------------------------------------
+    # 2️⃣ Sort case order
+    # -------------------------------------------------
+    case_ids = list(grouped.keys())
+
+    if sort_cases_by_sentence_count:
+        case_ids.sort(key=lambda cid: len(grouped[cid]), reverse=True)
+    else:
+        case_ids.sort()
+
+    if max_cases is not None:
+        case_ids = case_ids[: max(0, int(max_cases))]
+
+    # -------------------------------------------------
+    # 3️⃣ Helper: truncate
+    # -------------------------------------------------
+    def _truncate(s: str) -> str:
+        if truncate_text_chars is None:
+            return s
+        n = int(truncate_text_chars)
+        if n <= 0 or len(s) <= n:
+            return s
+        return s[: n - 1].rstrip() + "…"
+
+    # -------------------------------------------------
+    # 4️⃣ Build final prompt block
+    # -------------------------------------------------
+    output_lines: List[str] = []
+
+    for idx, cid in enumerate(case_ids, start=1):
+
+        sentences = grouped[cid]
+
+        # optional de-dup inside case
+        if dedup_within_case:
+            seen: set[Tuple[str, str]] = set()
+            unique = []
+            for s in sentences:
+                key = (s["sentence_id"], s["text"])
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(s)
+            sentences = unique
+
+        if max_sentences_per_case is not None:
+            sentences = sentences[: max(0, int(max_sentences_per_case))]
+
+        output_lines.append(f"# Case {idx}: {cid}")
+        output_lines.append(f"- Sentence count: {len(sentences)}")
+
+        for i, s in enumerate(sentences, start=1):
+            sid = s["sentence_id"]
+            text = _truncate(s["text"])
+            output_lines.append(f"  {i}. [{sid}] {text}")
+
+        output_lines.append("")  # blank line between cases
+
+    return "\n".join(output_lines).strip()
+
 
 # def save_failure_candidates_to_json(result: dict, output_path: Path):
 #     """
@@ -290,7 +466,8 @@ def build_fill_entity(
 @traceable(name="RAG")
 def RAG_pipeline(
     structure_input: Dict,
-    KB_PATH: str,
+    failure_KB_PATH: str,
+    sentence_KB_PATH: str,
     top_n: int = 25,
     top_k_per_field: int = 10,
     require_cause: bool = False,
@@ -303,15 +480,20 @@ def RAG_pipeline(
     object: str = "powertrain",
 ):
     structure_input_json = json.dumps(structure_input, ensure_ascii=False, indent=2)
+    product_pnID = structure_input.get("product_pnID")
+    print(f"PNID:{product_pnID}")
     obj = _safe_filename(object)
-
+    if product_pnID !=None:
+        sentences =  query_sentence_kb_from_structure(persist_dir=sentence_KB_PATH,structure_input=structure_input, use_role_separation=False,
+                                                      productPnID=product_pnID,top_k=15,similarity_threshold=0.3,n_results_per_query=5)
+        structred_sentences = build_llm_case_context(sentences)
     # To store the retrieval results
     retrieval_payload = None
 
     if RAG:
         if not FILL:
             similar_failure = generate_failure_chains_from_structure(
-                persist_dir=KB_PATH,
+                persist_dir=failure_KB_PATH,
                 structure_input=structure_input,
                 top_k_per_field=top_k_per_field,
                 top_n=top_n,
@@ -320,8 +502,9 @@ def RAG_pipeline(
                 require_cause_plus=require_cause_plus,
                 weight_element=weight_element,
                 replace=False,
+                hybrid_score=False
             )
-            retrieval_payload = similar_failure  
+            retrieval_payload = similar_failure
 
             failure_example = build_ground_truth_input(
                 similar_failure,
@@ -334,17 +517,18 @@ def RAG_pipeline(
                     "data": {
                         "structure_analysis": structure_input_json,
                         "gt_example": failure_example,
+                        "sentences": structred_sentences,
                     }
                 }
             )
 
             OUTPUT_PATH = Path(
-                fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_{obj}.json"
+                fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\single_test\RAG_{obj}.json"
             )
 
         else:
             semi_candidates = generate_failure_chains_from_structure(
-                persist_dir=KB_PATH,
+                persist_dir=failure_KB_PATH,
                 structure_input=structure_input,
                 top_k_per_field=top_k_per_field,
                 top_n=top_n,
@@ -371,7 +555,7 @@ def RAG_pipeline(
                 }
             )
             OUTPUT_PATH = Path(
-                fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_FILL_{obj}.json"
+                fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\single_test\RAG_FILL_{obj}.json"
             )
 
     else:
@@ -383,7 +567,7 @@ def RAG_pipeline(
             }
         )
         OUTPUT_PATH = Path(
-            fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_PURE_{obj}.json"
+            fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\single_test\PURE_{obj}.json"
         )
 
     # -------- 序列化工具：避免 LangChain / Pydantic 对象无法 json.dump ----------
@@ -428,7 +612,6 @@ def RAG_pipeline(
             "require_cause_plus": require_cause_plus,
             "weight_element": weight_element,
             "target_n": target_n,
-            "KB_PATH": str(KB_PATH),
         },
         "structure_analysis": structure_input,           # 原始结构输入
         "retrieval_candidates": _to_jsonable(retrieval_payload),  # ✅ similar_failure / semi_candidates
@@ -442,8 +625,11 @@ if __name__ == "__main__":
     # -----------------------------------------------------
     # 1) KB Path
     # -----------------------------------------------------
-    KB_PATH = Path(
+    Failure_KB_PATH = Path(
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
+    )
+    Sentence_KB_PATH = Path(
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\sentence_kb"
     )
 
     # -----------------------------------------------------
@@ -451,6 +637,7 @@ if __name__ == "__main__":
     # -----------------------------------------------------
     structure_input_powertrain = {
         "product_domain": "motor_drives",
+        "product_pnID": 133427,
         "nodes": [
             {
                 "element_id": "E1",
@@ -491,16 +678,16 @@ if __name__ == "__main__":
                    "Does not shift gear",
                     "Incorrect gear shift",
                     "Incorrect cadence (offset)",
-                    # "Unstable cadence setting",
-                    # "Incorrect cadence (fixed gear ratio)",
-                    # "Incorrect ratio (offset)",
-                    # "Unstable ratio setting",
-                    # "Does not enter limp home mode",
-                    # "Sets wrong gear ratio",
-                    # "Gear ratio drifts when battery is empty",
-                    # "Firmware update not possible/fails",
-                    # "Device bricked",
-                    # "Update takes too much time (>5 minutes)",
+                    "Unstable cadence setting",
+                    "Incorrect cadence (fixed gear ratio)",
+                    "Incorrect ratio (offset)",
+                    "Unstable ratio setting",
+                    "Does not enter limp home mode",
+                    "Sets wrong gear ratio",
+                    "Gear ratio drifts when battery is empty",
+                    "Firmware update not possible/fails",
+                    "Device bricked",
+                    "Update takes too much time (>5 minutes)",
                     "Too much noise",
                 ]
             }
@@ -548,8 +735,8 @@ if __name__ == "__main__":
         }
     ]
 }
-    RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,object = "powertrain4",
-                 target_n = 30, weight_element = 0.2, min_similarity=0.45, RAG = False, FILL = False)
+    RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH, top_k_per_field=30, top_n=50,object = "powertrain_sentence1",
+                 target_n = 20, weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
 
     # -----------------------------------------------------
     # 3) Batch Settings

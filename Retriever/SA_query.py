@@ -735,6 +735,7 @@ if  __name__ == "__main__":
         top_n=100,
         replace=True,
         hybrid_score=False,
+        source_type="8D",
     )
     results = attach_ppl_scores(results)
 

@@ -1,56 +1,55 @@
-failure_inference_prompt_RAG = failure_inference_prompt_RAG = """
+failure_inference_prompt_RAG = """
 =====================================================
 TASK
 =====================================================
 
-You are a senior FMEA domain expert.
+You are a senior motor-drive system reliability expert and FMEA architect.
 
-Your task is to construct the MOST PHYSICALLY AND LOGICALLY
-CONSISTENT FAILURE GRAPH based on the provided Structure Analysis and the ground truth examples which is semantic similar to the query.
+Your task is to construct the MOST PHYSICALLY AND CAUSALLY
+CONSISTENT FAILURE GRAPH using:
 
-This is a STRUCTURE-DRIVEN reconstruction task.
+1) Structure Analysis (PRIMARY CONSTRAINT)
+2) 8D actual case sentences (REAL-WORLD EVIDENCE)
+3) Ground Truth similar examples (REFERENCE PATTERNS)
 
-The PRIMARY objective is:
+This is a STRUCTURE-DRIVEN ENGINEERING RECONSTRUCTION task.
 
-→ Use Structure Analysis to generate the most technically coherent
-  and causally valid FMEA failure chains.
-
-Ground Truth (GT) examples are IMPORTANT to infer your reasoning:
-They serve as validation and enhancement references,
+Your goal is NOT semantic similarity.
+Your goal is PHYSICS-CONSISTENT FAILURE MECHANISM INFERENCE.
 
 
 =====================================================
-CORE PRINCIPLE (STRUCTURE DOMINANCE)
+STRUCTURE DOMINANCE (HARD CONSTRAINT)
 =====================================================
 
-1. Structure Analysis defines:
-   - available elements
-   - possible failure modes
-   - possible causes
-   - possible effects
+Structure Analysis strictly defines:
 
-2. ALL generated failure chains MUST use only Structure fields.
+- failure_element
+- failure_function
+- failure_mode (triggered by cause)
+- failure_cause (Hardware / Mechanics / Software / Others)
+- failure_effect (resulting from mode)
 
-3. Your first priority is:
-   - Physical correctness
-   - Motor drive engineering logic
-   - Causal consistency
+ABSOLUTE RULE:
 
-4. GT examples are used to:
-   - Infer the possible failure entity
-   - Validate plausibility
-   - Reinforce known patterns
-   - Increase confidence level
+- You MUST use ONLY entities explicitly present in Structure Analysis.
+- You MUST NOT invent new elements, modes, causes, functions, or effects.
+- If something appears in 8D but not in Structure → it can only be used as reasoning evidence.
 
-If GT contradicts strong structural logic:
+
+Priority Order:
+
+Structure Physics  >  8D Evidence  >  GT Similarity
+
+If 8D or GT contradict structural logic:
 → Follow Structure.
 
 
 =====================================================
-FAILURE GRAPH OBJECTIVE
+FAILURE GRAPH DEFINITION (STRICT CAUSAL ORDER)
 =====================================================
 
-You must construct a failure graph consisting of:
+Each failure chain MUST strictly follow:
 
 failure_element
    → failure_function
@@ -58,57 +57,94 @@ failure_element
          → failure_effect
             ← caused by ← failure_cause
 
-Requirements:
+Causality rules:
 
-- Cause MUST physically produce Mode
-- Mode MUST realistically lead to Effect
-- All chains must be motor-drive related
-- Avoid trivial or redundant combinations
-- Prefer physically meaningful chains over syntactic matches
+1) failure_cause physically produces failure_mode
+2) failure_mode physically leads to failure_effect
+3) failure_effect must be a realistic system-level or functional consequence
+4) All links must obey motor-drive engineering logic
+
+
+If any causal link is weak or speculative → discard the chain.
+
+
+=====================================================
+HOW TO USE 8D SENTENCES
+=====================================================
+
+8D sentences represent observed field symptoms.
+
+You must:
+
+1) Extract observable symptoms from 8D sentences.
+2) Interpret what physical malfunction could explain that symptom.
+3) Map that malfunction to a VALID Structure-based:
+      cause → mode → effect chain.
+
+IMPORTANT:
+
+- 8D describes WHAT happened.
+- Structure defines WHAT is possible.
+- You must infer HOW it happened.
+- 8D must NEVER introduce new failure entities.
+
+
+If a candidate chain explains an 8D symptom:
+→ Increase its confidence.
+
+If it does not:
+→ It is still allowed if structurally strong.
 
 
 =====================================================
 GRAPH CONSTRUCTION STRATEGY
 =====================================================
 
-Step 1 — Structure-First Chain Generation
+Step 1 — Generate Structurally Valid Chains
+-------------------------------------------
+
+For each failure_element:
+
+- Enumerate possible (cause → mode → effect) combinations.
+- Keep ONLY physically consistent combinations.
+- Discard semantically matched but physically weak chains.
+
+Step 2 — Enforce Engineering Plausibility
 -----------------------------------------
 
-For each element in Structure:
+For each candidate:
 
-- Evaluate all possible (cause → mode → effect) combinations.
-- Select only those that are physically consistent.
-- Discard illogical chains.
+- Check actuator behavior
+- Check motor-drive control logic
+- Check signal / sensor / power relationships
+- Ensure realistic fault propagation
 
-Step 2 — Optimize Graph Coherence
-----------------------------------
+If mechanism explanation is unclear → remove it.
 
-- Avoid duplicate (mode + cause + effect) combinations.
-- Avoid overly similar chains.
-- Prefer diverse but realistic failure mechanisms.
+Step 3 — Align with 8D Evidence
+--------------------------------
 
-Step 3 — GT Validation (Secondary)
------------------------------------
+- Does this chain explain one or more observed symptoms?
+- If yes → increase confidence
+- If partially → medium confidence
+- If no → low confidence (but allowed)
 
-Compare generated chains against GT examples.
+Step 4 — Validate Against GT (Secondary)
+-----------------------------------------
 
-If a chain matches a GT entity:
-    → Mark as "complete_entity"
-If partially aligned:
-    → "partial_pattern"
-If composed from multiple GT:
-    → "composed_from_multiple"
-If no GT alignment:
-    → "no_direct_gt"
+Use GT examples ONLY to:
 
-GT must NEVER override structural physics.
+- Confirm known failure patterns
+- Increase plausibility confidence
+
+Never copy GT directly without structural validation.
 
 
 =====================================================
 GT SUPPORT CLASSIFICATION
 =====================================================
 
-"gt_support_type" must be one of:
+gt_support_type must be:
 
 - "complete_entity"
 - "composed_from_multiple"
@@ -116,7 +152,7 @@ GT SUPPORT CLASSIFICATION
 - "no_direct_gt"
 
 support_failure_id:
-- [] if no GT
+- [] if none
 - list of GT IDs if aligned
 
 
@@ -124,14 +160,18 @@ support_failure_id:
 CONFIDENCE LEVEL
 =====================================================
 
-- "high"
-    → Strong structural logic + direct GT match
+high:
+  - Strong structural causality
+  - Explains 8D symptom
+  - Supported by GT
 
-- "medium"
-    → Strong structural logic + partial GT support
+medium:
+  - Strong structural causality
+  - Partially supported by 8D or GT
 
-- "low"
-    → Structurally valid but no GT reference
+low:
+  - Structurally valid
+  - Weak or no external support
 
 
 =====================================================
@@ -140,13 +180,17 @@ INFERENCE LIMITATIONS
 
 Allowed:
 - Engineering-consistent reasoning
-- Cross-element physics reuse
-- Known motor-drive failure mechanisms
+- Known motor-drive failure propagation mechanisms
+- Control-loop and actuator reasoning
+- Hardware-software interaction logic
 
-NOT allowed:
-- Speculative or unrealistic behavior
-- Violating physical causality
+Not Allowed:
+- Speculative physics
 - Random structure combinations
+- GT copying
+- Creating new entities not in Structure
+- Violating causal order
+
 
 =====================================================
 OUTPUT COUNT REQUIREMENT (MANDATORY)
@@ -156,11 +200,10 @@ You MUST output exactly 25 failure_candidates.
 
 - If more candidates are possible, select the best 25 by:
   1) strongest structural causality
-  2) highest GT support
-  3) highest diversity (different mode/cause/effect)
+  2) strongest 8D explanation capability
+  3) highest GT support
+  4) highest diversity (different mode/cause/effect)
 
-- If fewer than 15 valid candidates exist using Structure Analysis:
-  output as many as possible and explain in inference_reason why no more valid chains exist.
 
 
 =====================================================
@@ -169,13 +212,17 @@ GROUND TRUTH SIMILAR EXAMPLE
 
 {gt_example}
 
+=====================================================
+Relevant 8D actual case sentences
+=====================================================
+
+{8D_sentences}
 
 =====================================================
 STRUCTURE ANALYSIS (JSON)
 =====================================================
 
 {structure_analysis}
-
 
 =====================================================
 OUTPUT FORMAT (STRICT JSON ONLY)
