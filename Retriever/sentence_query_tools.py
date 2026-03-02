@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Union, Tuple
 from collections import defaultdict
 from sentence_transformers import CrossEncoder
+import json
+import re
 
 from .entity import structure_input_powertrain
 
@@ -795,6 +797,126 @@ def build_llm_case_context(
 
     return "\n".join(output_lines).strip()
 
+def build_8d_failure_context_from_grouped(
+    grouped_text: str,
+    entity_store_path: Path,
+    max_cases: Optional[int] = None,
+    max_failures_per_case: Optional[int] = None,
+) -> str:
+    """
+    Input:
+        grouped_text: output of build_llm_case_context()
+    
+    Steps:
+        1. Parse case_ids from grouped_text
+        2. Load entity_store.json
+        3. Filter 8D entities by file_name == case_id
+        4. Aggregate as:
+               1 element + 1 mode + 1 effect + n causes
+        5. Format into LLM-friendly block
+    """
+
+    if not grouped_text.strip():
+        return ""
+
+    # -------------------------------------------------
+    # 1️⃣ Parse case_ids from grouped_text
+    # Format line example:
+    # "# Case 1: 8D6782170310R02 - Motor noise"
+    # -------------------------------------------------
+    case_pattern = r"# Case \d+:\s*(.+)"
+    case_ids = re.findall(case_pattern, grouped_text)
+
+    if not case_ids:
+        return ""
+
+    if max_cases is not None:
+        case_ids = case_ids[: max(0, int(max_cases))]
+
+    # -------------------------------------------------
+    # 2️⃣ Load entity_store
+    # -------------------------------------------------
+    with entity_store_path.open("r", encoding="utf-8") as f:
+        entity_store = json.load(f)
+
+    # -------------------------------------------------
+    # 3️⃣ Collect 8D failures
+    # -------------------------------------------------
+    grouped_by_case: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    # structure:
+    # case_name -> failure_id -> failure_data
+
+    for entity in entity_store.values():
+
+        if entity.get("source_type") != "8D":
+            continue
+
+        file_name = entity.get("file_name")
+        if file_name not in case_ids:
+            continue
+
+        failure_id = entity.get("failure_id")
+        if not failure_id:
+            continue
+
+        grouped_by_case.setdefault(file_name, {})
+
+        if failure_id not in grouped_by_case[file_name]:
+            grouped_by_case[file_name][failure_id] = {
+                "element": entity.get("failure_element_text", ""),
+                "mode": entity.get("failure_mode_text", ""),
+                "effect": entity.get("failure_effect_text", ""),
+                "causes": []
+            }
+
+        cause_text = entity.get("failure_cause_text")
+        if cause_text:
+            grouped_by_case[file_name][failure_id]["causes"].append(cause_text)
+
+    if not grouped_by_case:
+        return ""
+
+    # -------------------------------------------------
+    # 4️⃣ Build formatted output
+    # -------------------------------------------------
+    output_lines = []
+    case_index = 1
+
+    for case_name in case_ids:
+
+        failures_dict = grouped_by_case.get(case_name)
+        if not failures_dict:
+            continue
+
+        output_lines.append(f"# 8D Case {case_index}: {case_name}")
+        output_lines.append("")
+
+        failures = list(failures_dict.values())
+
+        if max_failures_per_case is not None:
+            failures = failures[: max(0, int(max_failures_per_case))]
+
+        for f_idx, failure in enumerate(failures, start=1):
+
+            output_lines.append(f"  Failure {f_idx}:")
+            output_lines.append(f"    Element: {failure['element']}")
+            output_lines.append(f"    Mode: {failure['mode']}")
+
+            if failure["effect"]:
+                output_lines.append(f"    Effect: {failure['effect']}")
+
+            if failure["causes"]:
+                output_lines.append(f"    Causes:")
+                for c in failure["causes"]:
+                    output_lines.append(f"      - {c}")
+
+            output_lines.append("")
+
+        output_lines.append("")
+        case_index += 1
+
+    return "\n".join(output_lines).strip()
+
 
 if __name__ == "__main__":
 
@@ -834,7 +956,20 @@ if __name__ == "__main__":
     productPnID=133427,
     use_role_separation=False
 )
-    print(build_llm_case_context(results))
+    
+    grouped = build_llm_case_context(results)
+
+    entity_store_path = Path(
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb\entity_store.json"
+)
+    eight_d_context = build_8d_failure_context_from_grouped(
+    grouped_text= grouped,
+    entity_store_path=entity_store_path,
+    max_cases=3,
+    max_failures_per_case=3
+)
+    print(eight_d_context)
+
     
     # for r in results:
     #     print("Sentence ID:", r["sentence_id"])

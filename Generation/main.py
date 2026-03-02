@@ -1,13 +1,15 @@
 from .LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE, failure_inference_generation_RAG_FILL
 from Retriever.SA_query import build_failure_chains_from_structure,generate_failure_chains_from_structure
-from Retriever.sentence_query_tools import query_sentence_kb_from_structure
+from Retriever.sentence_query_tools import query_sentence_kb_from_structure,build_8d_failure_context_from_grouped
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 from langsmith import traceable
 from pprint import pprint
 import json
 import re
-
+ENTITY_PATH = Path(
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb\entity_store.json"
+)
 
 def build_structure_analysis_input(structure_input: Dict,):
     """
@@ -481,16 +483,17 @@ def RAG_pipeline(
 ):
     structure_input_json = json.dumps(structure_input, ensure_ascii=False, indent=2)
     product_pnID = structure_input.get("product_pnID")
-    print(f"PNID:{product_pnID}")
     obj = _safe_filename(object)
-    if product_pnID !=None:
-        sentences =  query_sentence_kb_from_structure(persist_dir=sentence_KB_PATH,structure_input=structure_input, use_role_separation=False,
-                                                      productPnID=product_pnID,top_k=15,similarity_threshold=0.3,n_results_per_query=5)
-        structred_sentences = build_llm_case_context(sentences)
+   
     # To store the retrieval results
     retrieval_payload = None
 
     if RAG:
+        if product_pnID !=None:
+            sentences =  query_sentence_kb_from_structure(persist_dir=sentence_KB_PATH,structure_input=structure_input, use_role_separation=False,
+                                                        productPnID=product_pnID,top_k=15,similarity_threshold=0.3,n_results_per_query=5)
+            structred_sentences = build_llm_case_context(sentences)
+            D_failures=  build_8d_failure_context_from_grouped(structred_sentences,entity_store_path=ENTITY_PATH, max_cases=3)
         if not FILL:
             similar_failure = generate_failure_chains_from_structure(
                 persist_dir=failure_KB_PATH,
@@ -502,7 +505,8 @@ def RAG_pipeline(
                 require_cause_plus=require_cause_plus,
                 weight_element=weight_element,
                 replace=False,
-                hybrid_score=False
+                hybrid_score=False,
+                source_type=["new_fmea","old_fmea"]
             )
             retrieval_payload = similar_failure
 
@@ -517,7 +521,7 @@ def RAG_pipeline(
                     "data": {
                         "structure_analysis": structure_input_json,
                         "gt_example": failure_example,
-                        "sentences": structred_sentences,
+                        "sentences": D_failures,
                     }
                 }
             )
@@ -537,6 +541,8 @@ def RAG_pipeline(
                 require_cause_plus=require_cause_plus,
                 weight_element=weight_element,
                 replace=True,
+                source_type=["new_fmea","old_fmea"],
+                hybrid_score=False,
             )
 
             semi_candidates = build_fill_entity(
@@ -735,8 +741,9 @@ if __name__ == "__main__":
         }
     ]
 }
-    RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH, top_k_per_field=30, top_n=50,object = "powertrain_sentence1",
-                 target_n = 20, weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
+    RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH,
+                  top_k_per_field=30, top_n=50,object = "powertrain_8Dentity6",
+                 target_n = 25, weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
 
     # -----------------------------------------------------
     # 3) Batch Settings

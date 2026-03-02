@@ -253,9 +253,12 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
         return {}
 
     # --------------------------------------------------------
-    # 1️⃣ Build score matrix
+    # 1️⃣ Build score matrix + component matrices
     # --------------------------------------------------------
-    score_matrix = np.zeros((total_pred, total_gt))
+    score_matrix  = np.zeros((total_pred, total_gt))
+    mode_matrix   = np.zeros((total_pred, total_gt), dtype=bool)
+    cause_matrix  = np.zeros((total_pred, total_gt), dtype=bool)
+    effect_matrix = np.zeros((total_pred, total_gt), dtype=bool)
 
     for i, pred in enumerate(pred_list):
         for j, gt in enumerate(gt_list):
@@ -264,7 +267,11 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
             cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause_text"])
             effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect_text"])
 
-            score_matrix[i, j] = sum([mode_match, cause_match, effect_match])
+            mode_matrix[i, j] = mode_match
+            cause_matrix[i, j] = cause_match
+            effect_matrix[i, j] = effect_match
+
+            score_matrix[i, j] = mode_match + cause_match + effect_match
 
     # --------------------------------------------------------
     # 2️⃣ Hungarian Algorithm
@@ -276,11 +283,24 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
     matched_pred = set()
     matched_gt = set()
 
+    # ⭐ Component TP counters
+    mode_tp = 0
+    cause_tp = 0
+    effect_tp = 0
+
     print("\n================ MATCH DETAILS ================\n")
 
     for r, c in zip(row_ind, col_ind):
 
         score = score_matrix[r, c]
+
+        # Component-level TP (无需重复 normalize)
+        if mode_matrix[r, c]:
+            mode_tp += 1
+        if cause_matrix[r, c]:
+            cause_tp += 1
+        if effect_matrix[r, c]:
+            effect_tp += 1
 
         # 只把 >=2 认为是真正匹配
         if score >= 2:
@@ -338,33 +358,42 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
             print("------------------------------------------------\n")
 
     # --------------------------------------------------------
-    # 5️⃣ Metrics
+    # 5️⃣ Chain-level Metrics
     # --------------------------------------------------------
     relaxed_match = complete_match + partial_match
     no_match = total_pred - len(matched_pred)
 
+    def safe_f1(p, r):
+        return 2 * p * r / (p + r) if (p + r) > 0 else 0
+
     precision_complete = complete_match / total_pred
     recall_complete = complete_match / total_gt
-    f1_complete = (
-        2 * precision_complete * recall_complete / (precision_complete + recall_complete)
-        if precision_complete + recall_complete > 0 else 0
-    )
+    f1_complete = safe_f1(precision_complete, recall_complete)
 
     precision_partial = partial_match / total_pred
     recall_partial = partial_match / total_gt
-    f1_partial = (
-        2 * precision_partial * recall_partial / (precision_partial + recall_partial)
-        if precision_partial + recall_partial > 0 else 0
-    )
+    f1_partial = safe_f1(precision_partial, recall_partial)
 
     precision_relaxed = relaxed_match / total_pred
     recall_relaxed = relaxed_match / total_gt
-    f1_relaxed = (
-        2 * precision_relaxed * recall_relaxed / (precision_relaxed + recall_relaxed)
-        if precision_relaxed + recall_relaxed > 0 else 0
-    )
+    f1_relaxed = safe_f1(precision_relaxed, recall_relaxed)
 
     hallucination_rate = no_match / total_pred
+
+    # --------------------------------------------------------
+    # 6️⃣ Component-level Metrics
+    # --------------------------------------------------------
+    precision_mode = mode_tp / total_pred
+    recall_mode = mode_tp / total_gt
+    f1_mode = safe_f1(precision_mode, recall_mode)
+
+    precision_cause = cause_tp / total_pred
+    recall_cause = cause_tp / total_gt
+    f1_cause = safe_f1(precision_cause, recall_cause)
+
+    precision_effect = effect_tp / total_pred
+    recall_effect = effect_tp / total_gt
+    f1_effect = safe_f1(precision_effect, recall_effect)
 
     # 安全检查
     assert complete_match <= min(total_pred, total_gt)
@@ -374,6 +403,7 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
         "total_gt": total_gt,
         "total_pred": total_pred,
 
+        # Chain-level
         "complete_match": complete_match,
         "partial_match": partial_match,
         "no_match": no_match,
@@ -391,6 +421,23 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
         "f1_relaxed": f1_relaxed,
 
         "hallucination_rate": hallucination_rate,
+
+        # Component-level
+        "mode_tp": mode_tp,
+        "cause_tp": cause_tp,
+        "effect_tp": effect_tp,
+
+        "precision_mode": precision_mode,
+        "recall_mode": recall_mode,
+        "f1_mode": f1_mode,
+
+        "precision_cause": precision_cause,
+        "recall_cause": recall_cause,
+        "f1_cause": f1_cause,
+
+        "precision_effect": precision_effect,
+        "recall_effect": recall_effect,
+        "f1_effect": f1_effect,
     }
 
 # ============================================================
@@ -400,7 +447,7 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 if __name__ == "__main__":
 
     GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_allPT_MC\failure_kb\entity_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Single_test\RAG_powertrain_sentence1.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Single_test\PURE_powertrain_8Dentity.json")
 
     gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_2)
     pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_2)

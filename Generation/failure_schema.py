@@ -12,8 +12,8 @@ class FailureEntity_RAG(BaseModel):
     failure_effect: str= Field(..., description="Failure effect")
     failure_cause: str = Field(..., description="Failure cause")
     confidence: Confidence = Field(..., description="Confidence level")
-    support_failure_id: List[str] = Field(..., description="Supporting failure IDs from KB")
-    gt_support_type: Support_type = Field(..., description="Gerneration type")
+    support_id: List[str] = Field(..., description="Supporting  IDs from KB")
+    support_type: Support_type = Field(..., description="Gerneration type")
     inference_reason: str = Field(..., description="Inference reason")
 
 

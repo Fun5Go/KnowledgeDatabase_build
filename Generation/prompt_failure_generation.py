@@ -9,8 +9,8 @@ Your task is to construct the MOST PHYSICALLY AND CAUSALLY
 CONSISTENT FAILURE GRAPH using:
 
 1) Structure Analysis (PRIMARY CONSTRAINT)
-2) 8D actual case sentences (REAL-WORLD EVIDENCE)
-3) Ground Truth similar examples (REFERENCE PATTERNS)
+2) 8D actual case failures (REAL-WORLD FAILURE EVIDENCE)
+3) Historical failure entities retrieved via semantic similarity (MECHANISM REFERENCE)
 
 This is a STRUCTURE-DRIVEN ENGINEERING RECONSTRUCTION task.
 
@@ -34,15 +34,14 @@ ABSOLUTE RULE:
 
 - You MUST use ONLY entities explicitly present in Structure Analysis.
 - You MUST NOT invent new elements, modes, causes, functions, or effects.
-- If something appears in 8D but not in Structure → it can only be used as reasoning evidence.
 
 
-Priority Order:
+Priority Order of Evidence:
 
-Structure Physics  >  8D Evidence  >  GT Similarity
+8D actual failures   >   Historical failure entities
 
-If 8D or GT contradict structural logic:
-→ Follow Structure.
+
+Structure always overrides external evidence.
 
 
 =====================================================
@@ -53,107 +52,142 @@ Each failure chain MUST strictly follow:
 
 failure_element
    → failure_function
-      → failure_mode
-         → failure_effect
+      → failure_effect
+         ← failure_mode
             ← caused by ← failure_cause
 
-Causality rules:
+Causality Rules:
 
-1) failure_cause physically produces failure_mode
-2) failure_mode physically leads to failure_effect
-3) failure_effect must be a realistic system-level or functional consequence
-4) All links must obey motor-drive engineering logic
-
-
-If any causal link is weak or speculative → discard the chain.
+1) failure_cause must physically produce failure_mode.
+2) failure_mode must physically and functionally lead to failure_effect.
+3) failure_effect must be a realistic functional or system-level consequence.
+4) All links must obey motor-drive physics, actuator behavior, and control-loop logic.
+5) Cause, mode, and effect must clearly refer to the SAME component domain.
 
 
-=====================================================
-HOW TO USE 8D SENTENCES
-=====================================================
+If any causal link is weak, indirect, or speculative → DISCARD the chain.
 
-8D sentences represent observed field symptoms.
+====================================================
+CASE-DRIVEN FAILURE ENTITY INFERENCE (PRIMARY LEARNING STAGE)
+====================================================
 
-You must:
+8D cases and Historical failure chains must be treated as:
 
-1) Extract observable symptoms from 8D sentences.
-2) Interpret what physical malfunction could explain that symptom.
-3) Map that malfunction to a VALID Structure-based:
-      cause → mode → effect chain.
+- Real engineering case studies
+- Mechanism learning material
+- Failure propagation training data
 
-IMPORTANT:
+They are NOT output templates.
+They are NOT directly reusable chains.
 
-- 8D describes WHAT happened.
-- Structure defines WHAT is possible.
-- You must infer HOW it happened.
-- 8D must NEVER introduce new failure entities.
+Your FIRST task is:
+
+----------------------------------------------------
+Step A — Case Mechanism Learning & Abstraction
+----------------------------------------------------
+
+For 8D cases and Historical failure chains:
+
+1) Extract the underlying physical failure mechanism.
+2) Identify the fault propagation logic (cause → mode → effect).
+3) Abstract overly specific descriptions into generalized failure logic.
+4) Infer potential failure entities that could exist in Structure Analysis.
+5) Translate learned mechanisms into Structure-compatible candidates.
+
+Important:
+
+- Do NOT copy wording from 8D.
+- Do NOT reuse historical chains directly.
+- Do NOT introduce entities that are not present in Structure.
+- Only infer entities that can logically map to Structure definitions.
 
 
-If a candidate chain explains an 8D symptom:
-→ Increase its confidence.
+----------------------------------------------------
+Step B — Structure Alignment & Logical Validation
+----------------------------------------------------
 
-If it does not:
-→ It is still allowed if structurally strong.
+For every inferred potential failure entity:
+
+1) Check if it exists in Structure Analysis.
+2) Verify that:
+   - Cause belongs to allowed category (Hardware / Mechanics / Software / Others).
+   - Mode is a valid functional degradation.
+   - Effect is physically reachable from the mode.
+3) Validate motor-drive physics consistency.
+4) Validate control-loop behavior correctness.
+5) Validate signal-flow and energy-flow direction.
+6) Remove any chain that violates physical causality.
+
+If the chain cannot be physically explained in actuator or motor-drive terms:
+→ DISCARD it.
 
 
-=====================================================
+----------------------------------------------------
+Step C — Plausibility Reinforcement
+----------------------------------------------------
+
+After validation:
+
+- Prefer chains that can clearly explain real-world malfunction behavior.
+- Increase confidence if mechanism aligns with recurring historical patterns.
+- Downgrade confidence if no engineering mechanism supports it.
+- Structure logic always dominates over similarity.
+
+
+====================================================
 GRAPH CONSTRUCTION STRATEGY
-=====================================================
+====================================================
+
+Only AFTER completing case learning and structure validation:
 
 Step 1 — Generate Structurally Valid Chains
 -------------------------------------------
 
 For each failure_element:
 
-- Enumerate possible (cause → mode → effect) combinations.
-- Keep ONLY physically consistent combinations.
-- Discard semantically matched but physically weak chains.
+- Enumerate all physically consistent
+  (cause → mode → effect) combinations
+  derived from validated inferred entities.
 
-Step 2 — Enforce Engineering Plausibility
------------------------------------------
+Step 2 — Enforce Engineering Coherence
+-------------------------------------------
 
-For each candidate:
+Each final chain must:
 
-- Check actuator behavior
-- Check motor-drive control logic
-- Check signal / sensor / power relationships
-- Ensure realistic fault propagation
+- Respect component boundaries
+- Follow realistic fault propagation direction
+- Be actuator and motor-drive physically explainable
+- Avoid semantic-only associations
 
-If mechanism explanation is unclear → remove it.
+If explanation requires assumptions outside Structure:
+→ Remove the chain.
 
-Step 3 — Align with 8D Evidence
---------------------------------
 
-- Does this chain explain one or more observed symptoms?
-- If yes → increase confidence
-- If partially → medium confidence
-- If no → low confidence (but allowed)
+====================================================
+CORE PRINCIPLE
+====================================================
 
-Step 4 — Validate Against GT (Secondary)
------------------------------------------
+Case data teaches mechanisms.
+Structure defines what is allowed.
+Physics decides what survives.
 
-Use GT examples ONLY to:
-
-- Confirm known failure patterns
-- Increase plausibility confidence
-
-Never copy GT directly without structural validation.
+Only chains that satisfy all three are valid.
 
 
 =====================================================
-GT SUPPORT CLASSIFICATION
+SUPPORT CLASSIFICATION
 =====================================================
 
-gt_support_type must be:
+support_type must be:
 
 - "complete_entity"
 - "composed_from_multiple"
 - "partial_pattern"
 - "no_direct_gt"
 
-support_failure_id:
+support_id:
 - [] if none
-- list of GT IDs if aligned
+- list of historical failure IDs or 8D case id
 
 
 =====================================================
@@ -162,12 +196,12 @@ CONFIDENCE LEVEL
 
 high:
   - Strong structural causality
-  - Explains 8D symptom
-  - Supported by GT
+  - Explains observed 8D symptoms
+  - Supported by historical mechanism pattern
 
 medium:
   - Strong structural causality
-  - Partially supported by 8D or GT
+  - Partial 8D or historical support
 
 low:
   - Structurally valid
@@ -179,41 +213,43 @@ INFERENCE LIMITATIONS
 =====================================================
 
 Allowed:
+
 - Engineering-consistent reasoning
-- Known motor-drive failure propagation mechanisms
-- Control-loop and actuator reasoning
-- Hardware-software interaction logic
+- Known motor-drive fault propagation physics
+- Control-loop instability mechanisms
+- Hardware–software interaction logic
+- Signal acquisition and actuator behavior reasoning
 
 Not Allowed:
-- Speculative physics
-- Random structure combinations
-- GT copying
-- Creating new entities not in Structure
-- Violating causal order
+
+- Speculative or imaginary physics
+- Cross-element mixing
+- Direct copying from 8D or historical examples
+- Creating entities not present in Structure
+- Violating defined causal order
 
 
 =====================================================
 OUTPUT COUNT REQUIREMENT (MANDATORY)
 =====================================================
 
-You MUST output exactly 25 failure_candidates.
+You MUST output exactly 20 failure_candidates.
 
-- If more candidates are possible, select the best 25 by:
-  1) strongest structural causality
-  2) strongest 8D explanation capability
-  3) highest GT support
-  4) highest diversity (different mode/cause/effect)
+If more candidates are possible, select the best 20 by:
 
+1) Strongest structural causality
+2) Strongest 8D explanation capability
+3) Strongest historical mechanism alignment
 
 
 =====================================================
-GROUND TRUTH SIMILAR EXAMPLE
+Historical Failures SIMILAR EXAMPLE
 =====================================================
 
 {gt_example}
 
 =====================================================
-Relevant 8D actual case sentences
+Relevant 8D actual case failures
 =====================================================
 
 {8D_sentences}
@@ -237,8 +273,8 @@ OUTPUT FORMAT (STRICT JSON ONLY)
       "failure_effect": "...",
       "failure_cause": "...",
       "confidence": "high | medium | low",
-      "gt_support_type": "complete_entity | composed_from_multiple | partial_pattern | no_direct_gt",
-      "support_failure_id": [""],
+      "support_type": "complete_entity | composed_from_multiple | partial_pattern | no_direct_gt",
+      "support_id": [""],
       "inference_reason": "short GT alignment explanation",
       "insight": "ONLY required if gt_support_type == no_direct_gt"
     }}
@@ -317,9 +353,9 @@ low    – mostly inferred
 OUTPUT COUNT REQUIREMENT (MANDATORY)
 =====================================================
 
-You MUST output exactly 25 failure_candidates.
+You MUST output exactly 20 failure_candidates.
 
-- If more candidates are possible, select the best 25 by:
+- If more candidates are possible, select the best 20 by:
   1) strongest structural causality
   2) highest GT support
   3) highest diversity (different mode/cause/effect)
@@ -359,154 +395,113 @@ failure_inference_prompt_RAG_FILL = """
 =====================================================
 ROLE
 =====================================================
+You are a senior motor-drive system FMEA architect and failure-physics expert.
 
-You are a senior FMEA expert specializing in motor drive systems.
-
-Your task is to REVIEW, CORRECT, COMPLETE and EXPAND the provided
-"Semi-filled Failure Entity" entries which is integrated by the Structure Anlysis entities and historical FMEA failure.
-
-This is a structure-driven FMEA reconstruction and inference task.
-
-This is a motor-drive system context. All failures must be motor-drive related.
-
-⚠ The Knowledge Base (KB) is NOT allowed to be used as final output content.
-⚠ You may NOT copy any wording from KB.
-⚠ ALL final failure fields MUST come ONLY from the provided Structure Analysis.
-⚠ You may infer NEW combinations, but ONLY using existing Structure Analysis texts.
-
+Task: REVIEW, CORRECT, COMPLETE, and EXPAND the provided "Semi-filled Failure Entity" entries.
+This is a STRUCTURE-DRIVEN reconstruction task for motor-drive systems.
 
 =====================================================
-CORE OBJECTIVE (VERY IMPORTANT)
+HARD CONSTRAINTS (NON-NEGOTIABLE)
 =====================================================
 
-Step 1 — Replace KB:
---------------------------------
-For each input failure entity:
-- Replace ALL [KB] fields using ONLY Structure Analysis texts.
-- Validate physical and engineering causality.
-- If the input chain violates real motor-drive failure physics:
-    → You MUST correct it using other appropriate Structure Analysis texts.
-    → Do NOT keep logically invalid chains.
+[HC-1] Structure Dominance
+- ALL final output fields MUST come ONLY from the provided Structure Analysis (SA) texts.
+- Do NOT use the Knowledge Base (KB) wording in the final output.
+- Do NOT invent any new text outside SA.
 
-Step 2 — Logical Reconstruction:
---------------------------------
-After correction:
-Ensure strict physical causality:
+[HC-2] Field Exact-Match Rule
+For every output candidate:
+- failure_element: MUST be EXACT text from SA (closest match if input is not exact).
+- failure_function: MUST remain EXACT as provided in input; if deduplicated -> "N/A".
+- failure_mode: MUST be EXACT mode text from SA.
+- failure_cause: MUST be EXACT cause text from SA.
+- failure_effect: MUST be EXACT effect text from SA.
 
-    failure_cause → failure_mode → failure_effect
-
-The chain must:
-- Be technically realistic
-- Be motor-drive related
-- Respect engineering logic
-
-If original structure is physically wrong:
-→ Replace mode / cause / effect with better SA text.
-→ Prioritize physical correctness over input similarity.
-
-
-Step 3 — Expand & Diversify
---------------------------------
-After processing ALL input entities:
-
-You must infer additional potential FMEA failure chains using:
-- ONLY Structure Analysis texts
-- Different combinations than input ones
-- Do NOT duplicate existing (mode + cause + effect)
-
-Purpose:
-Increase diversity of potential failure chains within this structure.
-
-These inferred chains:
-- Must follow physical causality
-- Must not be random combinations
-- Must be realistic motor-drive failures
-- fill_from_id must be empty for inferred chains
-
-
-=====================================================
-STRICT FIELD RULES
-=====================================================
-
-failure_element:
-- MUST be an EXACT element text from Structure Analysis.
-- If input element is not exact SA text:
-    → Replace with best matching SA element.
-- If exact → keep.
-
-failure_function:
-- MUST remain exactly as provided.
-- If deduplicated → set to "N/A"
-
-failure_mode:
-- MUST exactly match one mode from Structure Analysis.
-- Must logically result from the selected cause.
-
-failure_cause:
-- MUST exactly match one cause from Structure Analysis.
-- Must realistically produce the selected mode.
-
-failure_effect:
-- MUST exactly match one effect from Structure Analysis.
-- Must realistically result from the selected mode.
-- Does NOT need to resemble original KB wording.
-
-
-=====================================================
-DEDUPLICATION RULE 
-=====================================================
-
-If multiple entities share the SAME:
-    failure_mode + failure_cause + failure_effect
-→ Merge them into ONE candidate.
-
-After merging:
-- Keep one failure_element (most logical one)
-- Set failure_function = "N/A"
-- Do NOT output duplicates.
-- Append the failure id in "fill_from_id"
-
-=====================================================
-CAUSAL VALIDATION REQUIREMENT
-=====================================================
-
-Before accepting a chain, verify:
-
-1. Cause can physically produce Mode.
-2. Mode can physically produce Effect.
-3. The chain is coherent in motor drive systems.
-4. Effect is not abstract or unrelated.
+[HC-3] Physics-Causal Validity
+Every chain MUST satisfy:
+    failure_cause -> failure_mode -> failure_effect
+Validate:
+1) Cause can physically produce Mode in motor-drive context
+2) Mode can physically lead to Effect
+3) Chain is coherent, realistic, and not abstract
 
 If invalid:
-→ Replace with better SA texts.
-→ If no valid correction possible:
-    Mark as INVALID and explain.
-
+- Replace cause/mode/effect using other SA texts to make it physically correct.
+- If no valid correction exists using SA only: mark INVALID and explain why.
 
 =====================================================
-PROHIBITED ACTIONS
+CORE OBJECTIVE
 =====================================================
 
-- Do NOT use KB wording in final output.
-- Do NOT invent new texts outside Structure Analysis.
-- Do NOT map effect into mode or vice versa.
-- Do NOT output duplicate chains.
-- Do NOT skip entities.
-- Avoid identical text across cause/mode/effect fields.
+Step 1 — Replace KB / Repair Inputs
+For each input failure entity:
+- Replace any non-SA fields with SA-exact texts.
+- Correct physically wrong chains by selecting better SA cause/mode/effect.
+- Prioritize physics correctness over similarity.
+
+Step 2 — Deduplicate (Strict)
+If multiple candidates share the SAME:
+    (failure_mode + failure_cause + failure_effect)
+THEN:
+- Merge into one candidate
+- Keep the most logical failure_element
+- Set failure_function = "N/A"
+- Append merged original ids into fill_from_id (list)
+
+Step 3 — Expand & Diversify (Inference)
+After processing all inputs:
+- Infer additional realistic failure chains using ONLY SA texts
+- Must be different combinations than existing output
+- Must NOT duplicate any existing (mode + cause + effect)
+- fill_from_id MUST be empty for inferred chains
+- Must follow strong causal motor-drive physics (not random mixing)
 
 =====================================================
-OUTPUT COUNT REQUIREMENT (MANDATORY)
+OUTPUT COUNT REQUIREMENT
 =====================================================
+You MUST output EXACTLY 20 failure_candidates.
 
-You MUST output exactly 25 failure_candidates.
+If more than 20 are possible:
+Select best 20 by:
+1) strongest physical causality
+2) strongest support by provided 8D evidence (if aligns)
+3) diversity across mode/cause/effect
 
-- If more candidates are possible, select the best 15 by:
-  1) strongest structural causality
-  2) highest GT support
-  3) highest diversity (different mode/cause/effect)
+If fewer than 15 valid candidates exist using SA only:
+Output as many as possible and explain in inference_reason why more cannot be formed.
 
-- If fewer than 15 valid candidates exist using Structure Analysis:
-  output as many as possible and explain in inference_reason why no more valid chains exist.
+=====================================================
+8D REAL-WORLD EVIDENCE (GROUNDING ONLY)
+=====================================================
+Use these as REAL symptoms/mechanism hints to improve plausibility,
+BUT you STILL MUST output ONLY SA-exact texts.
+
+# 8D Case 1: 8D6782170310R02 - Motor noise
+- Element: motor control algorithm
+- Mode: high frequency noise during idle
+- Causes:
+  - incorrect stall handling in traffic light mode
+  - motor control algorithm tuning error
+  - hardware error in current measurement circuit
+
+# 8D Case 2: 8D6782170362R01 - Material Debris
+- Element: gear assembly
+- Mode: material debris in gear
+- Effect: device runs very noisily
+- Causes:
+  - flash pressed out during dowel pin assembly
+  - flash formation at gear cover dowel holes
+
+# 8D Case 3: 8D6782170329R02 - App/Integration config resets
+- Element: Hub Interface and mobile app integration
+- Mode: configuration settings not retained after power cycle
+- Effect: max cadence resets to 90 RPM; configuration incomplete; workflow disrupted
+- Causes:
+  - incorrect initialization sequence from external flash
+  - temporary variant misassignment during startup
+  - asynchronous notification and data retrieval conflict
+  - notification list extension bug on reconnect
+
 
 =====================================================
 STRUCTURE ANALYSIS (JSON)
