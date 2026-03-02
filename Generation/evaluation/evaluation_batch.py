@@ -48,7 +48,7 @@ def load_gt(gt_path: Path, target_element: str) -> List[Dict]:
 
     gt_list = []
     for v in gt_raw.values():
-        if normalize_text(v.get("failure_element")) != target_norm:
+        if normalize_text(v.get("failure_element_text")) != target_norm:
             continue
 
         if is_motor_control and v.get("productPnID") != 287883:
@@ -239,9 +239,9 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
     for i, pred in enumerate(pred_list):
         for j, gt in enumerate(gt_list):
 
-            mode_match = normalize_text(pred["failure_mode"]) == normalize_text(gt["failure_mode"])
-            cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause"])
-            effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect"])
+            mode_match = normalize_text(pred["failure_mode"]) == normalize_text(gt["failure_mode_text"])
+            cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause_text"])
+            effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect_text"])
 
             score_matrix[i, j] = sum([mode_match, cause_match, effect_match])
 
@@ -361,11 +361,11 @@ def plot_in_batches(all_results, batch_size=10, drop_last=False):
 if __name__ == "__main__":
 
     GT_JSON = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\RAG\KB_motor_drives\failure_kb\fmea_cause_store.json"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_allPT_MC\failure_kb\entity_store.json"
     )
 
     PRED_FOLDER = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG\25_2_powertrain"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG_FILL\min_similarity_045"
     )
 
     gt_list = load_gt(GT_JSON, target_element=TARGET_ELEMENT_2)

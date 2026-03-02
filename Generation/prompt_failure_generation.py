@@ -152,9 +152,9 @@ NOT allowed:
 OUTPUT COUNT REQUIREMENT (MANDATORY)
 =====================================================
 
-You MUST output exactly 15 failure_candidates.
+You MUST output exactly 25 failure_candidates.
 
-- If more candidates are possible, select the best 15 by:
+- If more candidates are possible, select the best 25 by:
   1) strongest structural causality
   2) highest GT support
   3) highest diversity (different mode/cause/effect)
@@ -270,9 +270,9 @@ low    – mostly inferred
 OUTPUT COUNT REQUIREMENT (MANDATORY)
 =====================================================
 
-You MUST output exactly 15 failure_candidates.
+You MUST output exactly 25 failure_candidates.
 
-- If more candidates are possible, select the best 15 by:
+- If more candidates are possible, select the best 25 by:
   1) strongest structural causality
   2) highest GT support
   3) highest diversity (different mode/cause/effect)
@@ -451,7 +451,7 @@ PROHIBITED ACTIONS
 OUTPUT COUNT REQUIREMENT (MANDATORY)
 =====================================================
 
-You MUST output exactly 15 failure_candidates.
+You MUST output exactly 25 failure_candidates.
 
 - If more candidates are possible, select the best 15 by:
   1) strongest structural causality
@@ -495,3 +495,5 @@ Return valid JSON in the following format:
 }}
 
 """
+
+failure_evaluate_prompt = """"""

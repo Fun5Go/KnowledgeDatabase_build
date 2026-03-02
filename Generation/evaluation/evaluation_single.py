@@ -44,7 +44,7 @@ def load_gt(gt_path: Path, target_element: str) -> List[Dict]:
 
     gt_list = []
     for v in gt_raw.values():
-        if normalize_text(v.get("failure_element")) != target_norm:
+        if normalize_text(v.get("failure_element_text")) != target_norm:
             continue
 
         if is_motor_control and v.get("productPnID") != 287883:
@@ -59,9 +59,7 @@ def load_predictions(pred_path: Path, target_element: str) -> List[Dict]:
     with open(pred_path, "r", encoding="utf-8") as f:
         pred_raw = json.load(f)
 
-    # -------------------------------
-    # 新结构读取方式
-    # -------------------------------
+
     failure_block = pred_raw.get("failure_candidates", {})
 
     if isinstance(failure_block, dict):
@@ -69,16 +67,26 @@ def load_predictions(pred_path: Path, target_element: str) -> List[Dict]:
     else:
         pred_list = []
 
-    # 确保是 dict 列表
     pred_list = [p for p in pred_list if isinstance(p, dict)]
 
-    # -------------------------------
-    # 按 failure_element 过滤
-    # -------------------------------
+
     pred_filtered = [
         p for p in pred_list
         if normalize_text(p.get("failure_element", "")) ==
            normalize_text(target_element)
+    ]
+
+    return pred_filtered
+
+def load_predictions_old(pred_path: Path, target_element: str) -> List[Dict]:
+    with open(pred_path, "r", encoding="utf-8") as f:
+        pred_raw = json.load(f)
+
+    pred_list = pred_raw.get("failure_candidates", [])
+
+    pred_filtered = [
+        p for p in pred_list
+        if normalize_text(p.get("failure_element")) == normalize_text(target_element)
     ]
 
     return pred_filtered
@@ -119,9 +127,9 @@ def evaluate(pred_list: List[Dict], gt_list: List[Dict], verbose: bool = False):
 
         for j, gt in enumerate(gt_list):
 
-            mode_match = normalize_text(pred["failure_mode"]) == normalize_text(gt["failure_mode"])
-            cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause"])
-            effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect"])
+            mode_match = normalize_text(pred["failure_mode"]) == normalize_text(gt["failure_mode_text"])
+            cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause_text"])
+            effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect_text"])
 
             score = sum([mode_match, cause_match, effect_match])
 
@@ -252,60 +260,115 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
     for i, pred in enumerate(pred_list):
         for j, gt in enumerate(gt_list):
 
-            mode_match = normalize_text(pred["failure_mode"]) == normalize_text(gt["failure_mode"])
-            cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause"])
-            effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect"])
+            mode_match = normalize_text(pred["failure_mode"]) == normalize_text(gt["failure_mode_text"])
+            cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause_text"])
+            effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect_text"])
 
             score_matrix[i, j] = sum([mode_match, cause_match, effect_match])
 
     # --------------------------------------------------------
-    # 2️⃣ Hungarian Algorithm (maximize score)
+    # 2️⃣ Hungarian Algorithm
     # --------------------------------------------------------
-    # linear_sum_assignment minimizes cost, so we negate
     row_ind, col_ind = linear_sum_assignment(-score_matrix)
 
     complete_match = 0
     partial_match = 0
     matched_pred = set()
+    matched_gt = set()
+
+    print("\n================ MATCH DETAILS ================\n")
 
     for r, c in zip(row_ind, col_ind):
+
         score = score_matrix[r, c]
+
+        # 只把 >=2 认为是真正匹配
+        if score >= 2:
+            matched_pred.add(r)
+            matched_gt.add(c)
 
         if score == 3:
             complete_match += 1
-            matched_pred.add(r)
+
         elif score == 2:
             partial_match += 1
-            matched_pred.add(r)
 
+            print("\n============ PARTIAL MATCH (2/3) ============")
+
+            print("\n[Prediction]")
+            print(f"Element : {pred_list[r].get('failure_element')}")
+            print(f"Mode    : {pred_list[r].get('failure_mode')}")
+            print(f"Effect  : {pred_list[r].get('failure_effect')}")
+            print(f"Cause   : {pred_list[r].get('failure_cause')}")
+
+            print("\n[Ground Truth]")
+            print(f"Element : {gt_list[c].get('failure_element_text')}")
+            print(f"Mode    : {gt_list[c].get('failure_mode_text')}")
+            print(f"Effect  : {gt_list[c].get('failure_effect_text')}")
+            print(f"Cause   : {gt_list[c].get('failure_cause_text')}")
+
+            print("=============================================\n")
+
+    # --------------------------------------------------------
+    # 3️⃣ Print No Match Predictions
+    # --------------------------------------------------------
+    print("\n================ NO MATCH PREDICTIONS ================\n")
+
+    for i in range(total_pred):
+        if i not in matched_pred:
+            print("\n------------ UNMATCHED PREDICTION ------------")
+            print(f"Element : {pred_list[i].get('failure_element')}")
+            print(f"Mode    : {pred_list[i].get('failure_mode')}")
+            print(f"Effect  : {pred_list[i].get('failure_effect')}")
+            print(f"Cause   : {pred_list[i].get('failure_cause')}")
+            print("------------------------------------------------\n")
+
+    # --------------------------------------------------------
+    # 4️⃣ Print Unmatched Ground Truth
+    # --------------------------------------------------------
+    print("\n================ MISSED GROUND TRUTH ================\n")
+
+    for j in range(total_gt):
+        if j not in matched_gt:
+            print("\n------------ MISSED GROUND TRUTH ------------")
+            print(f"Element : {gt_list[j].get('failure_element_text')}")
+            print(f"Mode    : {gt_list[j].get('failure_mode_text')}")
+            print(f"Effect  : {gt_list[j].get('failure_effect_text')}")
+            print(f"Cause   : {gt_list[j].get('failure_cause_text')}")
+            print("------------------------------------------------\n")
+
+    # --------------------------------------------------------
+    # 5️⃣ Metrics
+    # --------------------------------------------------------
     relaxed_match = complete_match + partial_match
     no_match = total_pred - len(matched_pred)
 
-    # --------------------------------------------------------
-    # 3️⃣ Metrics
-    # --------------------------------------------------------
-    precision_complete = complete_match / total_pred if total_pred else 0
-    recall_complete = complete_match / total_gt if total_gt else 0
+    precision_complete = complete_match / total_pred
+    recall_complete = complete_match / total_gt
     f1_complete = (
         2 * precision_complete * recall_complete / (precision_complete + recall_complete)
         if precision_complete + recall_complete > 0 else 0
     )
 
-    precision_partial = partial_match / total_pred if total_pred else 0
-    recall_partial = partial_match / total_gt if total_gt else 0
+    precision_partial = partial_match / total_pred
+    recall_partial = partial_match / total_gt
     f1_partial = (
         2 * precision_partial * recall_partial / (precision_partial + recall_partial)
         if precision_partial + recall_partial > 0 else 0
     )
 
-    precision_relaxed = relaxed_match / total_pred if total_pred else 0
-    recall_relaxed = relaxed_match / total_gt if total_gt else 0
+    precision_relaxed = relaxed_match / total_pred
+    recall_relaxed = relaxed_match / total_gt
     f1_relaxed = (
         2 * precision_relaxed * recall_relaxed / (precision_relaxed + recall_relaxed)
         if precision_relaxed + recall_relaxed > 0 else 0
     )
 
-    hallucination_rate = no_match / total_pred if total_pred else 0
+    hallucination_rate = no_match / total_pred
+
+    # 安全检查
+    assert complete_match <= min(total_pred, total_gt)
+    assert partial_match <= min(total_pred, total_gt)
 
     return {
         "total_gt": total_gt,
@@ -336,8 +399,8 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 
 if __name__ == "__main__":
 
-    GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\RAG\KB_motor_drives\failure_kb\fmea_cause_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_powertrain.json")
+    GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_allPT_MC\failure_kb\entity_store.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_PURE_powertrain4.json")
 
     gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_2)
     pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_2)

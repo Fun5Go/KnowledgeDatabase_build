@@ -10,9 +10,9 @@ from ingest_fmea import ingest_fmea_jsonl
 # =========================================================
 BASE_DIR = Path(__file__).resolve().parent
 
-JSONL_PATH= Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_motor_drive_recall_notcomplete.jsonl")
+JSONL_PATH= Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\FMEA_motor_drive_recall_PT_MC.jsonl")
 # Persist KB data folders
-KB_DATA_ROOT = BASE_DIR.parent/ "KB_motor_drives_miniLM"
+KB_DATA_ROOT = BASE_DIR.parent/ "KB_motor_drives_allPT_MC"
 FAILURE_KB_DIR = KB_DATA_ROOT / "failure_kb"
 SENTENCE_KB_DIR = KB_DATA_ROOT / "sentence_kb"
 # CAUSE_KB_DIR = KB_DATA_ROOT / "cause_kb"

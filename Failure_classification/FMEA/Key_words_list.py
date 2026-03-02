@@ -125,6 +125,9 @@ MOTOR_DRIVE_KEYWORDS = [
     # "bridge leg",
     # "high side",
     # "low side",
+    #====== Evaluate =====
+    "power train",
+    "motor control",
 ]
 
 

@@ -659,17 +659,17 @@ if  __name__ == "__main__":
                 "effects": [
                     "Does not shift gear",
                     "Incorrect gear shift",
-                    "Incorrect cadence (offset)",
-                    "Unstable cadence setting",
-                    "Incorrect cadence (fixed gear ratio)",
-                    "Incorrect ratio (offset)",
-                    "Unstable ratio setting",
-                    "Does not enter limp home mode",
-                    "Sets wrong gear ratio",
-                    "Gear ratio drifts when battery is empty",
-                    "Firmware update not possible/fails",
-                    "Device bricked",
-                    "Update takes too much time (>5 minutes)",
+                    # "Incorrect cadence (offset)",
+                    # "Unstable cadence setting",
+                    # "Incorrect cadence (fixed gear ratio)",
+                    # "Incorrect ratio (offset)",
+                    # "Unstable ratio setting",
+                    # "Does not enter limp home mode",
+                    # "Sets wrong gear ratio",
+                    # "Gear ratio drifts when battery is empty",
+                    # "Firmware update not possible/fails",
+                    # "Device bricked",
+                    # "Update takes too much time (>5 minutes)",
                     "Too much noise",
                 ]
             }
@@ -734,7 +734,7 @@ if  __name__ == "__main__":
         min_similarity=0.45,
         top_n=100,
         replace=True,
-        hybrid_score=True,
+        hybrid_score=False,
     )
     results = attach_ppl_scores(results)
 

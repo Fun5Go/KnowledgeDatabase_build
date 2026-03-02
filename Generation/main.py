@@ -491,16 +491,16 @@ if __name__ == "__main__":
                    "Does not shift gear",
                     "Incorrect gear shift",
                     "Incorrect cadence (offset)",
-                    "Unstable cadence setting",
-                    "Incorrect cadence (fixed gear ratio)",
-                    "Incorrect ratio (offset)",
-                    "Unstable ratio setting",
-                    "Does not enter limp home mode",
-                    "Sets wrong gear ratio",
-                    "Gear ratio drifts when battery is empty",
-                    "Firmware update not possible/fails",
-                    "Device bricked",
-                    "Update takes too much time (>5 minutes)",
+                    # "Unstable cadence setting",
+                    # "Incorrect cadence (fixed gear ratio)",
+                    # "Incorrect ratio (offset)",
+                    # "Unstable ratio setting",
+                    # "Does not enter limp home mode",
+                    # "Sets wrong gear ratio",
+                    # "Gear ratio drifts when battery is empty",
+                    # "Firmware update not possible/fails",
+                    # "Device bricked",
+                    # "Update takes too much time (>5 minutes)",
                     "Too much noise",
                 ]
             }
@@ -548,8 +548,8 @@ if __name__ == "__main__":
         }
     ]
 }
-    RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,object = "powertrain",
-                 target_n = 30, weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
+    RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,object = "powertrain4",
+                 target_n = 30, weight_element = 0.2, min_similarity=0.45, RAG = False, FILL = False)
 
     # -----------------------------------------------------
     # 3) Batch Settings

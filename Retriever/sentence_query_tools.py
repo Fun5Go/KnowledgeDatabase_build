@@ -10,6 +10,8 @@ from typing import Optional, Dict, Any, List, Union
 from collections import defaultdict
 from sentence_transformers import CrossEncoder
 
+from entity import structure_input_powertrain
+
 def _get_sentence_collection(
     persist_dir: Union[str, Path],
     collection_name: str = "all_failure_kb",
@@ -506,6 +508,7 @@ def build_concat_query(entity: Dict[str, str]) -> str:
             parts.append(f"{role_name}: {value.strip()}")
     return ". ".join(parts)
 
+
 ce_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 def cross_encoder_rerank(query_text: str, hits: List[Dict], top_k: int = 20):
 
@@ -519,32 +522,185 @@ def cross_encoder_rerank(query_text: str, hits: List[Dict], top_k: int = 20):
 
     return reranked[:top_k]
 
+
+def query_sentence_kb_from_structure(
+    persist_dir: Union[str, Path],
+    structure_input: Dict[str, Any],
+    n_results_per_query: int = 15,
+    top_k: int = 20,
+    similarity_threshold: float = 0.35,
+    collection_name: str = "sentences",
+
+    # ---- where filters ----
+    productPnID: Optional[int] = None,
+    product_domain: Optional[Union[str, List[str]]] = None,
+    case_id: Optional[str] = None,
+    source_type: Optional[Union[str, List[str]]] = None,
+    extra_where: Optional[Dict[str, Any]] = None,
+
+    include: Optional[List[str]] = None,
+):
+    """
+    Multi-query semantic search from structure input.
+    Uses pure semantic similarity = 1 - distance.
+    Accumulates similarity score per sentence.
+    Supports where filters (productPnID etc.).
+    """
+
+    # -------------------------------------------------
+    # 1️⃣ Load collection
+    # -------------------------------------------------
+    col = _get_sentence_collection(persist_dir, collection_name)
+
+    if include is None:
+        include = ["documents", "metadatas", "distances"]
+
+    # -------------------------------------------------
+    # 2️⃣ Build WHERE filter
+    # -------------------------------------------------
+    where = _build_sentence_where(
+        productPnID=productPnID,
+        product_domain=product_domain,
+        case_id=case_id,
+        source_type=source_type,
+        extra_where=extra_where,
+    )
+
+    # -------------------------------------------------
+    # 3️⃣ Extract query texts from structure
+    # -------------------------------------------------
+    query_texts: List[str] = []
+
+    for node in structure_input.get("nodes", []):
+        if node.get("failure_element"):
+            query_texts.append(node["failure_element"])
+
+        query_texts.extend(node.get("modes", []))
+        query_texts.extend(node.get("causes", []))
+        query_texts.extend(node.get("effects", []))
+
+    # 去重 + 清理
+    query_texts = list(
+        set(q.strip() for q in query_texts if isinstance(q, str) and q.strip())
+    )
+
+    if not query_texts:
+        return []
+
+    # -------------------------------------------------
+    # 4️⃣ sentence_id -> accumulated score
+    # -------------------------------------------------
+    candidate_scores: Dict[str, Dict[str, Any]] = {}
+
+    # -------------------------------------------------
+    # 5️⃣ Loop each query text
+    # -------------------------------------------------
+    for query_text in query_texts:
+
+        res = col.query(
+            query_texts=[query_text],
+            n_results=n_results_per_query,
+            where=where if where else None,
+            include=include,
+        )
+
+        ids = (res.get("ids", [[]]) or [[]])[0] or []
+        docs = (res.get("documents", [[]]) or [[]])[0] or []
+        metas = (res.get("metadatas", [[]]) or [[]])[0] or []
+        dists = (res.get("distances", [[]]) or [[]])[0] or []
+
+        for idx, (sid, dist) in enumerate(zip(ids, dists)):
+
+            try:
+                similarity = max(0.0, 1.0 - float(dist))
+            except Exception:
+                continue
+
+            # threshold
+            if similarity < similarity_threshold:
+                continue
+
+            if sid not in candidate_scores:
+                candidate_scores[sid] = {
+                    "score": 0.0,
+                    "text": docs[idx] if idx < len(docs) else "",
+                    "metadata": metas[idx] if idx < len(metas) else {},
+                    "matched_queries": []
+                }
+
+            # 累加 similarity
+            candidate_scores[sid]["score"] += similarity
+
+            # 记录匹配的 query
+            candidate_scores[sid]["matched_queries"].append({
+                "query_text": query_text,
+                "similarity": round(similarity, 4),
+            })
+
+    # -------------------------------------------------
+    # 6️⃣ Rerank by accumulated score
+    # -------------------------------------------------
+    ranked = sorted(
+        candidate_scores.items(),
+        key=lambda x: x[1]["score"],
+        reverse=True
+    )
+
+    # -------------------------------------------------
+    # 7️⃣ Return top-k
+    # -------------------------------------------------
+    results = []
+    for sid, info in ranked[:top_k]:
+        results.append({
+            "sentence_id": sid,
+            "total_score": round(info["score"], 4),
+            "text": info["text"],
+            "metadata": info["metadata"],
+            "matched_queries": info["matched_queries"],
+        })
+
+    return results
+
 if __name__ == "__main__":
 
     KB_PATH = Path(
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_MOTORCONTROL\sentence_kb"
     )
 
-    query_sentence ="In Software, Setpoint below minimal operational speed due to FOC limitation for low speeds leading to Motor not working."
-    result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20,
-                            #    source_section=["D2","D3","D4"]
-                               )
-    def structured_print(results):
-        ids = results["ids"][0]
-        documents = results["documents"][0]
-        metadatas = results["metadatas"][0]
-        distances = results["distances"][0]
+    # query_sentence ="Transmission ratio drifts"
+    # result = query_sentence_kb(persist_dir=KB_PATH,query_text=query_sentence,n_results=20, productPnID=133427
+    #                         #    source_section=["D2","D3","D4"]
+    #                            )
+#     def structured_print(results):
+#         ids = results["ids"][0]
+#         documents = results["documents"][0]
+#         metadatas = results["metadatas"][0]
+#         distances = results["distances"][0]
 
-        print("=" * 140)
-        print(f"{'Rank':<3} | {'Failure ID':<25} | {'Distance':<10} | {'Source':<} | Document")
-        print("=" * 140)
+#         print("=" * 140)
+#         print(f"{'Rank':<3} | {'Failure ID':<25} | {'Distance':<10} | {'Source':<} | Document")
+#         print("=" * 140)
 
-        for i, (fid, doc, meta, dist) in enumerate(zip(ids, documents, metadatas, distances), start=1):
-            source = meta.get("source_type", "8D_case")
-            print(f"{i:<3} | {fid:<25} | {dist:<10.6f} | {source:<12} | {doc}")
+#         for i, (fid, doc, meta, dist) in enumerate(zip(ids, documents, metadatas, distances), start=1):
+#             source = meta.get("source_type", "8D_case")
+#             print(f"{i:<3} | {fid:<25} | {dist:<10.6f} | {source:<12} | {doc}")
 
-        print("=" * 140)
+#         print("=" * 140)
+# # Example usage:
+#     structured_print(result)
 
-
-# Example usage:
-    structured_print(result)
+    results = query_sentence_kb_from_structure(
+    persist_dir=KB_PATH,
+    structure_input=structure_input_powertrain,
+    n_results_per_query=5,
+    top_k=10,
+    similarity_threshold=0.45,
+    # WHERE 过滤
+    productPnID=133427,
+)
+    for r in results:
+        print("Sentence ID:", r["sentence_id"])
+        print("Total Score:", r["total_score"])
+        print("Text:", r["text"])
+        print("Matched Queries:", r["matched_queries"])
+        print("-" * 70)
