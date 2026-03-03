@@ -420,18 +420,18 @@ def ingest_fmea_jsonl(
                 system = content.get("system_name")
                 element = content.get("system_element")
                 function = content.get("function")
-                discipline = content.get("cause_discipline")
                 process_step = None
             else:
                 system = None
                 element = content.get("process_step")
                 function = None
-                discipline = None
+                
                 process_step = None
 
             failure_mode = content.get("failure_mode")
             failure_effect = content.get("failure_effect")
             cause_text = content.get("failure_cause")
+            discipline = content.get("cause_discipline")
 
             # -------------------------------------------------
             # severity / rpn  (within this grouped sig in THIS file)
@@ -531,7 +531,8 @@ def ingest_fmea_jsonl(
                             field_type=ftype,
                             text=text,
                             failure_id=failure_id,
-                            source_type=source_type
+                            source_type=source_type,
+                            discipline = discipline
                         )
 
             # -------------------------------------------------

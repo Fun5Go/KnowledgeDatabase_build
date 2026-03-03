@@ -493,7 +493,7 @@ def RAG_pipeline(
             sentences =  query_sentence_kb_from_structure(persist_dir=sentence_KB_PATH,structure_input=structure_input, use_role_separation=False,
                                                         productPnID=product_pnID,top_k=15,similarity_threshold=0.3,n_results_per_query=5)
             structred_sentences = build_llm_case_context(sentences)
-            D_failures=  build_8d_failure_context_from_grouped(structred_sentences,entity_store_path=ENTITY_PATH, max_cases=3)
+            D_failures=  build_8d_failure_context_from_grouped(structred_sentences,entity_store_path=ENTITY_PATH, max_cases=4)
         if not FILL:
             similar_failure = generate_failure_chains_from_structure(
                 persist_dir=failure_KB_PATH,
@@ -742,7 +742,7 @@ if __name__ == "__main__":
     ]
 }
     RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH,
-                  top_k_per_field=30, top_n=50,object = "powertrain_8Dentity6",
+                  top_k_per_field=30, top_n=50,object = "powertrain_8Dentity7",
                  target_n = 25, weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
 
     # -----------------------------------------------------

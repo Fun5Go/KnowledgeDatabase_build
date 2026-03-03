@@ -38,14 +38,24 @@ def extract_discipline(cause_raw):
 
     Example:
     "[S01 - HW] Encoder noise"
-    → discipline="HW", cause="Encoder noise"
+    → cause_discipline="hardware", cause="Encoder noise"
     """
     if not cause_raw:
         return "", ""
 
-    m = re.match(r"^\[[^\]-]*-\s*([A-Za-z]+)\]\s*(.*)", str(cause_raw))
+    s = str(cause_raw)
+
+    m = re.match(r"^\[[^\]-]*-\s*([A-Za-z]+)\]\s*(.*)", s)
     if m:
-        return m.group(1).strip(), m.group(2).strip()
+        tag = m.group(1).strip().upper()
+        cause = m.group(2).strip()
+
+        tag_map = {
+            "ESW": "software",
+            "HW": "hardware",
+            "MCH": "mechanics",
+        }
+        return tag_map.get(tag, ""), cause
 
     return "", strip_prefix(cause_raw)
 

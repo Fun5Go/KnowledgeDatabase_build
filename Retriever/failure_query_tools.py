@@ -586,21 +586,21 @@ if  __name__ == "__main__":
 }
     group_maps = load_group_maps(group_files)
 
-    query_text = "creates too much noise"  
+    query_text = "too much noise"  
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
-        field_type=["mode"],
+        field_type=["effect"],
         n_results=10,
         min_count=1,
         hybrid=False,
-        source_type="8D"
+        # source_type="8D"
     )
     # for r in res[:30]:
     #     print(r["score"], r["text"])
-    print_semantic_results(res,kb,max_failure_ids=5)
-    # print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=10)
+    # print_semantic_results(res,kb,max_failure_ids=5)
+    print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=10)
 
     # result = query_linked_failure_fields(
     #     persist_dir=KB_PATH,

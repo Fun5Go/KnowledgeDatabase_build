@@ -32,6 +32,7 @@ ALL_TEXT_KEYS = [
     "failure_mode",
     "failure_cause",
     "failure_effect",
+    "cause_discipline",
 
     # controls / action
     "controls_prevention",
@@ -126,8 +127,8 @@ MOTOR_DRIVE_KEYWORDS = [
     # "high side",
     # "low side",
     #====== Evaluate =====
-    "power train",
-    "motor control",
+    # "power train",
+    # "motor control",
 ]
 
 

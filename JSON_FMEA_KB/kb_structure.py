@@ -77,6 +77,8 @@ class FailureSemanticNode:
     source_type: str = ""   
     # Optional bookkeeping
     source_count: int = 0
+    #Special for cause
+    discipline: Optional[str] = None
 
 
 
@@ -274,6 +276,7 @@ class FMEAFailureKB:
     text: str,
     failure_ids: list[str],
     source_type: str,
+    discipline: str | None = None,
 ) -> None:
 
         if not is_valid_embed_text(text):
@@ -318,6 +321,7 @@ class FMEAFailureKB:
             "failure_ids": failure_ids_unique,
             "count": count,
             "source_type": merged_source_type,
+            "discipline": discipline if field_type == "cause" else None,
         }
 
         # -------------------------------
@@ -336,14 +340,19 @@ class FMEAFailureKB:
             source_type_meta = ",".join(sorted(merged_source_type))
         else:
             source_type_meta = merged_source_type
+        metadata = {
+            "field_type": field_type,
+            "count": count,
+            "source_type": source_type_meta,
+        }
+
+        if field_type == "cause" and discipline:
+            metadata["discipline"] = discipline
+
         self.collection.upsert(
             ids=[semantic_id],
             documents=[text],
-            metadatas=[{
-                "field_type": field_type,
-                "count": count,
-                "source_type": source_type_meta
-            }],
+            metadatas=[metadata],
         )
 
     # existing: add cause

@@ -143,6 +143,34 @@ def extract_old_fmea_failures(df, metadata, file_name):
         def safe_str(x):
             return x.strip() if isinstance(x, str) and x.strip() else ""
 
+        def detect_cause_discipline(text):
+            if not isinstance(text, str):
+                return ""
+
+            text_lower = text.lower()
+
+            # hardware
+            if any(k in text_lower for k in [
+                "electronics", "electronic",
+                "hw", "hardware"
+            ]):
+                return "hardware"
+
+            # software
+            if any(k in text_lower for k in [
+                "software", "esw"
+            ]):
+                return "software"
+
+            # mechanics
+            if any(k in text_lower for k in [
+                "mechanics", "mechanical", "mch"
+            ]):
+                return "mechanics"
+
+            return ""
+
+        cause_discipline = detect_cause_discipline(failure_cause)
         text = (
             f"Product: {safe_str(metadata.get('productName'))}. "
             f"Process step: {safe_str(process_step)}. "
@@ -176,6 +204,7 @@ def extract_old_fmea_failures(df, metadata, file_name):
             "failure_cause": failure_cause,
             "current_detection": current_detection,
             "recommended_action": recommended_action,
+            "cause_discipline": cause_discipline, 
 
             "text" : text,
         }
