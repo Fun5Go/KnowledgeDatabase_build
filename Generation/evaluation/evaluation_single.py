@@ -446,8 +446,8 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 
 if __name__ == "__main__":
 
-    GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_allPT_MC\failure_kb\entity_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Single_test\RAG_powertrain_8dentity7.json")
+    GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_MOTORCONTROL\failure_kb\entity_store.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Single_test\RAG_FILL_seperate_3.json")
 
     gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_2)
     pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_2)

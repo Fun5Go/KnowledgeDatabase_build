@@ -7,6 +7,9 @@ from langsmith import traceable
 from pprint import pprint
 import json
 import re
+from Retriever.graph_query import generate_query_unique_chains
+from .utils import build_semi_chain_query_text_from_graph_results
+
 ENTITY_PATH = Path(
     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb\entity_store.json"
 )
@@ -153,14 +156,62 @@ def _safe_filename(s: str) -> str:
     s = re.sub(r"[^\w\-]+", "_", s)   # 只保留 字母数字下划线连字符，其余变 _
     return s
 
-def build_fill_entity(
+def build_llm_structure_input(
+    structure_input: Dict,
+) -> Tuple[str, List[str]]:
+    """
+    For LLM input: keep ONLY failure_element / modes / causes / effects.
+    Also return the list of failure_element strings (from structure nodes),
+    so you can feed them into build_semi_chain_query_text (element will be fixed to these).
+    """
+    nodes = structure_input.get("nodes") or []
+
+    minimal_nodes = []
+    element_list: List[str] = []
+
+    for n in nodes:
+        fe = (n.get("failure_element") or "").strip()
+        if not fe:
+            continue
+
+        element_list.append(fe)
+
+        minimal_nodes.append(
+            {
+                "failure_element": fe,
+                "failure_modes": list(n.get("modes") or []),
+                "failure_causes": list(n.get("causes") or []),
+                "failure_effects": list(n.get("effects") or []),
+            }
+        )
+
+    # minimal_payload = {
+    #     "product_domain": structure_input.get("product_domain"),
+    #     "product_pnID": structure_input.get("product_pnID"),
+    #     "nodes": minimal_nodes,
+    # }
+
+    return json.dumps(minimal_nodes, ensure_ascii=False, indent=2), element_list
+
+
+def build_semi_chain_query_text(
     results: List[Dict],
+    structure_elements: List[str],
     target_n: Optional[int] = None,
     strict_unique: bool = False,
+    blank: str = "____",
 ) -> str:
+    """
+    Build LLM query text as "semi chains":
+    - failure_element is ALWAYS from structure_elements (round-robin if multiple nodes)
+    - mode/cause/effect: ONLY keep STRUCTURE-tagged texts; otherwise blank for LLM to fill
+    """
 
     if not results:
-        return "No similar failure chains were retrieved from the knowledge base."
+        return "No similar failure chains were retrieved."
+
+    if not structure_elements:
+        raise ValueError("structure_elements is empty. Provide failure_element(s) from structure input.")
 
     if target_n is None:
         target_n = len(results)
@@ -168,47 +219,30 @@ def build_fill_entity(
     # ---------------------------
     # Utility functions
     # ---------------------------
-
     def norm(x):
         if x is None:
             return ""
         return " ".join(str(x).strip().split()).lower()
 
     def sig(r):
-        """Signature for duplicate filtering"""
         return (
-            norm(r.get("element")),
-            norm(r.get("function")),
             norm(r.get("mode")),
             norm(r.get("effect")),
             norm(r.get("cause")),
         )
 
-    def with_tag(text: str, tag: str) -> str:
-        """
-        Build display text with tag.
-        Example:
-        ADC measurements incorrect [STRUCTURE]
-        """
-        text = (text or "N/A").strip()
-        tag = (tag or "KB").strip().upper()
-        return f"{text} [{tag}]"
+    def _tagged(r: dict, field: str) -> dict:
+        return ((r.get("tagged") or {}).get(field) or {}) if isinstance(r, dict) else {}
 
-    def get_tagged_text(r: dict, field: str, fallback_text: str):
-        """
-        Extract text and tag from r["tagged"][field]
-        Fallback to plain r[field]
-        Default tag = KB
-        """
-        tagged = (r.get("tagged") or {}).get(field) or {}
-        text = tagged.get("text") or r.get(field) or fallback_text or "N/A"
-        tag = tagged.get("tag") or "KB"
-        return text, tag
+    def get_structure_text(r: dict, field: str) -> str:
+        t = _tagged(r, field)
+        text = (t.get("text") or "").strip()
+        tag = (t.get("tag") or "").strip().upper()
+        return text if (text and tag == "STRUCTURE") else ""
 
     # ---------------------------
     # Select unique results
     # ---------------------------
-
     selected = []
     seen = set()
     duplicates = []
@@ -228,54 +262,35 @@ def build_fill_entity(
         selected.extend(duplicates[:need])
 
     # ---------------------------
-    # Build structured entities
+    # Build query text semi chains
     # ---------------------------
+    blocks = []
+    for i, r in enumerate(selected, start=1):
+        failure_id = r.get("failure_id")
 
-    entities = []
-    llm_entities = []
+        # element fixed from structure input
+        element = structure_elements[(i - 1) % len(structure_elements)]
 
-    for r in selected:
-        function = r.get("function") or "N/A"
+        # only keep STRUCTURE-tagged; else blank
+        mode = get_structure_text(r, "mode")
+        cause = get_structure_text(r, "cause")
+        effect = get_structure_text(r, "effect")
 
-        element_text, element_tag = get_tagged_text(r, "element", r.get("element"))
-        mode_text, mode_tag = get_tagged_text(r, "mode", r.get("mode"))
-        cause_text, cause_tag = get_tagged_text(r, "cause", r.get("cause"))
-        effect_text, effect_tag = get_tagged_text(r, "effect", r.get("effect"))
+        mode_q = mode if mode else blank
+        cause_q = cause if cause else blank
+        effect_q = effect if effect else blank
 
-        # -------------------------
-        # Internal structured entity (for your system logic)
-        # -------------------------
-        entity = {
-            "failure_id": r.get("failure_id"),
-            "failure_element": element_text,
-            "failure_element_tag": element_tag,
-            "failure_function": function,
-            "given_failure_mode": mode_text,
-            "given_failure_mode_tag": mode_tag,
-            "given_failure_cause": cause_text,
-            "given_failure_cause_tag": cause_tag,
-            "given_failure_effect": effect_text,
-            "given_failure_effect_tag": effect_tag,
-        }
+        blocks.append(
+            f"[SEMI_CHAIN {i}]"
+            + (f" (failure_id={failure_id})" if failure_id is not None else "")
+            + "\n"
+            f"failure_element: {element}\n"
+            f"failure_mode: {mode_q}\n"
+            f"failure_cause: {cause_q}\n"
+            f"failure_effect: {effect_q}\n"
+        )
 
-        entities.append(entity)
-
-        # -------------------------
-        # LLM-only payload (display only)
-        # -------------------------
-        llm_entity = {
-            "failure_id": r.get("failure_id"),
-            "failure_function": function,
-            "failure_element": with_tag(element_text, element_tag),
-            "failure_mode": with_tag(mode_text, mode_tag),
-            "failure_cause": with_tag(cause_text, cause_tag),
-            "failure_effect": with_tag(effect_text, effect_tag),
-        }
-
-        llm_entities.append(llm_entity)
-
-    # 
-    return json.dumps(llm_entities, indent=2, ensure_ascii=False)
+    return "\n".join(blocks)
 
 
 def format_sentences_grouped_by_case_id(
@@ -481,7 +496,8 @@ def RAG_pipeline(
     FILL: bool = True,
     object: str = "powertrain",
 ):
-    structure_input_json = json.dumps(structure_input, ensure_ascii=False, indent=2)
+    # structure_input_json = json.dumps(structure_input, ensure_ascii=False, indent=2)
+    structure_input_json_min, structure_elements = build_llm_structure_input(structure_input)
     product_pnID = structure_input.get("product_pnID")
     obj = _safe_filename(object)
    
@@ -519,7 +535,7 @@ def RAG_pipeline(
             failure_candidates = failure_inference_generation_RAG.invoke(
                 {
                     "data": {
-                        "structure_analysis": structure_input_json,
+                        "structure_analysis": structure_input_json_min,
                         "gt_example": failure_example,
                         "sentences": D_failures,
                     }
@@ -531,31 +547,34 @@ def RAG_pipeline(
             )
 
         else:
-            semi_candidates = generate_failure_chains_from_structure(
-                persist_dir=failure_KB_PATH,
-                structure_input=structure_input,
-                top_k_per_field=top_k_per_field,
-                top_n=top_n,
-                min_similarity=min_similarity,
-                require_cause=require_cause,
-                require_cause_plus=require_cause_plus,
-                weight_element=weight_element,
-                replace=True,
-                source_type=["new_fmea","old_fmea"],
-                hybrid_score=False,
-            )
+            # semi_candidates = generate_failure_chains_from_structure(
+            #     persist_dir=failure_KB_PATH,
+            #     structure_input=structure_input,
+            #     top_k_per_field=top_k_per_field,
+            #     top_n=top_n,
+            #     min_similarity=min_similarity,
+            #     require_cause=require_cause,
+            #     require_cause_plus=require_cause_plus,
+            #     weight_element=weight_element,
+            #     replace=True,
+            #     source_type=["new_fmea","old_fmea"],
+            #     hybrid_score=False,
+            # )
 
-            semi_candidates = build_fill_entity(
-                semi_candidates,
-                target_n=target_n,
-                strict_unique=True,
-            )
-            retrieval_payload = semi_candidates  
-
+            # semi_candidates = build_semi_chain_query_text(
+            #     semi_candidates,
+            #     target_n=target_n,
+            #     strict_unique=True,
+            #     structure_elements=structure_elements
+            # )
+            graph_semi_chains = generate_query_unique_chains(persist_dir=failure_KB_PATH,structure_input=structure_input,save_query_json=False,
+                                                                  min_similarity=0.25,top_k_per_field=30)
+            
+            semi_candidates = build_semi_chain_query_text_from_graph_results(graph_semi_chains, target_n_mc=15, target_n_me=15,min_count=2, min_best_score=0.5)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke(
                 {
                     "data": {
-                        "structure_analysis": structure_input_json,
+                        "structure_analysis": structure_input_json_min,
                         "fill_failure": semi_candidates,
                     }
                 }
@@ -568,7 +587,7 @@ def RAG_pipeline(
         failure_candidates = failure_inference_generation_PURE.invoke(
             {
                 "data": {
-                    "structure_analysis": structure_input_json,
+                    "structure_analysis": structure_input_json_min,
                 }
             }
         )
@@ -742,8 +761,8 @@ if __name__ == "__main__":
     ]
 }
     RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH,
-                  top_k_per_field=30, top_n=50,object = "powertrain_8Dentity7",
-                 target_n = 25, weight_element = 0.2, min_similarity=0.45, RAG = True, FILL = False)
+                  top_k_per_field=30, top_n=50,object = "seperate_3",
+                 target_n = 15, weight_element = 0.5, min_similarity=0.45, RAG = True, FILL = True)
 
     # -----------------------------------------------------
     # 3) Batch Settings

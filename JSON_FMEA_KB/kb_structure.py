@@ -6,6 +6,7 @@ import json
 from sentence_transformers import SentenceTransformer
 import chromadb
 from chromadb.utils import embedding_functions
+import hashlib
 
 from dataclasses import asdict
 from collections import defaultdict
@@ -14,7 +15,7 @@ from dataclasses import asdict, is_dataclass, field
 FilterValue = Union[str, List[str]]
 DStage = Literal["D2", "D4"]
 FailureFieldType = Literal["element", "mode", "effect", "cause"]
-
+EdgeKind = Literal["hard", "soft"]
 
 
 #======= Helper =========
@@ -29,6 +30,10 @@ def is_valid_embed_text(text: Optional[str]) -> bool:
     }:
         return False
     return True
+
+def make_edge_id(src_id: str, relation: str, tgt_id: str, kind: str) -> str:
+    key = f"{src_id}|{relation}|{tgt_id}|{kind}"
+    return hashlib.md5(key.encode("utf-8")).hexdigest()
 
 @dataclass
 class FileMeta: #General metadata for a FMEA worksheet
@@ -81,7 +86,6 @@ class FailureSemanticNode:
     discipline: Optional[str] = None
 
 
-
 @dataclass
 class FailureEntity:
     """
@@ -131,6 +135,30 @@ class FailureEntity:
     released_year: Optional[int] = None
 
     same_id: Optional[List[str]] = field(default_factory=list)
+
+@dataclass
+class GraphEdge:
+    edge_id: str                         # stable unique id (hash)
+    src_id: str
+    src_type: str                        # element|mode|effect|cause|...
+    relation: str                        # MODE_LEADS_TO_EFFECT ...
+    tgt_id: str
+    tgt_type: str
+
+    kind: EdgeKind = "hard"              # hard or soft
+    weight: float = 1.0                  # normalized strength (0..1 for soft; >=1 ok for hard)
+    count: int = 0                       # occurrences / evidence count
+
+    # provenance / evidence
+    failure_ids: List[str] = field(default_factory=list)  # which FailureEntity records support it
+    source_type: Optional[str] = None                     # Old/New
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    # soft-edge special
+    score_type: Optional[str] = None      # "cosine"|"pmi"|"lift"|"rule"...
+    threshold: Optional[float] = None     # how it was formed
+    metadata: Dict = field(default_factory=dict)
 
 class FileMetaStore:
     def __init__(self, persist_dir: Path):

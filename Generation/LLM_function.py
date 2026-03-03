@@ -58,7 +58,7 @@ def failure_inference_generation_RAG_FILL(data: dict) -> dict:
     )
     # System prompt
     system_prompt = """You are an expert in motor drive systems, reliability engineering,
-        and FMEA classification. Only perform infer and fill most relevant FMEA failure text from the given structure analysis to replace the KB text in failure."""
+        and FMEA classification. Only perform infer and fill most relevant FMEA failure text from the given structure analysis to the blank block."""
     #     # Build a chat prompt template with: system + user messages
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),

@@ -206,4 +206,3 @@ def print_semantic_results(res, kb, max_failure_ids: int = 15):
 
         print(f"  failure_ids({len(failure_ids)}): {shown}" + (f" ... (+{more})" if more > 0 else ""))
 
-#-------

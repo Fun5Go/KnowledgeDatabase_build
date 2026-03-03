@@ -230,19 +230,6 @@ Not Allowed:
 
 
 =====================================================
-OUTPUT COUNT REQUIREMENT (MANDATORY)
-=====================================================
-
-You MUST output exactly 20 failure_candidates.
-
-If more candidates are possible, select the best 20 by:
-
-1) Strongest structural causality
-2) Strongest 8D explanation capability
-3) Strongest historical mechanism alignment
-
-
-=====================================================
 Historical Failures SIMILAR EXAMPLE
 =====================================================
 
@@ -349,19 +336,6 @@ high   – strong structural support
 medium – partially inferred  
 low    – mostly inferred
 
-=====================================================
-OUTPUT COUNT REQUIREMENT (MANDATORY)
-=====================================================
-
-You MUST output exactly 20 failure_candidates.
-
-- If more candidates are possible, select the best 20 by:
-  1) strongest structural causality
-  2) highest GT support
-  3) highest diversity (different mode/cause/effect)
-
-- If fewer than 15 valid candidates exist using Structure Analysis:
-  output as many as possible and explain in inference_reason why no more valid chains exist.
 
 ==============================
 STRUCTURE ANALYSIS (JSON)
@@ -397,110 +371,125 @@ ROLE
 =====================================================
 You are a senior motor-drive system FMEA architect and failure-physics expert.
 
-Task: REVIEW, CORRECT, COMPLETE, and EXPAND the provided "Semi-filled Failure Entity" entries.
-This is a STRUCTURE-DRIVEN reconstruction task for motor-drive systems.
+Primary task: FILL the missing field(s) (cause or effect) in the provided MC/ME semi chains
+with the MOST physically consistent choice from Structure Analysis (SA).
+
+This is NOT a generation task.
+This is NOT a free inference task.
+This is a BEST-FIT COMPLETION task (SA-only).
+
+
+=====================================================
+YOU WILL RECEIVE
+=====================================================
+1) Structure Analysis (SA) JSON: the ONLY allowed text inventory
+2) Input Failure Entities:
+   - MC semi chains: usually (element, mode, cause) and missing effect
+   - ME semi chains: usually (element, mode, effect) and missing cause
+   - Some may be complete already
+
 
 =====================================================
 HARD CONSTRAINTS (NON-NEGOTIABLE)
 =====================================================
 
-[HC-1] Structure Dominance
-- ALL final output fields MUST come ONLY from the provided Structure Analysis (SA) texts.
-- Do NOT use the Knowledge Base (KB) wording in the final output.
+[HC-1] Structure Dominance (Output Vocabulary Lock)
+- ALL output fields MUST be EXACT texts from SA.
+- Do NOT use KB wording in the final output.
 - Do NOT invent any new text outside SA.
 
-[HC-2] Field Exact-Match Rule
-For every output candidate:
-- failure_element: MUST be EXACT text from SA (closest match if input is not exact).
-- failure_function: MUST remain EXACT as provided in input; if deduplicated -> "N/A".
-- failure_mode: MUST be EXACT mode text from SA.
-- failure_cause: MUST be EXACT cause text from SA.
-- failure_effect: MUST be EXACT effect text from SA.
+[HC-2] Exact-Match Canonicalization
+For every chain field:
+- failure_element: MUST be exact from SA.failure_element
+- failure_mode: MUST be exact from SA.modes
+- failure_cause: MUST be exact from SA.causes
+- failure_effect: MUST be exact from SA.effects
 
-[HC-3] Physics-Causal Validity
-Every chain MUST satisfy:
+If an input field is not an exact SA text:
+- Replace it with the closest SA exact text (same meaning, minimum edit).
+- Then continue filling.
+
+[HC-3] Physics-Causal Validity (Must Pass)
+Every completed chain MUST satisfy:
     failure_cause -> failure_mode -> failure_effect
-Validate:
-1) Cause can physically produce Mode in motor-drive context
+and be realistic in motor-drive context:
+1) Cause can physically produce Mode
 2) Mode can physically lead to Effect
-3) Chain is coherent, realistic, and not abstract
+3) The chain is subsystem-consistent (same failure_element context)
 
-If invalid:
-- Replace cause/mode/effect using other SA texts to make it physically correct.
-- If no valid correction exists using SA only: mark INVALID and explain why.
+If a chain cannot be made valid using SA-only:
+- Output it as INVALID and give a brief SA-only reason.
+
 
 =====================================================
-CORE OBJECTIVE
+FILLING RULES (BEST-FIT)
 =====================================================
 
-Step 1 — Replace KB / Repair Inputs
-For each input failure entity:
-- Replace any non-SA fields with SA-exact texts.
-- Correct physically wrong chains by selecting better SA cause/mode/effect.
-- Prioritize physics correctness over similarity.
+[FR-1] Fill Only What Is Missing
+- If failure_effect is "____": fill ONE best SA.effect.
+- If failure_cause is "____": fill ONE best SA.cause.
+- If both are "____": fill both (cause first, then effect).
+- Do NOT change non-blank fields unless required by HC-2 or to restore HC-3 validity.
 
-Step 2 — Deduplicate (Strict)
-If multiple candidates share the SAME:
+[FR-2] Mode-Centered Matching (MC <-> ME Use As HINT)
+When filling:
+- Prefer SA effects that are already observed in any ME chain with the SAME
+  (failure_element + failure_mode), if available.
+- Prefer SA causes that are already observed in any MC chain with the SAME
+  (failure_element + failure_mode), if available.
+This is a preference, not a hard rule; physics consistency still dominates.
+
+[FR-3] Minimal Repair (Only If Needed)
+If a provided non-blank field makes the chain physically impossible:
+- Prefer changing ONLY ONE field to restore validity:
+  Priority: effect -> cause -> mode
+- Never change failure_element unless it is not in SA.
+
+[FR-4] Specificity Bias
+- Prefer the most specific SA option that matches the mechanism,
+  avoid overly generic effects/causes when a more specific SA text fits better.
+
+
+=====================================================
+WORKFLOW
+=====================================================
+
+Step 0 — Parse & Normalize
+- Treat each [MC_*] or [ME_*] block as one item.
+- Ignore node_id/stats/best_score (not output fields).
+- Canonicalize all non-blank fields to SA exact texts (HC-2).
+
+Step 1 — Fill Missing Field(s)
+For each item:
+- If missing effect: choose the single best SA.effect so that
+  cause -> mode -> effect is valid.
+- If missing cause: choose the single best SA.cause so that
+  cause -> mode -> effect is valid.
+
+Step 2 — Validate
+- Enforce HC-3; apply FR-3 only if necessary.
+- Mark VALID / INVALID.
+
+Step 3 — Output (No Extra Inference)
+- DO NOT add new chains beyond completing the given inputs.
+- Return one completed result per input block.
+
+
+=====================================================
+DEDUPLICATION & SORTING (FINAL OUTPUT SHAPING)
+=====================================================
+
+Step 4 — Deduplicate (Strict)
+If multiple candidates share the SAME signature:
     (failure_mode + failure_cause + failure_effect)
 THEN:
 - Merge into one candidate
-- Keep the most logical failure_element
-- Set failure_function = "N/A"
-- Append merged original ids into fill_from_id (list)
+- Keep the most appropriate failure_element (closest subsystem fit)
+- Set failure_function = "N/A" (if present / required by your schema)
+- Collect merged ids into fill_from_id (list)
 
-Step 3 — Expand & Diversify (Inference)
-After processing all inputs:
-- Infer additional realistic failure chains using ONLY SA texts
-- Must be different combinations than existing output
-- Must NOT duplicate any existing (mode + cause + effect)
-- fill_from_id MUST be empty for inferred chains
-- Must follow strong causal motor-drive physics (not random mixing)
 
-=====================================================
-OUTPUT COUNT REQUIREMENT
-=====================================================
-You MUST output EXACTLY 20 failure_candidates.
-
-If more than 20 are possible:
-Select best 20 by:
-1) strongest physical causality
-2) strongest support by provided 8D evidence (if aligns)
-3) diversity across mode/cause/effect
-
-If fewer than 15 valid candidates exist using SA only:
-Output as many as possible and explain in inference_reason why more cannot be formed.
-
-=====================================================
-8D REAL-WORLD EVIDENCE (GROUNDING ONLY)
-=====================================================
-Use these as REAL symptoms/mechanism hints to improve plausibility,
-BUT you STILL MUST output ONLY SA-exact texts.
-
-# 8D Case 1: 8D6782170310R02 - Motor noise
-- Element: motor control algorithm
-- Mode: high frequency noise during idle
-- Causes:
-  - incorrect stall handling in traffic light mode
-  - motor control algorithm tuning error
-  - hardware error in current measurement circuit
-
-# 8D Case 2: 8D6782170362R01 - Material Debris
-- Element: gear assembly
-- Mode: material debris in gear
-- Effect: device runs very noisily
-- Causes:
-  - flash pressed out during dowel pin assembly
-  - flash formation at gear cover dowel holes
-
-# 8D Case 3: 8D6782170329R02 - App/Integration config resets
-- Element: Hub Interface and mobile app integration
-- Mode: configuration settings not retained after power cycle
-- Effect: max cadence resets to 90 RPM; configuration incomplete; workflow disrupted
-- Causes:
-  - incorrect initialization sequence from external flash
-  - temporary variant misassignment during startup
-  - asynchronous notification and data retrieval conflict
-  - notification list extension bug on reconnect
+Return only the final deduplicated & sorted list.
 
 
 =====================================================

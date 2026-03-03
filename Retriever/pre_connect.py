@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Callable, Tuple
-
+import re
 import numpy as np
 
 # -----------------------------
@@ -160,77 +160,229 @@ def print_candidate_chains(chains: List[CandidateChain], top_n: int = 20) -> Non
         print(f"  Effect: {ch.effect}")
         print("-" * 90)
 
-def generate_internal_candidate_pairs(
+
+# -----------------------------
+# Utilities
+# -----------------------------
+_WS = re.compile(r"\s+")
+
+def normalize_text(s: str) -> str:
+    """Lightweight normalization for de-dup / matching only."""
+    s = str(s or "").strip().lower()
+    s = _WS.sub(" ", s)
+    return s
+
+def l2_normalize(E: np.ndarray) -> np.ndarray:
+    """Row-wise L2 normalize."""
+    E = np.asarray(E, dtype=np.float32)
+    n = np.linalg.norm(E, axis=1, keepdims=True) + 1e-12
+    return E / n
+
+def cosine_sim_vector_to_matrix(v: np.ndarray, M: np.ndarray) -> np.ndarray:
+    """
+    v: (d,) normalized
+    M: (n,d) normalized
+    return: (n,) cosine sims
+    """
+    return (M @ v).astype(np.float32)
+
+def topk_indices(x: np.ndarray, k: int) -> np.ndarray:
+    """Fast top-k indices for 1D array."""
+    k = int(min(k, x.shape[0]))
+    if k <= 0:
+        return np.array([], dtype=np.int64)
+    # argpartition then sort within top-k
+    idx = np.argpartition(-x, kth=k-1)[:k]
+    idx = idx[np.argsort(-x[idx])]
+    return idx.astype(np.int64)
+
+
+# -----------------------------
+# Standard candidate generation
+# -----------------------------
+def generate_internal_candidate_pairs_standard(
     structure_input: Dict[str, Any],
     *,
     node_index: int = 0,
-    top_k_modes_per_cause: int = 5,
-    top_k_effects_per_mode: int = 5,
-    beam_width_cm: int = 80,
-    beam_width_me: int = 80,
-    min_sim_cm: float = 0.25,
-    min_sim_me: float = 0.25,
+
+    # retrieval width
+    top_k_modes_per_cause: int = 10,
+    top_k_causes_per_mode: int = 10,
+    top_k_effects_per_mode: int = 10,
+    top_k_modes_per_effect: int = 10,
+
+    # global beam caps
+    beam_width_cm: int = 120,
+    beam_width_me: int = 120,
+
+    # to avoid beam domination (per-left quota)
+    per_cause_quota: int = 3,
+    per_mode_quota_for_me: int = 3,
+
+    # similarity thresholds (should be calibrated)
+    min_sim_cm: float = 0.35,
+    min_sim_me: float = 0.35,
+
+    # model
     st_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
 ) -> Tuple[List[CandidatePair], List[CandidatePair]]:
     """
-    Return:
-      - cause_mode_pairs: top cause->mode pairs
-      - mode_effect_pairs: top mode->effect pairs
-    """
+    Standardized candidate edge generation with:
+      - normalization + de-dup
+      - reciprocal top-k filtering
+      - per-left quota to prevent beam domination
+      - global beam truncation
 
+    Return:
+      cm_pairs: Cause -> Mode
+      me_pairs: Mode  -> Effect
+    """
     nodes = structure_input.get("nodes") or []
     if not nodes:
         return [], []
+    if node_index < 0 or node_index >= len(nodes):
+        return [], []
 
     node = nodes[node_index]
-    causes  = [str(c).strip() for c in (node.get("causes") or []) if str(c).strip()]
-    modes   = [str(m).strip() for m in (node.get("modes") or []) if str(m).strip()]
-    effects = [str(e).strip() for e in (node.get("effects") or []) if str(e).strip()]
+    raw_causes  = [str(c).strip() for c in (node.get("causes") or []) if str(c).strip()]
+    raw_modes   = [str(m).strip() for m in (node.get("modes") or []) if str(m).strip()]
+    raw_effects = [str(e).strip() for e in (node.get("effects") or []) if str(e).strip()]
+
+    if not raw_causes or not raw_modes or not raw_effects:
+        return [], []
+
+    # 1) Normalize + de-dup but keep original text (first occurrence)
+    def dedup_keep_first(texts: List[str]) -> Tuple[List[str], List[str]]:
+        norm2orig: Dict[str, str] = {}
+        for t in texts:
+            nt = normalize_text(t)
+            if not nt:
+                continue
+            if nt not in norm2orig:
+                norm2orig[nt] = t
+        norms = list(norm2orig.keys())
+        origs = [norm2orig[n] for n in norms]
+        return norms, origs
+
+    cause_norms, causes  = dedup_keep_first(raw_causes)
+    mode_norms,  modes   = dedup_keep_first(raw_modes)
+    eff_norms,   effects = dedup_keep_first(raw_effects)
 
     if not causes or not modes or not effects:
         return [], []
 
+    # 2) Embed (single normalization: either here OR later; do it once)
     from sentence_transformers import SentenceTransformer
     st = SentenceTransformer(st_model_name)
 
-    def embed(texts: List[str]) -> np.ndarray:
-        return st.encode(texts, normalize_embeddings=True)
+    # normalize_embeddings=True already does L2 norm in sentence-transformers
+    C = np.asarray(st.encode(causes,  normalize_embeddings=True), dtype=np.float32)  # (nc, d)
+    M = np.asarray(st.encode(modes,   normalize_embeddings=True), dtype=np.float32)  # (nm, d)
+    E = np.asarray(st.encode(effects, normalize_embeddings=True), dtype=np.float32)  # (ne, d)
 
-    cause_emb = _l2_normalize(embed(causes))
-    mode_emb  = _l2_normalize(embed(modes))
-    eff_emb   = _l2_normalize(embed(effects))
+    # (Optional safety) If you don't trust normalize_embeddings, uncomment:
+    # C = l2_normalize(C); M = l2_normalize(M); E = l2_normalize(E)
 
-    # -----------------------------
-    # Cause -> Mode
-    # -----------------------------
-    cm_pairs: List[CandidatePair] = []
-    for i, cause in enumerate(causes):
-        sims = _batch_cosine_sim(cause_emb[i], mode_emb)
-        top_idx = np.argsort(-sims)[:top_k_modes_per_cause]
-        for j in top_idx:
-            s = float(sims[j])
-            if s < min_sim_cm:
+    # 3) Precompute reciprocal neighbor sets
+    # --- Cause -> Mode candidates
+    cause_to_modes: List[List[int]] = []
+    for i in range(C.shape[0]):
+        sims = cosine_sim_vector_to_matrix(C[i], M)
+        idx = topk_indices(sims, top_k_modes_per_cause)
+        idx = [int(j) for j in idx if float(sims[j]) >= min_sim_cm]
+        cause_to_modes.append(idx)
+
+    mode_to_causes: List[List[int]] = []
+    for j in range(M.shape[0]):
+        sims = cosine_sim_vector_to_matrix(M[j], C)
+        idx = topk_indices(sims, top_k_causes_per_mode)
+        idx = [int(i) for i in idx if float(sims[i]) >= min_sim_cm]
+        mode_to_causes.append(idx)
+
+    # --- Mode -> Effect candidates
+    mode_to_effects: List[List[int]] = []
+    for j in range(M.shape[0]):
+        sims = cosine_sim_vector_to_matrix(M[j], E)
+        idx = topk_indices(sims, top_k_effects_per_mode)
+        idx = [int(k) for k in idx if float(sims[k]) >= min_sim_me]
+        mode_to_effects.append(idx)
+
+    eff_to_modes: List[List[int]] = []
+    for k in range(E.shape[0]):
+        sims = cosine_sim_vector_to_matrix(E[k], M)
+        idx = topk_indices(sims, top_k_modes_per_effect)
+        idx = [int(j) for j in idx if float(sims[j]) >= min_sim_me]
+        eff_to_modes.append(idx)
+
+    # 4) Build reciprocal pairs with de-dup
+    def build_reciprocal_pairs_left_to_right(
+        left_texts: List[str],
+        right_texts: List[str],
+        left_emb: np.ndarray,
+        right_emb: np.ndarray,
+        left_to_right: List[List[int]],
+        right_to_left: List[List[int]],
+        *,
+        min_sim: float,
+        per_left_quota: int,
+        beam_width: int,
+    ) -> List[CandidatePair]:
+        pairs: List[CandidatePair] = []
+        seen = set()
+
+        # per-left quota first (coverage), then global beam
+        for i, rlist in enumerate(left_to_right):
+            if not rlist:
                 continue
-            cm_pairs.append(CandidatePair(left=cause, right=modes[int(j)], sim=s))
+            # score all reciprocal candidates
+            scored: List[Tuple[float, int]] = []
+            for j in rlist:
+                # reciprocal check
+                if i not in right_to_left[j]:
+                    continue
+                sim = float(right_emb[j] @ left_emb[i])  # since normalized
+                if sim < min_sim:
+                    continue
+                key = (normalize_text(left_texts[i]), normalize_text(right_texts[j]))
+                if key in seen:
+                    continue
+                scored.append((sim, j))
 
-    cm_pairs.sort(key=lambda x: x.sim, reverse=True)
-    cm_pairs = cm_pairs[:beam_width_cm]
-
-    # -----------------------------
-    # Mode -> Effect
-    # -----------------------------
-    me_pairs: List[CandidatePair] = []
-    for i, mode in enumerate(modes):
-        sims = _batch_cosine_sim(mode_emb[i], eff_emb)
-        top_idx = np.argsort(-sims)[:top_k_effects_per_mode]
-        for k in top_idx:
-            s = float(sims[k])
-            if s < min_sim_me:
+            if not scored:
                 continue
-            me_pairs.append(CandidatePair(left=mode, right=effects[int(k)], sim=s))
 
-    me_pairs.sort(key=lambda x: x.sim, reverse=True)
-    me_pairs = me_pairs[:beam_width_me]
+            scored.sort(key=lambda x: x[0], reverse=True)
+            for sim, j in scored[: max(0, int(per_left_quota))]:
+                seen.add((normalize_text(left_texts[i]), normalize_text(right_texts[j])))
+                pairs.append(CandidatePair(left=left_texts[i], right=right_texts[j], sim=float(sim)))
+
+        # if still too many, global sort + cut
+        pairs.sort(key=lambda x: x.sim, reverse=True)
+        return pairs[: int(beam_width)]
+
+    cm_pairs = build_reciprocal_pairs_left_to_right(
+        left_texts=causes,
+        right_texts=modes,
+        left_emb=C,
+        right_emb=M,
+        left_to_right=cause_to_modes,
+        right_to_left=mode_to_causes,
+        min_sim=min_sim_cm,
+        per_left_quota=per_cause_quota,
+        beam_width=beam_width_cm,
+    )
+
+    me_pairs = build_reciprocal_pairs_left_to_right(
+        left_texts=modes,
+        right_texts=effects,
+        left_emb=M,
+        right_emb=E,
+        left_to_right=mode_to_effects,
+        right_to_left=eff_to_modes,
+        min_sim=min_sim_me,
+        per_left_quota=per_mode_quota_for_me,
+        beam_width=beam_width_me,
+    )
 
     return cm_pairs, me_pairs
 
@@ -306,14 +458,15 @@ if __name__ == "__main__":
                     "Gear ratio drifts when battery is empty",
                     "Firmware update not possible/fails",
                     "Device bricked",
-                    "Update takes too much time (>5 minutes)"
+                    "Update takes too much time (>5 minutes)",
+                    "Too much noise",
                 ]
             }
         ]
     }
     # result = generate_internal_candidate_pairs(structure_input=structure_input)
 
-    cm_pairs, me_pairs = generate_internal_candidate_pairs(
+    cm_pairs, me_pairs = generate_internal_candidate_pairs_standard(
         structure_input=structure_input,
         top_k_modes_per_cause=5,
         top_k_effects_per_mode=5,
@@ -323,8 +476,8 @@ if __name__ == "__main__":
         min_sim_me=0.22,
     )
 
-    print_pairs("Cause → Mode (Top)", cm_pairs, top_n=40)
-    print_pairs("Mode → Effect (Top)", me_pairs, top_n=10)
+    print_pairs("Cause → Mode (Top)", cm_pairs, top_n=20)
+    print_pairs("Mode → Effect (Top)", me_pairs, top_n=20)
 
 
   
