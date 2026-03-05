@@ -151,8 +151,15 @@ def generate_failure_chains_from_structure(
 
         element_text = (node.get("failure_element") or "").strip()
         modes = [x.strip() for x in (node.get("modes") or []) if str(x).strip()]
-        causes = [x.strip() for x in (node.get("causes") or []) if str(x).strip()]
         effects = [x.strip() for x in (node.get("effects") or []) if str(x).strip()]
+        causes = []
+        causes_dict = node.get("causes") or {}
+
+        for discipline, cause_list in causes_dict.items():
+            for c in cause_list:
+                c = str(c).strip()
+                if c:
+                    causes.append((discipline, c))
 
         candidate_scores = defaultdict(lambda: {
             "score": 0.0,
@@ -163,7 +170,13 @@ def generate_failure_chains_from_structure(
         # -------------------------
         # SEMANTIC SEARCH
         # -------------------------
-        def query_and_accumulate(text: str, field: str, weight: float):
+        def query_and_accumulate(text: str, field: str, weight: float, discipline: str = None):
+
+            extra_args = {}
+
+            if field == "cause" and discipline:
+                extra_args["discipline"] = [discipline, "unknown"]
+
             res = query_semantic_kb(
                 persist_dir,
                 text,
@@ -171,6 +184,7 @@ def generate_failure_chains_from_structure(
                 n_results=top_k_per_field,
                 min_count=min_count,
                 source_type=source_type,
+                **extra_args
             )
             _accumulate_candidate_scores(
                 kb=kb,
@@ -186,8 +200,8 @@ def generate_failure_chains_from_structure(
             query_and_accumulate(element_text, "element", weight_element)
         for m in modes:
             query_and_accumulate(m, "mode", weight_mode)
-        for c in causes:
-            query_and_accumulate(c, "cause", weight_cause)
+        for discipline, cause in causes:
+            query_and_accumulate(cause, "cause", weight_cause, discipline)
         for e in effects:
             query_and_accumulate(e, "effect", weight_effect)
 

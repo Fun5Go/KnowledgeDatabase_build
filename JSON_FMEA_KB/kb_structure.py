@@ -279,6 +279,7 @@ class FMEAFailureKB:
                 "mode_to_cause": {},
                 "mode_to_effect": {},
                 "element_to_mode": {},
+                "cause_to_effect":{},
             }
 
         # ---------- vector store ----------
@@ -410,9 +411,128 @@ class FMEAFailureKB:
         # element -> mode
         _add_edge("element_to_mode", entity.element_id, entity.mode_id)
 
+
+        _add_edge("cause_to_effect", entity.cause_id, entity.effect_id)
+
         # 3) persist edge store
         self.edge_store_path.write_text(
             json.dumps(self.edge_store, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        
+    def delete_failure(self, failure_id: str) -> None:
+
+        entity = self.entity_store.get(failure_id)
+        if not entity:
+            print(f"[WARN] failure_id not found: {failure_id}")
+            return
+
+        mode_id = entity.get("mode_id")
+        element_id = entity.get("element_id")
+        effect_id = entity.get("effect_id")
+        cause_id = entity.get("cause_id")
+
+        # -----------------------------
+        # 1 remove entity
+        # -----------------------------
+        del self.entity_store[failure_id]
+
+        self.entity_store_path.write_text(
+            json.dumps(self.entity_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # -----------------------------
+        # 2 update field_store
+        # -----------------------------
+        for sid in [mode_id, element_id, effect_id, cause_id]:
+
+            if not sid:
+                continue
+
+            node = self.field_store.get(sid)
+            if not node:
+                continue
+
+            ids = set(node.get("failure_ids", []))
+            ids.discard(failure_id)
+
+            if not ids:
+                # remove semantic node entirely
+                del self.field_store[sid]
+
+                try:
+                    self.collection.delete(ids=[sid])
+                except Exception:
+                    pass
+            else:
+                node["failure_ids"] = sorted(ids)
+                node["count"] = len(ids)
+                self.field_store[sid] = node
+
+        self.field_store_path.write_text(
+            json.dumps(self.field_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # -----------------------------
+        # 3 update edge_store
+        # -----------------------------
+        def _decrement(src_type, src, tgt):
+
+            if not src or not tgt:
+                return
+
+            src_map = self.edge_store.get(src_type, {}).get(src)
+            if not src_map:
+                return
+
+            if tgt in src_map:
+                src_map[tgt] -= 1
+
+                if src_map[tgt] <= 0:
+                    del src_map[tgt]
+
+            if not src_map:
+                self.edge_store[src_type].pop(src, None)
+
+        _decrement("mode_to_cause", mode_id, cause_id)
+        _decrement("mode_to_effect", mode_id, effect_id)
+        _decrement("element_to_mode", element_id, mode_id)
+        _decrement("cause_to_effect", cause_id, effect_id)
+
+        self.edge_store_path.write_text(
+            json.dumps(self.edge_store, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        print(f"[DELETE] failure {failure_id}")
+
+    def delete_field_text(self, field_type: str, field_id: str):
+
+
+        node = self.field_store.get(field_id)
+
+        if not node:
+            print("[WARN] field not found")
+            return
+
+        failure_ids = list(node.get("failure_ids", []))
+
+        for fid in failure_ids:
+            self.delete_failure(fid)
+
+
+    def delete_by_element(self, field_id: str):
+
+        node = self.field_store.get(field_id)
+
+        if not node:
+            print("[WARN] element not found")
+            return
+
+        failure_ids = list(node.get("failure_ids", []))
+
+        for fid in failure_ids:
+            self.delete_failure(fid)
+
+                

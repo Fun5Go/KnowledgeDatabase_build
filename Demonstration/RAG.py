@@ -265,6 +265,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
 
     if RAG:
         if not FILL:
+            # Retrieval results
             similar_failure = generate_failure_chains_from_structure(
                 persist_dir=KB_PATH,
                 structure_input=structure_input,
@@ -276,13 +277,13 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 weight_element=weight_element,
                 replace=False
             )
-
+            # Reconstruct for LLM better understanding
             failure_example = build_ground_truth_input(
                 similar_failure,
                 target_n=target_n,
                 strict_unique=True
             )
-
+            # LLM Prompt
             failure_candidates = failure_inference_generation_RAG.invoke({
                 "data": {
                     "structure_analysis": structure_input_json,

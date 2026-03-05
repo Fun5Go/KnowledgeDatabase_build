@@ -96,132 +96,236 @@ def load_predictions_old(pred_path: Path, target_element: str) -> List[Dict]:
 # Evaluation
 # ============================================================
 
-def evaluate(pred_list: List[Dict], gt_list: List[Dict], verbose: bool = False):
+def evaluate_strict_dedup(pred_list: List[Dict], gt_list: List[Dict]) -> Dict[str, Any]:
+    """
+    与原 evaluate_strict 一样的逻辑，但：
+      ✅ pred 去重 (mode,cause,effect)
+      ✅ gt 也去重 (mode,cause,effect)
+    然后在去重后的空间里做 Hungarian + partial/complete/no-match 打印与指标。
+    """
+
+    def pred_sig(p: Dict) -> Tuple[str, str, str]:
+        return (
+            normalize_text(p.get("failure_mode")),
+            normalize_text(p.get("failure_cause")),
+            normalize_text(p.get("failure_effect")),
+        )
+
+    def gt_sig(g: Dict) -> Tuple[str, str, str]:
+        return (
+            normalize_text(g.get("failure_mode_text")),
+            normalize_text(g.get("failure_cause_text")),
+            normalize_text(g.get("failure_effect_text")),
+        )
 
     # --------------------------------------------------------
-    # 0️⃣ Deduplicate predictions
+    # 0️⃣ Dedup predictions (by normalized triple)
     # --------------------------------------------------------
-    unique_pred = []
-    seen = set()
-
+    uniq_pred, seen = [], set()
     for p in pred_list:
-        sig = chain_signature(p)
-        if sig not in seen:
-            seen.add(sig)
-            unique_pred.append(p)
+        s = pred_sig(p)
+        if s not in seen:
+            seen.add(s)
+            uniq_pred.append(p)
+    pred_list = uniq_pred
 
-    pred_list = unique_pred
+    # --------------------------------------------------------
+    # 0️⃣b Dedup ground truth (by normalized triple)
+    # --------------------------------------------------------
+    uniq_gt, seen = [], set()
+    for g in gt_list:
+        s = gt_sig(g)
+        if s not in seen:
+            seen.add(s)
+            uniq_gt.append(g)
+    gt_list = uniq_gt
 
     total_pred = len(pred_list)
     total_gt = len(gt_list)
+    if total_pred == 0 or total_gt == 0:
+        return {}
 
     # --------------------------------------------------------
-    # 1️⃣ Build score matrix
+    # 1️⃣ Build score matrix + component matrices
     # --------------------------------------------------------
-    # score: 3 = strict, 2 = partial, 0/1 = no match
-    match_matrix = []
+    score_matrix  = np.zeros((total_pred, total_gt))
+    mode_matrix   = np.zeros((total_pred, total_gt), dtype=bool)
+    cause_matrix  = np.zeros((total_pred, total_gt), dtype=bool)
+    effect_matrix = np.zeros((total_pred, total_gt), dtype=bool)
 
-    for i, pred in enumerate(pred_list):
+    # 预先 normalize，避免重复计算
+    pred_norm = [pred_sig(p) for p in pred_list]
+    gt_norm   = [gt_sig(g) for g in gt_list]
 
-        row = []
+    for i, (pm, pc, pe) in enumerate(pred_norm):
+        for j, (gm, gc, ge) in enumerate(gt_norm):
 
-        for j, gt in enumerate(gt_list):
+            mode_match   = (pm == gm) and bool(pm)
+            cause_match  = (pc == gc) and bool(pc)
+            effect_match = (pe == ge) and bool(pe)
 
-            mode_match = normalize_text(pred["failure_mode"]) == normalize_text(gt["failure_mode_text"])
-            cause_match = normalize_text(pred["failure_cause"]) == normalize_text(gt["failure_cause_text"])
-            effect_match = normalize_text(pred["failure_effect"]) == normalize_text(gt["failure_effect_text"])
-
-            score = sum([mode_match, cause_match, effect_match])
-
-            row.append(score)
-
-        match_matrix.append(row)
+            mode_matrix[i, j] = mode_match
+            cause_matrix[i, j] = cause_match
+            effect_matrix[i, j] = effect_match
+            score_matrix[i, j] = (1 if mode_match else 0) + (1 if cause_match else 0) + (1 if effect_match else 0)
 
     # --------------------------------------------------------
-    # 2️⃣ Greedy bipartite matching (3 first, then 2)
+    # 2️⃣ Hungarian Algorithm
     # --------------------------------------------------------
-    matched_pred = set()
-    matched_gt = set()
+    row_ind, col_ind = linear_sum_assignment(-score_matrix)
 
     complete_match = 0
     partial_match = 0
+    matched_pred = set()
+    matched_gt = set()
 
-    # ---------- Strict Match (3/3) ----------
-    for i in range(total_pred):
-        for j in range(total_gt):
-            if match_matrix[i][j] == 3:
-                if i not in matched_pred and j not in matched_gt:
-                    matched_pred.add(i)
-                    matched_gt.add(j)
-                    complete_match += 1
+    mode_tp = 0
+    cause_tp = 0
+    effect_tp = 0
 
-    # ---------- Partial Match (2/3) ----------
-    for i in range(total_pred):
-        if i in matched_pred:
-            continue
+    print("\n================ MATCH DETAILS (DEDUP SPACE) ================\n")
 
-        for j in range(total_gt):
-            if match_matrix[i][j] == 2:
-                if j not in matched_gt:
-                    matched_pred.add(i)
-                    matched_gt.add(j)
-                    partial_match += 1
+    for r, c in zip(row_ind, col_ind):
+        score = int(score_matrix[r, c])
 
-                    if verbose:
-                        print("\n============ PARTIAL MATCH (2/3) ============")
-                        print("\n[Prediction]")
-                        print(json.dumps(pred_list[i], indent=2, ensure_ascii=False))
-                        print("\n[Ground Truth]")
-                        print(json.dumps(gt_list[j], indent=2, ensure_ascii=False))
-                        print("=============================================\n")
+        # Component-level TP（按匈牙利配对结果统计）
+        if mode_matrix[r, c]:
+            mode_tp += 1
+        if cause_matrix[r, c]:
+            cause_tp += 1
+        if effect_matrix[r, c]:
+            effect_tp += 1
 
-                    break
+        # 只把 >=2 认为是真正匹配（与你原逻辑一致）
+        if score >= 2:
+            matched_pred.add(r)
+            matched_gt.add(c)
+
+        if score == 3:
+            complete_match += 1
+        elif score == 2:
+            partial_match += 1
+
+            print("\n============ PARTIAL MATCH (2/3) ============")
+            print("\n[Prediction]")
+            print(f"Element : {pred_list[r].get('failure_element')}")
+            print(f"Mode    : {pred_list[r].get('failure_mode')}")
+            print(f"Effect  : {pred_list[r].get('failure_effect')}")
+            print(f"Cause   : {pred_list[r].get('failure_cause')}")
+
+            print("\n[Ground Truth]")
+            print(f"Element : {gt_list[c].get('failure_element_text')}")
+            print(f"Mode    : {gt_list[c].get('failure_mode_text')}")
+            print(f"Effect  : {gt_list[c].get('failure_effect_text')}")
+            print(f"Cause   : {gt_list[c].get('failure_cause_text')}")
+            print("=============================================\n")
 
     # --------------------------------------------------------
-    #  Remaining unmatched predictions → hallucination
+    # 3️⃣ Print No Match Predictions (in dedup space)
     # --------------------------------------------------------
+    print("\n================ NO MATCH PREDICTIONS (DEDUP) ================\n")
+    for i in range(total_pred):
+        if i not in matched_pred:
+            print("\n------------ UNMATCHED PREDICTION ------------")
+            print(f"Element : {pred_list[i].get('failure_element')}")
+            print(f"Mode    : {pred_list[i].get('failure_mode')}")
+            print(f"Effect  : {pred_list[i].get('failure_effect')}")
+            print(f"Cause   : {pred_list[i].get('failure_cause')}")
+            print("------------------------------------------------\n")
+
+    # --------------------------------------------------------
+    # 4️⃣ Print Unmatched Ground Truth (in dedup space)
+    # --------------------------------------------------------
+    print("\n================ MISSED GROUND TRUTH (DEDUP) ================\n")
+    for j in range(total_gt):
+        if j not in matched_gt:
+            print("\n------------ MISSED GROUND TRUTH ------------")
+            print(f"Element : {gt_list[j].get('failure_element_text')}")
+            print(f"Mode    : {gt_list[j].get('failure_mode_text')}")
+            print(f"Effect  : {gt_list[j].get('failure_effect_text')}")
+            print(f"Cause   : {gt_list[j].get('failure_cause_text')}")
+            print("------------------------------------------------\n")
+
+    # --------------------------------------------------------
+    # 5️⃣ Chain-level Metrics
+    # --------------------------------------------------------
+    relaxed_match = complete_match + partial_match
     no_match = total_pred - len(matched_pred)
 
-    # --------------------------------------------------------
-    #  Metrics
-    # --------------------------------------------------------
+    def safe_f1(p, r):
+        return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
 
-    precision_complete = complete_match / total_pred if total_pred else 0
-    recall_complete = complete_match / total_gt if total_gt else 0
-    f1_complete = (
-        2 * precision_complete * recall_complete / (precision_complete + recall_complete)
-        if precision_complete + recall_complete > 0 else 0
-    )
+    precision_complete = complete_match / total_pred
+    recall_complete = complete_match / total_gt
+    f1_complete = safe_f1(precision_complete, recall_complete)
 
-    precision_partial = partial_match / total_pred if total_pred else 0
-    recall_partial = partial_match / total_gt if total_gt else 0
-    f1_partial = (
-        2 * precision_partial * recall_partial / (precision_partial + recall_partial)
-        if precision_partial + recall_partial > 0 else 0
-    )
+    precision_partial = partial_match / total_pred
+    recall_partial = partial_match / total_gt
+    f1_partial = safe_f1(precision_partial, recall_partial)
 
-    hallucination_rate = no_match / total_pred if total_pred else 0
+    precision_relaxed = relaxed_match / total_pred
+    recall_relaxed = relaxed_match / total_gt
+    f1_relaxed = safe_f1(precision_relaxed, recall_relaxed)
+
+    hallucination_rate = no_match / total_pred
 
     # --------------------------------------------------------
-    # 5️⃣ Summary
+    # 6️⃣ Component-level Metrics
     # --------------------------------------------------------
+    precision_mode = mode_tp / total_pred
+    recall_mode = mode_tp / total_gt
+    f1_mode = safe_f1(precision_mode, recall_mode)
 
-    result = {
+    precision_cause = cause_tp / total_pred
+    recall_cause = cause_tp / total_gt
+    f1_cause = safe_f1(precision_cause, recall_cause)
+
+    precision_effect = effect_tp / total_pred
+    recall_effect = effect_tp / total_gt
+    f1_effect = safe_f1(precision_effect, recall_effect)
+
+    # 安全检查（dedup 后依然成立）
+    assert complete_match <= min(total_pred, total_gt)
+    assert partial_match <= min(total_pred, total_gt)
+
+    return {
         "total_gt": total_gt,
         "total_pred": total_pred,
+
         "complete_match": complete_match,
         "partial_match": partial_match,
         "no_match": no_match,
-        "precision_complete": round(precision_complete, 4),
-        "recall_complete": round(recall_complete, 4),
-        "f1_complete": round(f1_complete, 4),
-        "precision_partial": round(precision_partial, 4),
-        "recall_partial": round(recall_partial, 4),
-        "f1_partial": round(f1_partial, 4),
-        "hallucination_rate": round(hallucination_rate, 4),
-    }
 
-    return result
+        "precision_complete": precision_complete,
+        "recall_complete": recall_complete,
+        "f1_complete": f1_complete,
+
+        "precision_partial": precision_partial,
+        "recall_partial": recall_partial,
+        "f1_partial": f1_partial,
+
+        "precision_relaxed": precision_relaxed,
+        "recall_relaxed": recall_relaxed,
+        "f1_relaxed": f1_relaxed,
+
+        "hallucination_rate": hallucination_rate,
+
+        "mode_tp": mode_tp,
+        "cause_tp": cause_tp,
+        "effect_tp": effect_tp,
+
+        "precision_mode": precision_mode,
+        "recall_mode": recall_mode,
+        "f1_mode": f1_mode,
+
+        "precision_cause": precision_cause,
+        "recall_cause": recall_cause,
+        "f1_cause": f1_cause,
+
+        "precision_effect": precision_effect,
+        "recall_effect": recall_effect,
+        "f1_effect": f1_effect,
+    }
 
 def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 
@@ -446,12 +550,12 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 
 if __name__ == "__main__":
 
-    GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_MOTORCONTROL\failure_kb\entity_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Single_test\RAG_FILL_seperate_3.json")
+    GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\failure_kb\entity_store.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Single_test\RAG_FILL_seperate_candidate_powertrain_discipline_1.json")
 
     gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_2)
     pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_2)
 
-    results = evaluate_strict(pred_list, gt_list)
+    results = evaluate_strict_dedup(pred_list, gt_list)
     print("\n========== FINAL METRICS ==========")
     print(json.dumps(results, indent=2))

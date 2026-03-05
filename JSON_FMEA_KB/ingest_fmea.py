@@ -295,7 +295,12 @@ def collect_semantic(
     text: str,
     failure_id: str,
     source_type: str,
+    discipline: str | None,
 ):
+
+    # only cause keeps discipline
+    discipline_val = discipline if field_type == "cause" else None
+
     node = semantic_map.setdefault(
         semantic_id,
         {
@@ -304,11 +309,16 @@ def collect_semantic(
             "text": text,
             "failure_ids": [],
             "source_type": source_type,
+            "discipline": discipline_val,
         },
     )
+
+    # do NOT overwrite discipline if already exists
+    if node.get("discipline") is None and discipline_val:
+        node["discipline"] = discipline_val
+
     if failure_id not in node["failure_ids"]:
         node["failure_ids"].append(failure_id)
-
 
 # =========================================================
 # Ingest
@@ -431,7 +441,7 @@ def ingest_fmea_jsonl(
             failure_mode = content.get("failure_mode")
             failure_effect = content.get("failure_effect")
             cause_text = content.get("failure_cause")
-            discipline = content.get("cause_discipline")
+            discipline = (content.get("cause_discipline") or "").strip() or "unknown"
 
             # -------------------------------------------------
             # severity / rpn  (within this grouped sig in THIS file)
@@ -525,6 +535,9 @@ def ingest_fmea_jsonl(
                     (cause_id, "cause", cause_text),
                 ]:
                     if sid:
+
+                        discipline_val = discipline if ftype == "cause" else None
+
                         collect_semantic(
                             semantic_nodes,
                             semantic_id=sid,
@@ -532,7 +545,7 @@ def ingest_fmea_jsonl(
                             text=text,
                             failure_id=failure_id,
                             source_type=source_type,
-                            discipline = discipline
+                            discipline=discipline_val,
                         )
 
             # -------------------------------------------------
@@ -567,6 +580,7 @@ def ingest_fmea_jsonl(
                 text=node["text"],
                 failure_ids=node["failure_ids"],
                 source_type=node["source_type"],
+                discipline = node["discipline"],
             )
 
     print(f"[OK] {jsonl_path.name} ingested")

@@ -6,7 +6,7 @@ from .retrieval import generate_failure_chains_from_structure, build_ground_trut
 
 # Vector KB folder
 KB_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb"
 )
 
 results = generate_failure_chains_from_structure(
@@ -17,7 +17,7 @@ results = generate_failure_chains_from_structure(
         top_k_per_field=30,
         # Similarity threshold
         min_similarity=0.45,
-        top_n=100, # Return number
+        top_n=100, # Return list of failure entity number
         replace=True,
         # Weight score
         weight_element = 0.2,

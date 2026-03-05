@@ -46,35 +46,6 @@ def failure_inference_generation_RAG(data: dict) -> dict:
 
 
 @tool
-def failure_inference_generation_RAG_FILL(data: dict) -> dict:
-    """Generate failure candidates according to GT example and structure analysis"""
-    structure_analysis =  data.get("structure_analysis", "")
-    fill_failure = data.get("fill_failure", "")
-    llm = get_llm_backend(
-        backend="openai",
-        model="azure/gpt-4.1",
-        json_mode=True, # enable json response parsing
-        temperature=0, # deterministic output
-    )
-    # System prompt
-    system_prompt = """You are an expert in motor drive systems, reliability engineering,
-        and FMEA classification. Only perform infer and fill most relevant FMEA failure text from the given structure analysis to the blank block."""
-    #     # Build a chat prompt template with: system + user messages
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", failure_inference_prompt_RAG_FILL),
-    ])
-    formatted_prompt = prompt.invoke({
-        "to_be_fill_failure": fill_failure,
-        "structure_analysis": structure_analysis,
-    })
-        # Call LLM and parse output
-    resp = llm.invoke(formatted_prompt.to_messages())
-    parser = JsonOutputParser(pydantic_object=FailureCandidates_RAG_FILL)
-    return parser.parse(resp.content)
-
-
-@tool
 def failure_inference_generation_PURE(data: dict) -> dict:
     """Generate failure candidates according to GT example and structure analysis"""
     structure_analysis =  data.get("structure_analysis", "")
@@ -129,4 +100,30 @@ def output_evaluation(data: dict) -> dict:
 
 
 
-
+@tool
+def failure_inference_generation_RAG_FILL(data: dict) -> dict:
+    """Generate failure candidates according to GT example and structure analysis"""
+    structure_analysis =  data.get("structure_analysis", "")
+    fill_failure = data.get("fill_failure", "")
+    llm = get_llm_backend(
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True, # enable json response parsing
+        temperature=0, # deterministic output
+    )
+    # System prompt
+    system_prompt = """You are an expert in motor drive systems, reliability engineering,
+        and FMEA classification. Only perform infer and fill most relevant FMEA failure text from the given structure analysis to the blank block."""
+    #     # Build a chat prompt template with: system + user messages
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("user", failure_inference_prompt_RAG_FILL),
+    ])
+    formatted_prompt = prompt.invoke({
+        "to_be_fill_failure": fill_failure,
+        "structure_analysis": structure_analysis,
+    })
+        # Call LLM and parse output
+    resp = llm.invoke(formatted_prompt.to_messages())
+    parser = JsonOutputParser(pydantic_object=FailureCandidates_RAG_FILL)
+    return parser.parse(resp.content)

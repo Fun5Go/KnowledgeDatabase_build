@@ -3,7 +3,6 @@ from collections import defaultdict
 from pathlib import Path
 from Retriever.failure_query_tools import _load_kb,query_semantic_kb
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
-from .PPL_score import ChainPPLEvaluator
 import json
 from .entity import structure_input_motorcontrol, structure_input_powertrain
 import re
@@ -15,8 +14,8 @@ BASE_DIR = Path(__file__).resolve().parent
 # -------------------------
 FIELD_WEIGHTS = {
     "mode": 1.2,
-    "cause": 1.0,
-    "effect": 1.0,
+    "cause": 1.2,
+    "effect": 0.8,
 }
 
 COMPLETE_CHAIN_BONUS = 1.4
@@ -137,19 +136,24 @@ def generate_query_unique_chains(
     # -------------------------
     # semantic retrieval
     # -------------------------
-    def semantic_nodes(query_text: str, field: str) -> List[Dict[str, Any]]:
+    def semantic_nodes(query_text: str, field: str, discipline: Optional[str] = None) -> List[Dict[str, Any]]:
         qt = _safe(query_text)
         if not qt:
             return []
 
+        extra_args = {}
+        if field == "cause" and discipline:
+            extra_args["discipline"] = [discipline, "unknown"]
+
         res = query_semantic_kb(
-            persist_dir,
-            qt,
-            field_type=field,
-            n_results=top_k_per_field,
-            min_count=min_count,
-            source_type=source_type,
-        ) or {}
+                persist_dir,
+                qt,
+                field_type=field,
+                n_results=top_k_per_field,
+                min_count=min_count,
+                source_type=source_type,
+                **extra_args
+            ) or {}
 
         docs = (res.get("documents") or [[]])[0] or []
         metas = (res.get("metadatas") or [[]])[0] or []
@@ -220,13 +224,26 @@ def generate_query_unique_chains(
         failure_element_text = _safe(node.get("failure_element"))
 
         modes_txt = node.get("modes") or []
-        causes_txt = node.get("causes") or []
+        causes = node.get("causes") or {}
         effects_txt = node.get("effects") or []
+        
+        cause_queries: List[Tuple[str, str]] = []
+        for discipline, cause_list in causes.items():
+            for c in cause_list:
+                c = _safe(c)
+                if c:
+                    cause_queries.append((discipline, c))
 
         # 1) retrieve candidates
         candidate_modes = dedup_nodes_keep_best([n for t in modes_txt for n in semantic_nodes(t, "mode")])
-        candidate_causes = dedup_nodes_keep_best([n for t in causes_txt for n in semantic_nodes(t, "cause")])
         candidate_effects = dedup_nodes_keep_best([n for t in effects_txt for n in semantic_nodes(t, "effect")])
+        candidate_causes = dedup_nodes_keep_best(
+                    [
+                        n
+                        for discipline, cause_text in cause_queries
+                        for n in semantic_nodes(cause_text, "cause", discipline)
+                    ]
+                )
 
         mode_map = {n["semantic_id"]: n for n in candidate_modes}
         cause_map = {n["semantic_id"]: n for n in candidate_causes}
@@ -643,12 +660,17 @@ def print_strong_semi_chains_3parts_cartesian(
     min_count: int = 2,
     min_best_score: float = 0.5,
     max_rows: int = 50,
+    join_cartesian: bool = True,   # NEW: 是否做 MC×ME 拼接
 ) -> None:
     """
-    分三部分打印（先按 count+best_score 过滤 strong，再做连接）：
-    1) 完整 chain：同一 query_mode 下 MC × ME 组合（再去重）
-    2) 剩余未参与任何完整 chain 的 MC
-    3) 剩余未参与任何完整 chain 的 ME
+    join_cartesian:
+      - True : 分三部分打印
+          1) 完整 chain：同一 query_mode 下 MC × ME 组合（再去重）
+          2) 剩余未参与任何完整 chain 的 MC
+          3) 剩余未参与任何完整 chain 的 ME
+      - False: 不做拼接，只打印两部分
+          1) MC semi-chains
+          2) ME semi-chains
 
     依赖：
       - get_strong_semi_chains_from_query_combo_stats(results_graph, ..., keep_example=True)
@@ -681,6 +703,76 @@ def print_strong_semi_chains_3parts_cartesian(
         q_mode, q_effect = (qc + ["", ""])[:2]
         return q_mode, q_effect
 
+    # ---- printing helpers ----
+    def _print_mc(rows: List[Dict[str, Any]], *, title: str) -> None:
+        rows_sorted = sorted(rows, key=_rank_key, reverse=True)
+
+        print("\n" + "=" * 90)
+        print(f"{title}: {len(rows_sorted)} (showing up to {max_rows})")
+        print("=" * 90)
+
+        for i, r in enumerate(rows_sorted[:max_rows], 1):
+            q_mode, q_cause = _get_mc_qmode_qcause(r)
+            ex = r.get("example") or {}
+            print(f"[{i:02d}] count={r.get('count',0)}  best_score={float(r.get('best_score',0.0)):.6f}")
+            print(f"     query_mode : {q_mode}")
+            print(f"     query_cause: {q_cause}")
+            if ex:
+                print("     --- example ---")
+                print(f"     matched_mode : {ex.get('matched_mode','')}")
+                print(f"     matched_cause: {ex.get('matched_cause','')}")
+                print(f"     edge_count   : {ex.get('edge_count','')}")
+            print()
+
+    def _print_me(rows: List[Dict[str, Any]], *, title: str) -> None:
+        rows_sorted = sorted(rows, key=_rank_key, reverse=True)
+
+        print("\n" + "=" * 90)
+        print(f"{title}: {len(rows_sorted)} (showing up to {max_rows})")
+        print("=" * 90)
+
+        for i, r in enumerate(rows_sorted[:max_rows], 1):
+            q_mode, q_effect = _get_me_qmode_qeffect(r)
+            ex = r.get("example") or {}
+            print(f"[{i:02d}] count={r.get('count',0)}  best_score={float(r.get('best_score',0.0)):.6f}")
+            print(f"     query_mode  : {q_mode}")
+            print(f"     query_effect: {q_effect}")
+            if ex:
+                print("     --- example ---")
+                print(f"     matched_mode  : {ex.get('matched_mode','')}")
+                print(f"     matched_effect: {ex.get('matched_effect','')}")
+                print(f"     edge_count    : {ex.get('edge_count','')}")
+            print()
+
+    def _print_full(full_chains: List[Dict[str, Any]]) -> None:
+        print("\n" + "=" * 90)
+        print(f"PART 1) FULL CHAINS (MC×ME within same query_mode, deduped): {len(full_chains)} (showing up to {max_rows})")
+        print("=" * 90)
+
+        for i, fc in enumerate(full_chains[:max_rows], 1):
+            print(f"[{i:02d}] query_mode  : {fc['query_mode']}")
+            print(f"     query_cause : {fc['query_cause']}")
+            print(f"     query_effect: {fc['query_effect']}")
+            print(f"     MC: count={fc['mc_count']} best_score={float(fc['mc_best_score']):.6f} edge_count={fc['mc_edge_count']}")
+            print(f"     ME: count={fc['me_count']} best_score={float(fc['me_best_score']):.6f} edge_count={fc['me_edge_count']}")
+            print("     --- example (representative matched entities) ---")
+            print(f"     matched_mode  : {fc['matched_mode']}")
+            print(f"     matched_cause : {fc['matched_cause']}")
+            print(f"     matched_effect: {fc['matched_effect']}")
+            print()
+
+    # =========================
+    # MODE A) no join: just print MC/ME
+    # =========================
+    if not join_cartesian:
+        _print_mc(mc_rows, title="MC semi-chains (NO JOIN)")
+        _print_me(me_rows, title="ME semi-chains (NO JOIN)")
+        return
+
+    # =========================
+    # MODE B) join_cartesian=True: original 3-part logic
+    # =========================
+
     # ---- group by query_mode ----
     mc_by_qmode: Dict[str, List[Dict[str, Any]]] = {}
     me_by_qmode: Dict[str, List[Dict[str, Any]]] = {}
@@ -697,7 +789,6 @@ def print_strong_semi_chains_3parts_cartesian(
 
     # ---- PART1: cartesian join within same query_mode, then dedupe ----
     # dedupe key: (query_mode, query_cause, query_effect, matched_mode, matched_cause, matched_effect)
-    # (如果你更想只按 query_* 去重，把 key 改成 (query_mode, query_cause, query_effect) 即可)
     full_chains: List[Dict[str, Any]] = []
     full_keys: Set[Tuple[str, str, str, str, str, str]] = set()
 
@@ -710,11 +801,11 @@ def print_strong_semi_chains_3parts_cartesian(
         mes = sorted(me_by_qmode[q_mode], key=_rank_key, reverse=True)
 
         for mc in mcs:
-            q_mode_mc, q_cause = _get_mc_qmode_qcause(mc)
+            _, q_cause = _get_mc_qmode_qcause(mc)
             ex_mc = mc.get("example") or {}
 
             for me in mes:
-                q_mode_me, q_effect = _get_me_qmode_qeffect(me)
+                _, q_effect = _get_me_qmode_qeffect(me)
                 ex_me = me.get("example") or {}
 
                 matched_mode = (ex_mc.get("matched_mode") or ex_me.get("matched_mode") or "")
@@ -746,7 +837,6 @@ def print_strong_semi_chains_3parts_cartesian(
                     }
                 )
 
-    # optional: sort full chains for nicer display
     full_chains.sort(
         key=lambda d: (
             d.get("query_mode", ""),
@@ -759,67 +849,184 @@ def print_strong_semi_chains_3parts_cartesian(
         )
     )
 
-    # ---- PART2/3: remaining unconnected rows (not used in any full chain) ----
     remaining_mc = [r for r in mc_rows if id(r) not in used_mc_ids]
     remaining_me = [r for r in me_rows if id(r) not in used_me_ids]
 
-    # ---- printing helpers ----
-    def _print_full() -> None:
-        print("\n" + "=" * 90)
-        print(f"PART 1) FULL CHAINS (MC×ME within same query_mode, deduped): {len(full_chains)} (showing up to {max_rows})")
-        print("=" * 90)
+    _print_full(full_chains)
+    _print_mc(remaining_mc, title="PART 2) UNCONNECTED MC semi-chains")
+    _print_me(remaining_me, title="PART 3) UNCONNECTED ME semi-chains")
 
-        for i, fc in enumerate(full_chains[:max_rows], 1):
-            print(f"[{i:02d}] query_mode  : {fc['query_mode']}")
-            print(f"     query_cause : {fc['query_cause']}")
-            print(f"     query_effect: {fc['query_effect']}")
-            print(f"     MC: count={fc['mc_count']} best_score={float(fc['mc_best_score']):.6f} edge_count={fc['mc_edge_count']}")
-            print(f"     ME: count={fc['me_count']} best_score={float(fc['me_best_score']):.6f} edge_count={fc['me_edge_count']}")
-            print("     --- example (representative matched entities) ---")
-            print(f"     matched_mode  : {fc['matched_mode']}")
-            print(f"     matched_cause : {fc['matched_cause']}")
-            print(f"     matched_effect: {fc['matched_effect']}")
-            print()
+def _fmt(x: Any) -> str:
+    return "" if x is None else str(x)
 
-    def _print_mc(rows: List[Dict[str, Any]]) -> None:
-        print("\n" + "=" * 90)
-        print(f"PART 2) UNCONNECTED MC semi-chains: {len(rows)} (showing up to {max_rows})")
-        print("=" * 90)
 
-        for i, r in enumerate(rows[:max_rows], 1):
-            q_mode, q_cause = _get_mc_qmode_qcause(r)
+def print_query_chain_results(
+    results: Dict[str, Any],
+    *,
+    # combo stats
+    top_query_combos: int = 30,
+    # chains
+    top_complete: int = 20,
+    top_partial: int = 30,
+    # flags
+    show_ids: bool = False,
+    show_edge_counts: bool = True,
+    show_join_type: bool = True,
+) -> None:
+    """
+    Pretty print output of generate_query_unique_chains()
+
+    Expects results dict keys:
+    - complete_chains
+    - partial_chains
+    - query_combo_stats: {"MC":[...], "ME":[...], "MCE":[...]}
+    """
+
+    complete: List[Dict[str, Any]] = results.get("complete_chains", []) or []
+    partial: List[Dict[str, Any]] = results.get("partial_chains", []) or []
+    combo_stats: Dict[str, List[Dict[str, Any]]] = results.get("query_combo_stats", {}) or {}
+
+    print("\n" + "=" * 92)
+    print(f"✅ QUERY CHAIN RESULTS  |  complete={len(complete)}  partial={len(partial)}")
+    print("=" * 92)
+
+    # =========================================================
+    # 1) UNIQUE QUERY COMBO STATS
+    # =========================================================
+    def _print_combos(kind: str, rows: List[Dict[str, Any]]) -> None:
+        print("\n" + "-" * 92)
+        print(f"📊 UNIQUE QUERY COMBOS ({kind})  Top {min(top_query_combos, len(rows))}/{len(rows)}")
+        print("-" * 92)
+
+        for i, r in enumerate(rows[:top_query_combos], 1):
+            combo = r.get("query_combo") or []
+            cnt = int(r.get("count", 0) or 0)
+            best = float(r.get("best_score", 0.0) or 0.0)
             ex = r.get("example") or {}
-            print(f"[{i:02d}] count={r.get('count',0)}  best_score={float(r.get('best_score',0.0)):.6f}")
-            print(f"     query_mode : {q_mode}")
-            print(f"     query_cause: {q_cause}")
-            if ex:
-                print("     --- example ---")
-                print(f"     matched_mode : {ex.get('matched_mode','')}")
-                print(f"     matched_cause: {ex.get('matched_cause','')}")
-                print(f"     edge_count   : {ex.get('edge_count','')}")
-            print()
 
-    def _print_me(rows: List[Dict[str, Any]]) -> None:
-        print("\n" + "=" * 90)
-        print(f"PART 3) UNCONNECTED ME semi-chains: {len(rows)} (showing up to {max_rows})")
-        print("=" * 90)
+            print(f"\n[{i:02d}] count={cnt} | best_score={best:.6f}")
 
-        for i, r in enumerate(rows[:max_rows], 1):
-            q_mode, q_effect = _get_me_qmode_qeffect(r)
-            ex = r.get("example") or {}
-            print(f"[{i:02d}] count={r.get('count',0)}  best_score={float(r.get('best_score',0.0)):.6f}")
-            print(f"     query_mode  : {q_mode}")
-            print(f"     query_effect: {q_effect}")
-            if ex:
-                print("     --- example ---")
-                print(f"     matched_mode  : {ex.get('matched_mode','')}")
-                print(f"     matched_effect: {ex.get('matched_effect','')}")
-                print(f"     edge_count    : {ex.get('edge_count','')}")
-            print()
+            if kind == "MC":
+                # combo: [mode, cause]
+                print(f"  Query combo : MODE='{_fmt(combo[0])}'  CAUSE='{_fmt(combo[1])}'")
+                print(
+                    f"  Example    : MODE='{_fmt(ex.get('matched_mode'))}'  "
+                    f"CAUSE='{_fmt(ex.get('matched_cause'))}'  edge={_fmt(ex.get('edge_count'))}"
+                )
+            elif kind == "ME":
+                # combo: [mode, effect]
+                print(f"  Query combo : MODE='{_fmt(combo[0])}'  EFFECT='{_fmt(combo[1])}'")
+                print(
+                    f"  Example    : MODE='{_fmt(ex.get('matched_mode'))}'  "
+                    f"EFFECT='{_fmt(ex.get('matched_effect'))}'  edge={_fmt(ex.get('edge_count'))}"
+                )
+            else:
+                # MCE combo: [mode, cause, effect]
+                print(
+                    f"  Query combo : MODE='{_fmt(combo[0])}'  "
+                    f"CAUSE='{_fmt(combo[1])}'  EFFECT='{_fmt(combo[2])}'"
+                )
+                print(
+                    f"  Example    : MODE='{_fmt(ex.get('matched_mode'))}'  "
+                    f"CAUSE='{_fmt(ex.get('matched_cause'))}'  EFFECT='{_fmt(ex.get('matched_effect'))}'  "
+                    f"MC={_fmt(ex.get('edge_count_mc'))} ME={_fmt(ex.get('edge_count_me'))}"
+                )
 
-    _print_full()
-    _print_mc(remaining_mc)
-    _print_me(remaining_me)
+    if combo_stats:
+        _print_combos("MC", combo_stats.get("MC", []) or [])
+        _print_combos("ME", combo_stats.get("ME", []) or [])
+        _print_combos("MCE", combo_stats.get("MCE", []) or [])
+    else:
+        print("\n" + "-" * 92)
+        print("📊 UNIQUE QUERY COMBOS: (no combo stats found in results)")
+        print("-" * 92)
+
+    # =========================================================
+    # 2) COMPLETE CHAINS (MCE)
+    # =========================================================
+    print("\n" + "-" * 92)
+    print(f"🧩 COMPLETE CHAINS (MCE)  Top {min(top_complete, len(complete))}/{len(complete)}")
+    print("-" * 92)
+
+    for i, c in enumerate(complete[:top_complete], 1):
+        score = float(c.get("score", 0.0) or 0.0)
+
+        node_id = _fmt(c.get("node_id"))
+        element = _fmt(c.get("failure_element"))
+        join_type = _fmt(c.get("join_type"))  # semantic_id / query_mode_text
+
+        print(f"\n[{i:02d}] score={score:.6f} | node_id={node_id} | element={element}")
+        if show_join_type:
+            print(f"  Join    : {join_type or 'semantic_id'}")
+
+        print("  Query   :")
+        print(f"    MODE  : {_fmt(c.get('query_mode'))}")
+        print(f"    CAUSE : {_fmt(c.get('query_cause'))}")
+        print(f"    EFFECT: {_fmt(c.get('query_effect'))}")
+
+        print("  Matched :")
+        print(f"    MODE  : {_fmt(c.get('mode'))}")
+        print(f"    CAUSE : {_fmt(c.get('cause'))}")
+        print(f"    EFFECT: {_fmt(c.get('effect'))}")
+
+        if show_edge_counts:
+            print(f"  Edges   : MC={_fmt(c.get('edge_count_mc'))}  ME={_fmt(c.get('edge_count_me'))}")
+
+        if show_ids:
+            print(
+                f"  IDs     : mode_id={_fmt(c.get('mode_id'))}  "
+                f"cause_id={_fmt(c.get('cause_id'))}  effect_id={_fmt(c.get('effect_id'))}"
+            )
+
+    # =========================================================
+    # 3) PARTIAL CHAINS
+    # =========================================================
+    mc = [p for p in partial if p.get("chain_type") == "MC"]
+    me = [p for p in partial if p.get("chain_type") == "ME"]
+
+    def _print_partial(title: str, items: List[Dict[str, Any]], kind: str) -> None:
+        print("\n" + "-" * 92)
+        print(f"🧩 {title}  Top {min(top_partial, len(items))}/{len(items)}")
+        print("-" * 92)
+
+        for i, p in enumerate(items[:top_partial], 1):
+            score = float(p.get("score", 0.0) or 0.0)
+            node_id = _fmt(p.get("node_id"))
+            element = _fmt(p.get("failure_element"))
+            edge_cnt = p.get("edge_count", None)
+
+            print(f"\n[{i:02d}] score={score:.6f} | node_id={node_id} | element={element}")
+
+            if kind == "MC":
+                print("  Query   :")
+                print(f"    MODE  : {_fmt(p.get('query_mode'))}")
+                print(f"    CAUSE : {_fmt(p.get('query_cause'))}")
+                print("  Matched :")
+                print(f"    MODE  : {_fmt(p.get('mode'))}")
+                print(f"    CAUSE : {_fmt(p.get('cause'))}")
+            else:
+                print("  Query   :")
+                print(f"    MODE  : {_fmt(p.get('query_mode'))}")
+                print(f"    EFFECT: {_fmt(p.get('query_effect'))}")
+                print("  Matched :")
+                print(f"    MODE  : {_fmt(p.get('mode'))}")
+                print(f"    EFFECT: {_fmt(p.get('effect'))}")
+
+            if show_edge_counts and edge_cnt is not None:
+                print(f"  EdgeCnt : {int(edge_cnt)}")
+
+            if show_ids:
+                if kind == "MC":
+                    print(f"  IDs     : mode_id={_fmt(p.get('mode_id'))}  cause_id={_fmt(p.get('cause_id'))}")
+                else:
+                    print(f"  IDs     : mode_id={_fmt(p.get('mode_id'))}  effect_id={_fmt(p.get('effect_id'))}")
+
+    _print_partial("PARTIAL CHAINS (MC: mode → cause)", mc, "MC")
+    _print_partial("PARTIAL CHAINS (ME: mode → effect)", me, "ME")
+
+    print("\n" + "=" * 92)
+    print("✅ End of results")
+    print("=" * 92 + "\n")
 
 if  __name__ == "__main__":
 
@@ -830,7 +1037,7 @@ if  __name__ == "__main__":
     # 1) KB Path
     # -----------------------------------------------------
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb"
     )
 
     # -----------------------------------------------------
@@ -842,180 +1049,10 @@ if  __name__ == "__main__":
     "cause": 1.0,
     "effect": 1.0,
 }
-    def _fmt(x: Any) -> str:
-        return "" if x is None else str(x)
 
-
-    def print_query_chain_results(
-        results: Dict[str, Any],
-        *,
-        # combo stats
-        top_query_combos: int = 30,
-        # chains
-        top_complete: int = 20,
-        top_partial: int = 30,
-        # flags
-        show_ids: bool = False,
-        show_edge_counts: bool = True,
-        show_join_type: bool = True,
-    ) -> None:
-        """
-        Pretty print output of generate_query_unique_chains()
-
-        Expects results dict keys:
-        - complete_chains
-        - partial_chains
-        - query_combo_stats: {"MC":[...], "ME":[...], "MCE":[...]}
-        """
-
-        complete: List[Dict[str, Any]] = results.get("complete_chains", []) or []
-        partial: List[Dict[str, Any]] = results.get("partial_chains", []) or []
-        combo_stats: Dict[str, List[Dict[str, Any]]] = results.get("query_combo_stats", {}) or {}
-
-        print("\n" + "=" * 92)
-        print(f"✅ QUERY CHAIN RESULTS  |  complete={len(complete)}  partial={len(partial)}")
-        print("=" * 92)
-
-        # =========================================================
-        # 1) UNIQUE QUERY COMBO STATS
-        # =========================================================
-        def _print_combos(kind: str, rows: List[Dict[str, Any]]) -> None:
-            print("\n" + "-" * 92)
-            print(f"📊 UNIQUE QUERY COMBOS ({kind})  Top {min(top_query_combos, len(rows))}/{len(rows)}")
-            print("-" * 92)
-
-            for i, r in enumerate(rows[:top_query_combos], 1):
-                combo = r.get("query_combo") or []
-                cnt = int(r.get("count", 0) or 0)
-                best = float(r.get("best_score", 0.0) or 0.0)
-                ex = r.get("example") or {}
-
-                print(f"\n[{i:02d}] count={cnt} | best_score={best:.6f}")
-
-                if kind == "MC":
-                    # combo: [mode, cause]
-                    print(f"  Query combo : MODE='{_fmt(combo[0])}'  CAUSE='{_fmt(combo[1])}'")
-                    print(
-                        f"  Example    : MODE='{_fmt(ex.get('matched_mode'))}'  "
-                        f"CAUSE='{_fmt(ex.get('matched_cause'))}'  edge={_fmt(ex.get('edge_count'))}"
-                    )
-                elif kind == "ME":
-                    # combo: [mode, effect]
-                    print(f"  Query combo : MODE='{_fmt(combo[0])}'  EFFECT='{_fmt(combo[1])}'")
-                    print(
-                        f"  Example    : MODE='{_fmt(ex.get('matched_mode'))}'  "
-                        f"EFFECT='{_fmt(ex.get('matched_effect'))}'  edge={_fmt(ex.get('edge_count'))}"
-                    )
-                else:
-                    # MCE combo: [mode, cause, effect]
-                    print(
-                        f"  Query combo : MODE='{_fmt(combo[0])}'  "
-                        f"CAUSE='{_fmt(combo[1])}'  EFFECT='{_fmt(combo[2])}'"
-                    )
-                    print(
-                        f"  Example    : MODE='{_fmt(ex.get('matched_mode'))}'  "
-                        f"CAUSE='{_fmt(ex.get('matched_cause'))}'  EFFECT='{_fmt(ex.get('matched_effect'))}'  "
-                        f"MC={_fmt(ex.get('edge_count_mc'))} ME={_fmt(ex.get('edge_count_me'))}"
-                    )
-
-        if combo_stats:
-            _print_combos("MC", combo_stats.get("MC", []) or [])
-            _print_combos("ME", combo_stats.get("ME", []) or [])
-            _print_combos("MCE", combo_stats.get("MCE", []) or [])
-        else:
-            print("\n" + "-" * 92)
-            print("📊 UNIQUE QUERY COMBOS: (no combo stats found in results)")
-            print("-" * 92)
-
-        # =========================================================
-        # 2) COMPLETE CHAINS (MCE)
-        # =========================================================
-        print("\n" + "-" * 92)
-        print(f"🧩 COMPLETE CHAINS (MCE)  Top {min(top_complete, len(complete))}/{len(complete)}")
-        print("-" * 92)
-
-        for i, c in enumerate(complete[:top_complete], 1):
-            score = float(c.get("score", 0.0) or 0.0)
-
-            node_id = _fmt(c.get("node_id"))
-            element = _fmt(c.get("failure_element"))
-            join_type = _fmt(c.get("join_type"))  # semantic_id / query_mode_text
-
-            print(f"\n[{i:02d}] score={score:.6f} | node_id={node_id} | element={element}")
-            if show_join_type:
-                print(f"  Join    : {join_type or 'semantic_id'}")
-
-            print("  Query   :")
-            print(f"    MODE  : {_fmt(c.get('query_mode'))}")
-            print(f"    CAUSE : {_fmt(c.get('query_cause'))}")
-            print(f"    EFFECT: {_fmt(c.get('query_effect'))}")
-
-            print("  Matched :")
-            print(f"    MODE  : {_fmt(c.get('mode'))}")
-            print(f"    CAUSE : {_fmt(c.get('cause'))}")
-            print(f"    EFFECT: {_fmt(c.get('effect'))}")
-
-            if show_edge_counts:
-                print(f"  Edges   : MC={_fmt(c.get('edge_count_mc'))}  ME={_fmt(c.get('edge_count_me'))}")
-
-            if show_ids:
-                print(
-                    f"  IDs     : mode_id={_fmt(c.get('mode_id'))}  "
-                    f"cause_id={_fmt(c.get('cause_id'))}  effect_id={_fmt(c.get('effect_id'))}"
-                )
-
-        # =========================================================
-        # 3) PARTIAL CHAINS
-        # =========================================================
-        mc = [p for p in partial if p.get("chain_type") == "MC"]
-        me = [p for p in partial if p.get("chain_type") == "ME"]
-
-        def _print_partial(title: str, items: List[Dict[str, Any]], kind: str) -> None:
-            print("\n" + "-" * 92)
-            print(f"🧩 {title}  Top {min(top_partial, len(items))}/{len(items)}")
-            print("-" * 92)
-
-            for i, p in enumerate(items[:top_partial], 1):
-                score = float(p.get("score", 0.0) or 0.0)
-                node_id = _fmt(p.get("node_id"))
-                element = _fmt(p.get("failure_element"))
-                edge_cnt = p.get("edge_count", None)
-
-                print(f"\n[{i:02d}] score={score:.6f} | node_id={node_id} | element={element}")
-
-                if kind == "MC":
-                    print("  Query   :")
-                    print(f"    MODE  : {_fmt(p.get('query_mode'))}")
-                    print(f"    CAUSE : {_fmt(p.get('query_cause'))}")
-                    print("  Matched :")
-                    print(f"    MODE  : {_fmt(p.get('mode'))}")
-                    print(f"    CAUSE : {_fmt(p.get('cause'))}")
-                else:
-                    print("  Query   :")
-                    print(f"    MODE  : {_fmt(p.get('query_mode'))}")
-                    print(f"    EFFECT: {_fmt(p.get('query_effect'))}")
-                    print("  Matched :")
-                    print(f"    MODE  : {_fmt(p.get('mode'))}")
-                    print(f"    EFFECT: {_fmt(p.get('effect'))}")
-
-                if show_edge_counts and edge_cnt is not None:
-                    print(f"  EdgeCnt : {int(edge_cnt)}")
-
-                if show_ids:
-                    if kind == "MC":
-                        print(f"  IDs     : mode_id={_fmt(p.get('mode_id'))}  cause_id={_fmt(p.get('cause_id'))}")
-                    else:
-                        print(f"  IDs     : mode_id={_fmt(p.get('mode_id'))}  effect_id={_fmt(p.get('effect_id'))}")
-
-        _print_partial("PARTIAL CHAINS (MC: mode → cause)", mc, "MC")
-        _print_partial("PARTIAL CHAINS (ME: mode → effect)", me, "ME")
-
-        print("\n" + "=" * 92)
-        print("✅ End of results")
-        print("=" * 92 + "\n")
 
     results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_powertrain,save_query_json=False,
-                                                                  min_similarity=0.3,top_k_per_field=50)
+                                                                  min_similarity=0.25,top_k_per_field=30)
     # print_query_chain_results(
     #     results_graph,
     #     top_query_combos=30,
@@ -1024,4 +1061,4 @@ if  __name__ == "__main__":
     #     show_ids=False,        # True if you want semantic IDs printed
     #     show_edge_counts=True,
     # )
-    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=2, min_best_score=0.5, max_rows=15)
+    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=2, min_best_score=0.5, max_rows=15,join_cartesian=False)

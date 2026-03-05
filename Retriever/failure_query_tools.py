@@ -29,6 +29,7 @@ def _build_where(
     field_type: Optional[Union[str, List[str]]] = None,
     source_type: Optional[Union[str, List[str]]] = None,
     min_count: Optional[int] = None,
+    discipline: Optional[Union[str, List[str]]] = None,
 ):
     def clause(key, value):
         if value is None:
@@ -42,6 +43,7 @@ def _build_where(
     for k, v in [
         ("field_type", field_type),
         ("source_type", source_type),
+        ("discipline", discipline),   # ← added
     ]:
         c = clause(k, v)
         if c:
@@ -101,6 +103,7 @@ def query_semantic_kb(
     field_type: Optional[Union[str, List[str]]] = None,
     source_type: Optional[Union[str, List[str]]] = None,
     min_count: Optional[int] = None,
+    discipline: Optional[str] = None,
     include: Optional[List[str]] = None,
     alpha: float = 0.6,
     hybrid: bool = True,
@@ -111,6 +114,7 @@ def query_semantic_kb(
         field_type=field_type,
         source_type=source_type,
         min_count=min_count,
+        discipline=discipline,
     )
 
     if include is None:
@@ -575,7 +579,7 @@ def retrieve_similar_failures_from_entity(
 
 
 if  __name__ == "__main__":
-    KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb")
+    KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb")
     kb = FMEAFailureKB(KB_PATH)
 
     group_files = {
@@ -586,21 +590,22 @@ if  __name__ == "__main__":
 }
     group_maps = load_group_maps(group_files)
 
-    query_text = "too much noise"  
+    query_text = "Too much friction in gear train"  
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
-        field_type=["effect"],
-        n_results=10,
+        field_type=["cause"],
+        n_results=15,
         min_count=1,
         hybrid=False,
+        discipline=["mechanics","unknown"]
         # source_type="8D"
     )
     # for r in res[:30]:
     #     print(r["score"], r["text"])
     # print_semantic_results(res,kb,max_failure_ids=5)
-    print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=10)
+    print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=15)
 
     # result = query_linked_failure_fields(
     #     persist_dir=KB_PATH,

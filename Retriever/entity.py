@@ -1,4 +1,3 @@
-
 structure_input_powertrain = {
         "product_domain": "motor_drives",
         "nodes": [
@@ -18,7 +17,8 @@ structure_input_powertrain = {
                     "Transmission ratio drifts",
                     "creates too much noise"
                 ],
-                "causes": [
+                "causes": {
+                    "mechanics": [
                     "Gears loose on motor shaft (slips)",
                     "External force on spline",
                     "Motor can not provide enough torque",
@@ -26,17 +26,22 @@ structure_input_powertrain = {
                     "Gears material/design choice",
                     "Manufacturing tolerances of gears",
                     "Lubrication choice (e.g. degradation)",
-                    "Motor design (temperature spec, actuation length/duty cycle)",
+                    "Motor design (temperature spec, actuation length/duty cycle)"
+                    ],
+                    "hardware": [
                     "Encoder circuit crosstalk",
                     "HW cannot supply enough power",
                     "ADC measurements incorrect (incl. bandwidth)",
                     "Wrong motor driver dimension (current rating etc.)",
                     "Overcurrent detection incorrect (threshold etc.)",
                     "Incorrect control loop (bandwidth)",
-                    "Motor not shorted while device is not powered",
+                    "Motor not shorted while device is not powered"
+                    ],
+                    "software": [
                     "Control parameters incorrect",
                     "Thermal protection fails (e.g. I2T)"
-                ],
+                    ]
+                },
                 "effects": [
                     "Does not shift gear",
                     "Incorrect gear shift",

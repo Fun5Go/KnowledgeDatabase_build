@@ -143,34 +143,56 @@ def extract_old_fmea_failures(df, metadata, file_name):
         def safe_str(x):
             return x.strip() if isinstance(x, str) and x.strip() else ""
 
-        def detect_cause_discipline(text):
-            if not isinstance(text, str):
-                return ""
+        def detect_cause_discipline(cause_text, element_text):
 
-            text_lower = text.lower()
+            def norm(x):
+                return x.lower().strip() if isinstance(x, str) else ""
 
-            # hardware
-            if any(k in text_lower for k in [
-                "electronics", "electronic",
-                "hw", "hardware"
-            ]):
-                return "hardware"
+            element = norm(element_text)
+            cause = norm(cause_text)
 
-            # software
-            if any(k in text_lower for k in [
-                "software", "esw"
-            ]):
-                return "software"
+            hardware_keys = [
+                "hardware", "hw",
+                "electronic", "electronics",
+                "electrical",
+            ]
 
-            # mechanics
-            if any(k in text_lower for k in [
-                "mechanics", "mechanical", "mch"
-            ]):
-                return "mechanics"
+            software_keys = [
+                "software", "sw", "esw"
+            ]
 
-            return ""
+            mech_keys = [
+                "mechanic", "mechanical", "mch", "mech"
+            ]
 
-        cause_discipline = detect_cause_discipline(failure_cause)
+            for k in hardware_keys:
+                if k in element:
+                    return "hardware"
+
+            for k in software_keys:
+                if k in element:
+                    return "software"
+
+            for k in mech_keys:
+                if k in element:
+                    return "mechanics"
+
+            # fallback to cause
+            for k in hardware_keys:
+                if k in cause:
+                    return "hardware"
+
+            for k in software_keys:
+                if k in cause:
+                    return "software"
+
+            for k in mech_keys:
+                if k in cause:
+                    return "mechanics"
+
+            return "unknown"
+
+        cause_discipline = detect_cause_discipline(failure_cause,process_step)
         text = (
             f"Product: {safe_str(metadata.get('productName'))}. "
             f"Process step: {safe_str(process_step)}. "

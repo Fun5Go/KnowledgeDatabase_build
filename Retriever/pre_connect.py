@@ -405,6 +405,122 @@ def print_pairs(title: str, pairs: List[CandidatePair], top_n: int = 20) -> None
         print("-" * 90)
 
 
+@dataclass
+class RankedEffect:
+    failure_cause: str
+    failure_mode: str
+    failure_effect: str
+    sim_qe: float     # sim(query, effect)
+    sim_me: float     # sim(mode, effect)
+    sim_cm: float     # sim(cause, mode) (0 if no cause)
+    score: float
+
+def rank_effects_by_mode_cause_embedding(
+    structure_input: Dict[str, Any],
+    *,
+    mode_text: str,
+    cause_text: Optional[str] = None,
+    node_index: int = 0,
+    top_n: int = 10,
+    min_sim_qe: float = 0.0,
+    # weights
+    w_qe: float = 1.0,   # query -> effect
+    w_me: float = 0.3,   # mode  -> effect (stabilize when query noisy)
+    w_cm: float = 0.2,   # cause -> mode  (gate/prior when cause exists)
+    # model
+    st_model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+) -> List[RankedEffect]:
+    """
+    Rank SA effects given (mode, optional cause) by embedding similarity.
+
+    If cause_text is provided (non-empty):
+      query = "cause ; mode"
+      score = w_qe*sim(query,effect) + w_me*sim(mode,effect) + w_cm*sim(cause,mode)
+
+    Else:
+      query = "mode"
+      score = w_qe*sim(mode,effect)   (and sim_me == sim_qe; sim_cm = 0)
+
+    Always loops over effects (vectorized), returns top_n.
+    """
+    nodes = structure_input.get("nodes") or []
+    if not nodes:
+        return []
+    if node_index < 0 or node_index >= len(nodes):
+        raise IndexError(f"node_index {node_index} out of range (nodes={len(nodes)})")
+
+    node = nodes[node_index]
+    effects = [str(e).strip() for e in (node.get("effects") or []) if str(e).strip()]
+    if not effects:
+        return []
+
+    mode_text = (mode_text or "").strip()
+    cause_text = (cause_text or "").strip()
+
+    if not mode_text and not cause_text:
+        return []
+
+    from sentence_transformers import SentenceTransformer
+    st = SentenceTransformer(st_model_name)
+
+    def emb_one(t: str) -> np.ndarray:
+        v = st.encode([t], normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False)
+        return np.asarray(v, dtype=np.float32)[0]  # (d,)
+
+    def emb_many(ts: List[str]) -> np.ndarray:
+        v = st.encode(ts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False)
+        return np.asarray(v, dtype=np.float32)  # (n,d)
+
+    # embeddings
+    E = emb_many(effects)                 # (ne,d)
+    m_vec = emb_one(mode_text) if mode_text else None
+    c_vec = emb_one(cause_text) if cause_text else None
+
+    # query vector
+    if cause_text and mode_text:
+        q_vec = emb_one(f"{cause_text} ; {mode_text}")
+    elif mode_text:
+        q_vec = emb_one(mode_text)
+    else:
+        q_vec = emb_one(cause_text)  # fallback (rare)
+
+    # sims
+    sim_qe = (E @ q_vec).astype(np.float32)             # (ne,)
+    sim_me = (E @ m_vec).astype(np.float32) if m_vec is not None else sim_qe.copy()
+    sim_cm = float(c_vec @ m_vec) if (c_vec is not None and m_vec is not None) else 0.0
+
+    # score (vector)
+    if cause_text and mode_text:
+        score = w_qe * sim_qe + w_me * sim_me + w_cm * sim_cm
+    else:
+        score = w_qe * sim_qe  # == sim(mode,effect) if mode exists
+
+    # filter + top-n
+    idx = np.where(sim_qe >= float(min_sim_qe))[0]
+    if idx.size == 0:
+        return []
+
+    # take top_n among idx
+    k = min(int(top_n), int(idx.size))
+    # argpartition on subset
+    sub = score[idx]
+    top_local = np.argpartition(-sub, kth=k-1)[:k]
+    top_idx = idx[top_local]
+    top_idx = top_idx[np.argsort(-score[top_idx])]
+
+    out: List[RankedEffect] = []
+    for i in top_idx.tolist():
+        out.append(RankedEffect(
+            failure_cause=cause_text,
+            failure_mode=mode_text,
+            failure_effect=effects[i],
+            sim_qe=float(sim_qe[i]),
+            sim_me=float(sim_me[i]),
+            sim_cm=float(sim_cm),
+            score=float(score[i]),
+        ))
+    return out
+
 
 if __name__ == "__main__":
     structure_input = {
@@ -466,18 +582,28 @@ if __name__ == "__main__":
     }
     # result = generate_internal_candidate_pairs(structure_input=structure_input)
 
-    cm_pairs, me_pairs = generate_internal_candidate_pairs_standard(
-        structure_input=structure_input,
-        top_k_modes_per_cause=5,
-        top_k_effects_per_mode=5,
-        beam_width_cm=50,
-        beam_width_me=50,
-        min_sim_cm=0.22,
-        min_sim_me=0.22,
-    )
+    # cm_pairs, me_pairs = generate_internal_candidate_pairs_standard(
+    #     structure_input=structure_input,
+    #     top_k_modes_per_cause=5,
+    #     top_k_effects_per_mode=5,
+    #     beam_width_cm=50,
+    #     beam_width_me=50,
+    #     min_sim_cm=0.22,
+    #     min_sim_me=0.22,
+    # )
 
-    print_pairs("Cause → Mode (Top)", cm_pairs, top_n=20)
-    print_pairs("Mode → Effect (Top)", me_pairs, top_n=20)
+    # print_pairs("Cause → Mode (Top)", cm_pairs, top_n=20)
+    # print_pairs("Mode → Effect (Top)", me_pairs, top_n=20)
+
+    top = rank_effects_by_mode_cause_embedding(
+    structure_input,
+    mode_text="Not enough torque",
+    cause_text="Control parameters incorrect",
+    top_n=10,
+    min_sim_qe=0.15,
+)
+    for i, r in enumerate(top, 1):
+        print(i, r.failure_effect, "score=", round(r.score, 4), "sim_qe=", round(r.sim_qe, 4), "sim_cm=", round(r.sim_cm, 4))
 
 
   

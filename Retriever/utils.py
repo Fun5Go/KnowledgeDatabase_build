@@ -145,7 +145,8 @@ def print_semantic_results_with_group(
 
         print(f"[{i}] sim={sim:.4f}  dist={float(dist):.4f}")
         print(f"  semantic_id : {sid}")
-        print(f"  field_type  : {meta.get('field_type')}")
+        # print(f"  field_type  : {meta.get('field_type')}")
+        print(f"  discipline  : {meta.get('discipline')}")
         if gid:
             print(f"  group_id    : {gid}  (hits_in_group={meta.get('group_hit_count_in_group')})")
         print(f"  text        : {doc}")

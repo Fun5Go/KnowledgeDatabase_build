@@ -4,7 +4,7 @@ from pathlib import Path
 from Retriever.failure_query_tools import _load_kb,query_semantic_kb
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 import math
-from .PPL_score import ChainPPLEvaluator
+
 import random
 import json
 BASE_DIR = Path(__file__).resolve().parent
@@ -576,32 +576,6 @@ def generate_failure_chains_from_structure(
 
     return all_results
 
-# PPL Evaluator
-evaluator = ChainPPLEvaluator("gpt2")
-def attach_ppl_scores(results: List[Dict]) -> List[Dict]:
-    for r in results:
-        cause = r.get("cause")
-        mode = r.get("mode")
-        effect = r.get("effect")
-
-
-        if not cause or not mode or not effect:
-            r["forward_ppl"] = None
-            r["reverse_ppl"] = None
-            r["delta_ppl"] = None
-            continue
-
-        ppl_result = evaluator.evaluate_chain(
-            cause=cause,
-            mode=mode,
-            effect=effect
-        )
-
-        r["forward_ppl"] = ppl_result["forward_ppl"]
-        r["reverse_ppl"] = ppl_result["reverse_ppl"]
-        r["delta_ppl"] = ppl_result["delta_ppl"]
-
-    return results
 
 if  __name__ == "__main__":
 

@@ -7,8 +7,8 @@ from langsmith import traceable
 from pprint import pprint
 import json
 import re
-from Retriever.graph_query import generate_query_unique_chains
-from .utils import build_semi_chain_query_text_from_graph_results
+from Retriever.graph_query import generate_query_unique_chains, print_query_chain_results
+from .utils import build_semi_chain_query_text_from_graph_results, build_semi_chain_query_text_from_graph_results_PPL
 
 ENTITY_PATH = Path(
     r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb\entity_store.json"
@@ -480,6 +480,26 @@ def build_llm_case_context(
 
 #     print(f"\n Failure candidates saved to: {output_path}")
 
+def find_me_partial_rows(graph_results, q_mode, q_effect):
+    def _safe(x): return "" if x is None else str(x).strip()
+    partial = graph_results.get("partial_chains") or []
+    hits = []
+    for r in partial:
+        if _safe(r.get("chain_type")) != "ME":
+            continue
+        # 注意：这里同时用 query_effect 和 effect 做 fallback
+        rm = _safe(r.get("query_mode"))
+        re = _safe(r.get("query_effect")) or _safe(r.get("effect"))
+        if rm == q_mode and re == q_effect:
+            hits.append(r)
+    print("hits:", len(hits))
+    for h in hits[:10]:
+        print("  element=", h.get("failure_element"),
+              "| query_mode=", h.get("query_mode"),
+              "| query_effect=", h.get("query_effect"),
+              "| effect=", h.get("effect"),
+              "| score=", h.get("score"))
+
 @traceable(name="RAG")
 def RAG_pipeline(
     structure_input: Dict,
@@ -569,16 +589,19 @@ def RAG_pipeline(
             # )
             graph_semi_chains = generate_query_unique_chains(persist_dir=failure_KB_PATH,structure_input=structure_input,save_query_json=False,
                                                                   min_similarity=0.25,top_k_per_field=30)
-            
-            semi_candidates = build_semi_chain_query_text_from_graph_results(graph_semi_chains, target_n_mc=15, target_n_me=15,min_count=2, min_best_score=0.5)
-            failure_candidates = failure_inference_generation_RAG_FILL.invoke(
-                {
-                    "data": {
-                        "structure_analysis": structure_input_json_min,
-                        "fill_failure": semi_candidates,
-                    }
-                }
-            )
+            semi_candidates = build_semi_chain_query_text_from_graph_results(graph_semi_chains,structure_elements, target_n_mc=15, target_n_me=15,min_count=2, min_best_score=0.5, join_cartesian=False)
+            # semi_candidates = build_semi_chain_query_text_from_graph_results_PPL(graph_semi_chains,structure_element=structure_elements, target_n_mc=15, target_n_me=15,min_count=2, 
+            #                                                              structure_input= structure_input, ppl_top_k=10,ppl_max_show=5, 
+            #                                                              min_best_score=0.5, join_cartesian=False,enable_ppl_candidates=True)
+            print(semi_candidates)
+            # failure_candidates = failure_inference_generation_RAG_FILL.invoke(
+            #     {
+            #         "data": {
+            #             "structure_analysis": structure_input_json_min,
+            #             "fill_failure": semi_candidates,
+            #         }
+            #     }
+            # )
             OUTPUT_PATH = Path(
                 fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\single_test\RAG_FILL_{obj}.json"
             )
@@ -651,7 +674,7 @@ if __name__ == "__main__":
     # 1) KB Path
     # -----------------------------------------------------
     Failure_KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb"
     )
     Sentence_KB_PATH = Path(
         r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\sentence_kb"
@@ -664,7 +687,7 @@ if __name__ == "__main__":
         "product_domain": "motor_drives",
         "product_pnID": 133427,
         "nodes": [
-            {
+                {
                 "element_id": "E1",
                 "failure_element": "Power train",
                 "modes": [
@@ -680,7 +703,8 @@ if __name__ == "__main__":
                     "Transmission ratio drifts",
                     "creates too much noise"
                 ],
-                "causes": [
+                "causes": {
+                    "mechanics": [
                     "Gears loose on motor shaft (slips)",
                     "External force on spline",
                     "Motor can not provide enough torque",
@@ -688,19 +712,24 @@ if __name__ == "__main__":
                     "Gears material/design choice",
                     "Manufacturing tolerances of gears",
                     "Lubrication choice (e.g. degradation)",
-                    "Motor design (temperature spec, actuation length/duty cycle)",
+                    "Motor design (temperature spec, actuation length/duty cycle)"
+                    ],
+                    "hardware": [
                     "Encoder circuit crosstalk",
                     "HW cannot supply enough power",
                     "ADC measurements incorrect (incl. bandwidth)",
                     "Wrong motor driver dimension (current rating etc.)",
                     "Overcurrent detection incorrect (threshold etc.)",
                     "Incorrect control loop (bandwidth)",
-                    "Motor not shorted while device is not powered",
+                    "Motor not shorted while device is not powered"
+                    ],
+                    "software": [
                     "Control parameters incorrect",
                     "Thermal protection fails (e.g. I2T)"
-                ],
+                    ]
+                },
                 "effects": [
-                   "Does not shift gear",
+                    "Does not shift gear",
                     "Incorrect gear shift",
                     "Incorrect cadence (offset)",
                     "Unstable cadence setting",
@@ -761,8 +790,11 @@ if __name__ == "__main__":
     ]
 }
     RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH,
-                  top_k_per_field=30, top_n=50,object = "seperate_3",
+                  top_k_per_field=30, top_n=50,object = "seperate_candidate_powertrain_discipline_1",
                  target_n = 15, weight_element = 0.5, min_similarity=0.45, RAG = True, FILL = True)
+    
+
+            # print(semi_candidates)
 
     # -----------------------------------------------------
     # 3) Batch Settings

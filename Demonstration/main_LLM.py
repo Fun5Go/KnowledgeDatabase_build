@@ -3,7 +3,7 @@ from .entity import structure_input_powertrain, structure_input_motorcontrol
 from pathlib import Path
 
 KB_PATH = Path(
-    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb"
+    r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
 )
 
 result,OUTPUT_PATH = RAG_pipeline(structure_input=structure_input_powertrain, KB_PATH=KB_PATH, top_k_per_field=30, top_n=50,
