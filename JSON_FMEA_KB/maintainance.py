@@ -1,9 +1,9 @@
-from kb_structure import FMEAFailureKB, FMEAFailure, FMEACause
+from kb_structure import FMEAFailureKB
 
 from pathlib import Path
 from copy import deepcopy
 
-KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives\failure_kb")
+KB_PATH =  Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb")
 
 failure_kb = FMEAFailureKB(persist_dir=KB_PATH)
 
@@ -39,4 +39,5 @@ failure_kb = FMEAFailureKB(persist_dir=KB_PATH)
 # )
 
 
-failure_kb.delete_failure(failure_id="FMEA6799210115R03__F20",delete_linked_causes=True)
+# failure_kb.delete_failure(failure_id="FMEA6799210115R03__F20",delete_linked_causes=True)
+failure_kb.delete_by_semantic_node("element:0c4432535cbf")

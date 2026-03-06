@@ -156,13 +156,9 @@ def _safe_filename(s: str) -> str:
     s = re.sub(r"[^\w\-]+", "_", s)   # 只保留 字母数字下划线连字符，其余变 _
     return s
 
-def build_llm_structure_input(
-    structure_input: Dict,
-) -> Tuple[str, List[str]]:
+def build_llm_structure_input(structure_input: Dict) -> Tuple[str, List[str]]:
     """
-    For LLM input: keep ONLY failure_element / modes / causes / effects.
-    Also return the list of failure_element strings (from structure nodes),
-    so you can feed them into build_semi_chain_query_text (element will be fixed to these).
+    causes: keep dict(category->list[str]) (normalized)
     """
     nodes = structure_input.get("nodes") or []
 
@@ -176,20 +172,30 @@ def build_llm_structure_input(
 
         element_list.append(fe)
 
+        causes_raw = n.get("causes") or {}
+        causes_grouped = {}
+
+        if isinstance(causes_raw, dict):
+            for k, items in causes_raw.items():
+                k2 = str(k).strip()
+                if not k2:
+                    continue
+                if isinstance(items, list):
+                    causes_grouped[k2] = [str(x).strip() for x in items if str(x).strip()]
+                else:
+                    causes_grouped[k2] = []
+        elif isinstance(causes_raw, list):
+            # fallback: no category info
+            causes_grouped["uncategorized"] = [str(x).strip() for x in causes_raw if str(x).strip()]
+
         minimal_nodes.append(
             {
                 "failure_element": fe,
-                "failure_modes": list(n.get("modes") or []),
-                "failure_causes": list(n.get("causes") or []),
-                "failure_effects": list(n.get("effects") or []),
+                "failure_modes": [str(x).strip() for x in (n.get("modes") or []) if str(x).strip()],
+                "failure_causes": causes_grouped,
+                "failure_effects": [str(x).strip() for x in (n.get("effects") or []) if str(x).strip()],
             }
         )
-
-    # minimal_payload = {
-    #     "product_domain": structure_input.get("product_domain"),
-    #     "product_pnID": structure_input.get("product_pnID"),
-    #     "nodes": minimal_nodes,
-    # }
 
     return json.dumps(minimal_nodes, ensure_ascii=False, indent=2), element_list
 
@@ -594,14 +600,14 @@ def RAG_pipeline(
             #                                                              structure_input= structure_input, ppl_top_k=10,ppl_max_show=5, 
             #                                                              min_best_score=0.5, join_cartesian=False,enable_ppl_candidates=True)
             print(semi_candidates)
-            # failure_candidates = failure_inference_generation_RAG_FILL.invoke(
-            #     {
-            #         "data": {
-            #             "structure_analysis": structure_input_json_min,
-            #             "fill_failure": semi_candidates,
-            #         }
-            #     }
-            # )
+            failure_candidates = failure_inference_generation_RAG_FILL.invoke(
+                {
+                    "data": {
+                        "structure_analysis": structure_input_json_min,
+                        "fill_failure": semi_candidates,
+                    }
+                }
+            )
             OUTPUT_PATH = Path(
                 fr"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\single_test\RAG_FILL_{obj}.json"
             )
@@ -790,8 +796,9 @@ if __name__ == "__main__":
     ]
 }
     RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH,
-                  top_k_per_field=30, top_n=50,object = "seperate_candidate_powertrain_discipline_1",
+                  top_k_per_field=30, top_n=50,object = "seperate_powertrain_4",
                  target_n = 15, weight_element = 0.5, min_similarity=0.45, RAG = True, FILL = True)
+    
     
 
             # print(semi_candidates)

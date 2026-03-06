@@ -507,13 +507,16 @@ class FMEAFailureKB:
 
         print(f"[DELETE] failure {failure_id}")
 
-    def delete_field_text(self, field_type: str, field_id: str):
+    def delete_by_semantic_node(self, semantic_id: str) -> None:
+        """
+        Delete all failures connected to a semantic node
+        (element / mode / cause / effect all supported)
+        """
 
-
-        node = self.field_store.get(field_id)
+        node = self.field_store.get(semantic_id)
 
         if not node:
-            print("[WARN] field not found")
+            print(f"[WARN] semantic node not found: {semantic_id}")
             return
 
         failure_ids = list(node.get("failure_ids", []))
@@ -521,18 +524,6 @@ class FMEAFailureKB:
         for fid in failure_ids:
             self.delete_failure(fid)
 
-
-    def delete_by_element(self, field_id: str):
-
-        node = self.field_store.get(field_id)
-
-        if not node:
-            print("[WARN] element not found")
-            return
-
-        failure_ids = list(node.get("failure_ids", []))
-
-        for fid in failure_ids:
-            self.delete_failure(fid)
+        print(f"[DELETE] semantic node {semantic_id} and {len(failure_ids)} failures")
 
                 

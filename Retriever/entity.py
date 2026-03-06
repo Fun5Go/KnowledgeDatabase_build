@@ -14,7 +14,7 @@ structure_input_powertrain = {
                     "Unstable regulation",
                     "High loss in torque transfer",
                     "Gear train breaks/wears out",
-                    "Transmission ratio drifts",
+                    "Tranmission ratio drifts",
                     "creates too much noise"
                 ],
                 "causes": {

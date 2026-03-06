@@ -437,15 +437,15 @@ def evaluate_semi_strict(pred_list: List[Dict], gt_list: List[Dict], *, kind: st
     # -------------------------
     # 3) Unmatched query chains (preds NOT strictly matched)
     # -------------------------
-    print(f"\n================ {kind} UNMATCHED QUERY CHAINS (NOT score==2) ================\n")
-    for i in range(total_pred):
-        if i not in matched_pred_strict:
-            print("\n------------ UNMATCHED PREDICTION ------------")
-            print(f"Mode  : {pred_list[i].get('failure_mode')}")
-            print(f"{pred_key.replace('failure_', '').title():<6}: {pred_list[i].get(pred_key)}")
-            if "count" in pred_list[i] or "best_score" in pred_list[i]:
-                print(f"count : {pred_list[i].get('count')}, best_score: {pred_list[i].get('best_score')}")
-            print("------------------------------------------------\n")
+    # print(f"\n================ {kind} UNMATCHED QUERY CHAINS (NOT score==2) ================\n")
+    # for i in range(total_pred):
+    #     if i not in matched_pred_strict:
+    #         print("\n------------ UNMATCHED PREDICTION ------------")
+    #         print(f"Mode  : {pred_list[i].get('failure_mode')}")
+    #         print(f"{pred_key.replace('failure_', '').title():<6}: {pred_list[i].get(pred_key)}")
+    #         if "count" in pred_list[i] or "best_score" in pred_list[i]:
+    #             print(f"count : {pred_list[i].get('count')}, best_score: {pred_list[i].get('best_score')}")
+    #         print("------------------------------------------------\n")
 
     # -------------------------
     # 4) Unmatched GT (GT NOT strictly matched)
@@ -858,26 +858,27 @@ results_graph = generate_query_unique_chains(
     save_query_json=False,
     min_similarity=0.25,
     top_k_per_field=30,
-    field_weights=FIELD_WEIGHTS
+    field_weights=None,
+    hybrid=False
 )
 
-# metrics = evaluate_with_strong_semi_filters(
-#     results_graph=results_graph,
-#     gt_path=GT_JSON,
-#     target_element="Power train",
-#     min_count=2,
-#     min_best_score=1.2,
-# )
+metrics = evaluate_with_strong_semi_filters(
+    results_graph=results_graph,
+    gt_path=GT_JSON,
+    target_element="Power train",
+    min_count=1,
+    min_best_score=0.2,
+)
 
-# print(metrics["MC"])
-# print(metrics["ME"])
+print(metrics["MC"])
+print(metrics["ME"])
 
 # metrics_3parts = evaluate_three_parts_with_strong_semi_filters(
 #     results_graph=results_graph,
 #     gt_path=GT_JSON,
 #     target_element="Power train",
 #     min_count=2,
-#     min_best_score=1.2,
+#     min_best_score=0.5,
 #     keep_example=True,
 #     verbose_full=True,   # FULL 部分会打印严格匹配详情
 # )

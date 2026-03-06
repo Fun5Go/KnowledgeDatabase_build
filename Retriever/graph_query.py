@@ -35,7 +35,7 @@ def generate_query_unique_chains(
     top_k_per_field: int = 5,
     # scoring
     field_weights: Optional[Dict[str, float]] = None,
-    graph_connection_weight: float = 0.15,
+    graph_connection_weight: float = 0.00,
     edge_count_weight: float = 0.02,
     # join controls
     enable_query_mode_join: bool = True,
@@ -47,6 +47,9 @@ def generate_query_unique_chains(
     # persist
     save_query_json: bool = True,
     query_match_log_name: str = "query_match_log.json",
+    # Hybrid score = similarity + BM25 SCORE
+    hybrid: bool = True,
+    hybrid_alpha: float = 0.7,
 ) -> Dict[str, Any]:
     """
     1) 从 query 候选 nodes 两两拼接出 semi chains：
@@ -152,18 +155,40 @@ def generate_query_unique_chains(
                 n_results=top_k_per_field,
                 min_count=min_count,
                 source_type=source_type,
+                alpha=hybrid_alpha,
+                hybrid=hybrid,
                 **extra_args
             ) or {}
 
         docs = (res.get("documents") or [[]])[0] or []
         metas = (res.get("metadatas") or [[]])[0] or []
-        dists = (res.get("distances") or [[]])[0] or []
         ids = (res.get("ids") or [[]])[0] or []
 
+        # semantic-only fallback
+        dists = (res.get("distances") or [[]])[0] or []
+
+        # hybrid fields (only available when query_semantic_kb(..., hybrid=True))
+        hyb_scores = (res.get("hybrid_scores") or [[]])[0] or []
+        hyb_dists = (res.get("hybrid_distances") or [[]])[0] or []
+
         out: List[Dict[str, Any]] = []
-        for doc, meta, dist, sid in zip(docs, metas, dists, ids):
+
+        n = max(len(docs), len(metas), len(ids), len(dists), len(hyb_scores))
+        for i in range(n):
+            doc = docs[i] if i < len(docs) else ""
+            meta = metas[i] if i < len(metas) else {}
+            sid = ids[i] if i < len(ids) else ""
+
             try:
-                sim = 1.0 - float(dist)
+                if hybrid and i < len(hyb_scores):
+                    sim = float(hyb_scores[i])          # 直接用 hybrid score 作为 similarity
+                    raw_distance = float(hyb_dists[i]) if i < len(hyb_dists) else float(1.0 - sim)
+                    score_source = "hybrid"
+                else:
+                    dist = float(dists[i]) if i < len(dists) else 1.0
+                    sim = 1.0 - dist                    # fallback: cosine similarity
+                    raw_distance = dist
+                    score_source = "semantic"
             except Exception:
                 continue
 
@@ -176,20 +201,31 @@ def generate_query_unique_chains(
             out.append(
                 {
                     "semantic_id": semantic_id,
-                    "matched_text": matched_text,  # KB/historical text
-                    "similarity": float(sim),
-                    "query_text": qt,              # original query text
+                    "matched_text": matched_text,
+                    "similarity": float(sim),          # 后续统一拿这个打分
+                    "query_text": qt,
                     "field": field,
+                    "score_source": score_source,      # 方便审计
+                    "raw_distance": float(raw_distance),
+                    "hybrid_score": float(sim) if score_source == "hybrid" else None,
                 }
             )
 
         query_match_map[qt] = {
             "field": field,
+            "scoring_mode": "hybrid" if hybrid else "semantic",
             "matched": [
                 {
                     "matched_text": n["matched_text"],
                     "semantic_id": n["semantic_id"],
-                    "similarity": round(n["similarity"], 4),
+                    "similarity": round(float(n["similarity"]), 4),
+                    "score_source": n.get("score_source", "semantic"),
+                    "hybrid_score": (
+                        round(float(n["hybrid_score"]), 4)
+                        if n.get("hybrid_score") is not None
+                        else None
+                    ),
+                    "raw_distance": round(float(n["raw_distance"]), 4),
                 }
                 for n in out
             ],
@@ -1052,7 +1088,7 @@ if  __name__ == "__main__":
 
 
     results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_powertrain,save_query_json=False,
-                                                                  min_similarity=0.25,top_k_per_field=30)
+                                                                  min_similarity=0.25,top_k_per_field=40,hybrid=False)
     # print_query_chain_results(
     #     results_graph,
     #     top_query_combos=30,
@@ -1061,4 +1097,4 @@ if  __name__ == "__main__":
     #     show_ids=False,        # True if you want semantic IDs printed
     #     show_edge_counts=True,
     # )
-    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=2, min_best_score=0.5, max_rows=15,join_cartesian=False)
+    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=1, min_best_score=0.3, max_rows=20,join_cartesian=False)

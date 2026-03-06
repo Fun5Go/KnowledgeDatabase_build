@@ -415,21 +415,21 @@ if  __name__ == "__main__":
         print(i, c.failure_effect, "coh=", round(c.coherence_score, 4), "f_nll=", None if c.forward_nll is None else round(c.forward_nll, 4))
 
     # ME -> Cause
-    # fixed_mode = "Not enough torque"
-    # fixed_effect = "Incorrect gear shift"
+    fixed_mode = "Not enough torque"
+    fixed_effect = "Incorrect gear shift"
 
-    # top_causes = rank_causes_with_lm(
-    #     evaluator,
-    #     structure_input_powertrain,
-    #     fixed_mode=fixed_mode,
-    #     fixed_effect=fixed_effect,
-    #     node_index=0,
-    #     top_k=10
-    # )
+    top_causes = rank_causes_with_lm(
+        evaluator,
+        structure_input_powertrain,
+        fixed_mode=fixed_mode,
+        fixed_effect=fixed_effect,
+        node_index=0,
+        top_k=10
+    )
 
-    # for i, c in enumerate(top_causes, 1):
-    #     print(i, c.failure_cause, c.discipline,"coh=", round(c.coherence_score, 4),
-    #         "f_nll=", None if c.forward_nll is None else round(c.forward_nll, 4))
+    for i, c in enumerate(top_causes, 1):
+        print(i, c.failure_cause, c.discipline,"coh=", round(c.coherence_score, 4),
+            "f_nll=", None if c.forward_nll is None else round(c.forward_nll, 4))
 
 
 

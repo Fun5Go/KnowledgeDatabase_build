@@ -711,7 +711,6 @@ if  __name__ == "__main__":
         hybrid_score=False,
         source_type=["new_fmea","old_fmea"],
     )
-    results = attach_ppl_scores(results)
 
     def build_ground_truth_input(
         results: List[Dict],
