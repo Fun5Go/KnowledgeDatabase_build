@@ -36,7 +36,7 @@ def generate_query_unique_chains(
     # scoring
     field_weights: Optional[Dict[str, float]] = None,
     graph_connection_weight: float = 0.00,
-    edge_count_weight: float = 0.02,
+    edge_count_weight: float = 0.00,
     # join controls
     enable_query_mode_join: bool = True,
     query_mode_join_scope: str = "node",   # "node" or "global"  (node更安全：node_id::qmode)
@@ -232,14 +232,55 @@ def generate_query_unique_chains(
         }
         return out
 
-    def dedup_nodes_keep_best(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """dedup by semantic_id; keep best similarity"""
-        best: Dict[str, Dict[str, Any]] = {}
+    # def dedup_nodes_keep_best(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    #     """dedup by semantic_id; keep best similarity"""
+    #     best: Dict[str, Dict[str, Any]] = {}
+    #     for n in nodes:
+    #         sid = n["semantic_id"]
+    #         if sid not in best or n["similarity"] > best[sid]["similarity"]:
+    #             best[sid] = n
+    #     return list(best.values())
+    def dedup_nodes_keep_list(
+        nodes: List[Dict[str, Any]],
+        max_query_texts_per_semantic_node: Optional[int] = 3,
+    ) -> List[Dict[str, Any]]:
+        """
+        1) dedup by (field, query_text, semantic_id); keep best similarity
+        2) cap number of query_text variants kept per (field, semantic_id)
+        """
+        best: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+
         for n in nodes:
-            sid = n["semantic_id"]
-            if sid not in best or n["similarity"] > best[sid]["similarity"]:
-                best[sid] = n
-        return list(best.values())
+            key = (
+                _safe(n.get("field")),
+                _safe(n.get("query_text")),
+                _safe(n.get("semantic_id")),
+            )
+            old = best.get(key)
+            if old is None or float(n.get("similarity", 0.0)) > float(old.get("similarity", 0.0)):
+                best[key] = n
+
+        deduped = list(best.values())
+
+        if max_query_texts_per_semantic_node is None or int(max_query_texts_per_semantic_node) <= 0:
+            return deduped
+
+        grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for n in deduped:
+            gkey = (_safe(n.get("field")), _safe(n.get("semantic_id")))
+            grouped.setdefault(gkey, []).append(n)
+
+        kept: List[Dict[str, Any]] = []
+        limit = int(max_query_texts_per_semantic_node)
+
+        for _, rows in grouped.items():
+            rows_sorted = sorted(
+                rows,
+                key=lambda x: (-float(x.get("similarity", 0.0)), _safe(x.get("query_text"))),
+            )
+            kept.extend(rows_sorted[:limit])
+
+        return kept
 
     # -------------------------
     # Unique pair keep best by score
@@ -271,9 +312,9 @@ def generate_query_unique_chains(
                     cause_queries.append((discipline, c))
 
         # 1) retrieve candidates
-        candidate_modes = dedup_nodes_keep_best([n for t in modes_txt for n in semantic_nodes(t, "mode")])
-        candidate_effects = dedup_nodes_keep_best([n for t in effects_txt for n in semantic_nodes(t, "effect")])
-        candidate_causes = dedup_nodes_keep_best(
+        candidate_modes = dedup_nodes_keep_list([n for t in modes_txt for n in semantic_nodes(t, "mode")])
+        candidate_effects = dedup_nodes_keep_list([n for t in effects_txt for n in semantic_nodes(t, "effect")])
+        candidate_causes = dedup_nodes_keep_list(
                     [
                         n
                         for discipline, cause_text in cause_queries
@@ -281,21 +322,26 @@ def generate_query_unique_chains(
                     ]
                 )
 
-        mode_map = {n["semantic_id"]: n for n in candidate_modes}
-        cause_map = {n["semantic_id"]: n for n in candidate_causes}
-        effect_map = {n["semantic_id"]: n for n in candidate_effects}
+        # mode_map = {n["semantic_id"]: n for n in candidate_modes}
+        # cause_map = {n["semantic_id"]: n for n in candidate_causes}
+        # effect_map = {n["semantic_id"]: n for n in candidate_effects}
+        mode_nodes = candidate_modes
+        cause_nodes = candidate_causes
+        effect_nodes = candidate_effects
 
         # 2) build unique semi-chains by pair, keep best score
-        best_me: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (mode_id, effect_id) -> record
-        best_mc: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (mode_id, cause_id)  -> record
+        best_me: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+        best_mc: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
 
         # --- ME pairs (mode x effect) only if edge exists ---
-        for mode_id, mode_node in mode_map.items():
+        for mode_node in mode_nodes:
+            mode_id = _safe(mode_node.get("semantic_id"))
             effects_dict = (mode_to_effect.get(mode_id) or {})
             if not effects_dict:
                 continue
 
-            for effect_id, effect_node in effect_map.items():
+            for effect_node in effect_nodes:
+                effect_id = _safe(effect_node.get("semantic_id"))
                 if effect_id not in effects_dict:
                     continue
 
@@ -313,12 +359,10 @@ def generate_query_unique_chains(
                 q_mode = _safe(mode_node["query_text"])
                 q_eff = _safe(effect_node["query_text"])
 
-                # query mode key for fallback join
                 qkey = _norm_query_mode(q_mode)
                 if query_mode_join_scope == "node":
                     qkey = f"{node_id}::{qkey}"
 
-                # ✅统计 query combo（ME）
                 _update_combo(
                     combo_me,
                     (q_mode, q_eff),
@@ -329,6 +373,8 @@ def generate_query_unique_chains(
                         "matched_mode": mode_node["matched_text"],
                         "matched_effect": effect_node["matched_text"],
                         "edge_count": edge_cnt,
+                        "mode_id": mode_id,
+                        "effect_id": effect_id,
                     },
                 )
 
@@ -355,15 +401,22 @@ def generate_query_unique_chains(
                     "score": round(float(score), 6),
                 }
 
-                upsert_best(best_me, (mode_id, effect_id), rec)
+                # 关键：这里也别只按 (mode_id, effect_id) 去重
+                upsert_best(
+                    best_me,
+                    (mode_id, effect_id, q_mode, q_eff),
+                    rec,
+                )
 
         # --- MC pairs (mode x cause) only if edge exists ---
-        for mode_id, mode_node in mode_map.items():
+        for mode_node in mode_nodes:
+            mode_id = _safe(mode_node.get("semantic_id"))
             causes_dict = (mode_to_cause.get(mode_id) or {})
             if not causes_dict:
                 continue
 
-            for cause_id, cause_node in cause_map.items():
+            for cause_node in cause_nodes:
+                cause_id = _safe(cause_node.get("semantic_id"))
                 if cause_id not in causes_dict:
                     continue
 
@@ -385,7 +438,6 @@ def generate_query_unique_chains(
                 if query_mode_join_scope == "node":
                     qkey = f"{node_id}::{qkey}"
 
-                # ✅统计 query combo（MC）
                 _update_combo(
                     combo_mc,
                     (q_mode, q_cau),
@@ -396,6 +448,8 @@ def generate_query_unique_chains(
                         "matched_mode": mode_node["matched_text"],
                         "matched_cause": cause_node["matched_text"],
                         "edge_count": edge_cnt,
+                        "mode_id": mode_id,
+                        "cause_id": cause_id,
                     },
                 )
 
@@ -422,7 +476,11 @@ def generate_query_unique_chains(
                     "score": round(float(score), 6),
                 }
 
-                upsert_best(best_mc, (mode_id, cause_id), rec)
+                upsert_best(
+                    best_mc,
+                    (mode_id, cause_id, q_mode, q_cau),
+                    rec,
+                )
 
         unique_me = list(best_me.values())
         unique_mc = list(best_mc.values())
@@ -1088,7 +1146,7 @@ if  __name__ == "__main__":
 
 
     results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_powertrain,save_query_json=False,
-                                                                  min_similarity=0.25,top_k_per_field=40,hybrid=False)
+                                                                  min_similarity=0.3,top_k_per_field=200,hybrid=False)
     # print_query_chain_results(
     #     results_graph,
     #     top_query_combos=30,
@@ -1097,4 +1155,4 @@ if  __name__ == "__main__":
     #     show_ids=False,        # True if you want semantic IDs printed
     #     show_edge_counts=True,
     # )
-    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=1, min_best_score=0.3, max_rows=20,join_cartesian=False)
+    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=1, min_best_score=0.2, max_rows=20,join_cartesian=False)

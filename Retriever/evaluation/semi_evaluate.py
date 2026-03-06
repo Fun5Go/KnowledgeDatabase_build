@@ -849,16 +849,16 @@ GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_mot
 FIELD_WEIGHTS = {
 "element":0.2,
 "mode": 1.2,
-"cause": 1.1,
+"cause": 0.9,
 "effect": 0.9,
 }
 results_graph = generate_query_unique_chains(
     persist_dir=KB_PATH,
     structure_input=structure_input_powertrain,
     save_query_json=False,
-    min_similarity=0.25,
-    top_k_per_field=30,
-    field_weights=None,
+    min_similarity=0.3,
+    top_k_per_field=40,
+    field_weights=FIELD_WEIGHTS,
     hybrid=False
 )
 
@@ -867,7 +867,7 @@ metrics = evaluate_with_strong_semi_filters(
     gt_path=GT_JSON,
     target_element="Power train",
     min_count=1,
-    min_best_score=0.2,
+    min_best_score=1.0,
 )
 
 print(metrics["MC"])
