@@ -551,10 +551,10 @@ def evaluate_strict(pred_list: List[Dict], gt_list: List[Dict]):
 if __name__ == "__main__":
 
     GT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\failure_kb\entity_store.json")
-    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Single_test\RAG_FILL_seperate_powertrain_4.json")
+    PREDICTION_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\outputs\failure_candidates_single.json")
 
     gt_list = load_gt(GT_JSON,target_element=TARGET_ELEMENT_2)
-    pred_list = load_predictions(PREDICTION_JSON,target_element=TARGET_ELEMENT_2)
+    pred_list = load_predictions_old(PREDICTION_JSON,target_element=TARGET_ELEMENT_2)
 
     results = evaluate_strict_dedup(pred_list, gt_list)
     print("\n========== FINAL METRICS ==========")

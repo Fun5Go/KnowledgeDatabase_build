@@ -4,8 +4,8 @@ from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from .llm_init import get_llm_backend
-from .failure_schema import FailureCandidates_RAG, FailureCandidates_PURE, FailureCandidates_RAG_FILL
-from .prompt_failure_generation import failure_inference_prompt_RAG,failure_inference_prompt_PURE,failure_inference_prompt_RAG_FILL,failure_evaluate_prompt
+from .failure_schema import FailureCandidates_RAG, FailureCandidates_PURE, FailureCandidates_RAG_FILL,FailureCandidatesSingle
+from .prompt_failure_generation import failure_inference_prompt_RAG,failure_inference_prompt_PURE,failure_inference_prompt_RAG_FILL,failure_evaluate_prompt,failure_inference_prompt_single
 
 
 @tool
@@ -126,4 +126,42 @@ def failure_inference_generation_RAG_FILL(data: dict) -> dict:
         # Call LLM and parse output
     resp = llm.invoke(formatted_prompt.to_messages())
     parser = JsonOutputParser(pydantic_object=FailureCandidates_RAG_FILL)
+    return parser.parse(resp.content)
+
+@tool
+def failure_inference_generation_single(data: dict) -> dict:
+    """Generate failure candidates according to structure analysis"""
+
+    semi_entity = data.get("semi_entity", "")
+
+    llm = get_llm_backend(
+        backend="openai",
+        model="azure/gpt-4.1",
+        json_mode=True,
+        temperature=0,
+    )
+
+    system_prompt = """
+You are an expert in motor drive systems, reliability engineering, and FMEA classification.
+
+You will receive a partial FMEA failure chain and a list of candidates.
+Your task is to select the most relevant candidate to fill the blank.
+
+Rules:
+- Choose only ONE candidate.
+- Do not modify candidate text.
+- Do not invent new failures.
+- Only choose from provided candidates.
+Return the result strictly in JSON format.
+"""
+
+    messages = [
+        ("system", system_prompt),
+        ("user", semi_entity),
+    ]
+
+    resp = llm.invoke(messages)
+
+    parser = JsonOutputParser(pydantic_object=FailureCandidatesSingle)
+
     return parser.parse(resp.content)

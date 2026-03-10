@@ -5,8 +5,8 @@ structure_input_powertrain = {
                 "element_id": "E1",
                 "failure_element": "Power train",
                 "modes": [
-                    "Incorrect",
-                    "No pulses seen",
+                    # "Incorrect",
+                    # "No pulses seen",
                     "No voltage applied",
                     "Incorrect torque applied",
                     "Not enough torque",

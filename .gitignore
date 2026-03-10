@@ -11,6 +11,7 @@ env*/
 *.jsonl
 *.csv
 *.png
+*.pdf
 
 chroma*/
 

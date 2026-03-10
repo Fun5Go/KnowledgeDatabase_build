@@ -131,6 +131,7 @@ def print_semantic_results_with_group(
     kb: your KB object (not strictly required here, kept for compatibility)
     group_maps: {field_type: {semantic_id -> group_id}}
     """
+
     if collapse_groups and group_maps:
         res = collapse_query_results_by_group(res, group_maps, top_n=top_n)
 
@@ -139,16 +140,31 @@ def print_semantic_results_with_group(
     metas = res.get("metadatas", [[]])[0]
     dists = res.get("distances", [[]])[0]
 
+    # NEW: hybrid fields (safe read)
+    hybrid_scores = res.get("hybrid_scores", [[]])
+    hybrid_scores = hybrid_scores[0] if hybrid_scores else []
+
     for i, (sid, doc, meta, dist) in enumerate(zip(ids, docs, metas, dists), start=1):
+
         sim = 1.0 - float(dist)
         gid = meta.get("group_id")
 
-        print(f"[{i}] sim={sim:.4f}  dist={float(dist):.4f}")
+        hybrid_score = hybrid_scores[i-1] if i-1 < len(hybrid_scores) else None
+
+        print(f"[{i}] sim={sim:.4f}  dist={float(dist):.4f}", end="")
+
+        if hybrid_score is not None:
+            print(f"  hybrid={hybrid_score:.4f}")
+        else:
+            print()
+
         print(f"  semantic_id : {sid}")
         # print(f"  field_type  : {meta.get('field_type')}")
         print(f"  discipline  : {meta.get('discipline')}")
+
         if gid:
             print(f"  group_id    : {gid}  (hits_in_group={meta.get('group_hit_count_in_group')})")
+
         print(f"  text        : {doc}")
         print("-" * 60)
 #===========================
@@ -206,4 +222,349 @@ def print_semantic_results(res, kb, max_failure_ids: int = 15):
         print(f"  count: {meta.get('count')}")
 
         print(f"  failure_ids({len(failure_ids)}): {shown}" + (f" ... (+{more})" if more > 0 else ""))
+
+def get_strong_semi_chains_from_query_combo_stats(
+    results_graph: Dict[str, Any],
+    *,
+    min_count: int = 2,
+    min_best_score: float = 0.5,
+    keep_example: bool = True,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    从 generate_query_unique_chains() 的输出 results_graph 中，
+    筛选 query_combo_stats 里满足:
+      - count >= min_count
+      - best_score >= min_best_score
+    的 MC / ME semi chain “统计项”。
+
+    注意：
+    - 这里返回的是 query_combo_stats 的条目（含 example），不是具体 unique_mc/unique_me 的链记录。
+    - example 字段里会带 matched_mode/matched_cause/matched_effect 等，适合作为“代表性 semi chain”。
+
+    Return:
+      {
+        "MC": [ {chain_type, query_combo, count, best_score, example}, ... ],
+        "ME": [ ... ]
+      }
+    """
+    stats = (results_graph or {}).get("query_combo_stats") or {}
+    out: Dict[str, List[Dict[str, Any]]] = {"MC": [], "ME": []}
+
+    for kind in ("MC", "ME"):
+        rows = stats.get(kind) or []
+        for r in rows:
+            try:
+                c = int(r.get("count", 0) or 0)
+                s = float(r.get("best_score", 0.0) or 0.0)
+            except Exception:
+                continue
+
+            if c < min_count or s < min_best_score:
+                continue
+
+            item = {
+                "chain_type": kind,
+                "query_combo": r.get("query_combo") or [],
+                "count": c,
+                "best_score": s,
+            }
+            if keep_example:
+                item["example"] = r.get("example") or {}
+
+            out[kind].append(item)
+
+        # 默认按 (count, best_score) 降序
+        out[kind].sort(key=lambda x: (int(x["count"]), float(x["best_score"])), reverse=True)
+
+    return out
+
+def rerank_strong_semi_chains_with_cross_encoder(
+    results_graph: Dict[str, Any],
+    cross_encoder_model: Any,
+    *,
+    min_count: int = 2,
+    min_best_score: float = 0.5,
+    ce_weight: float = 0.7,
+    original_weight: float = 0.3,
+    use_matched_pair_text: bool = True,
+    sigmoid_ce_score: bool = False,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    对 strong MC / ME semi-chains 做 cross-encoder 打分并 rerank。
+
+    参数
+    ----
+    results_graph:
+        generate_query_unique_chains(...) 的返回结果
+    cross_encoder_model:
+        需要有 predict(pairs) 方法
+        其中 pairs 形如:
+            [(text_a, text_b), ...]
+    min_count:
+        strong semi-chain 的最小 count
+    min_best_score:
+        strong semi-chain 的最小 best_score
+    ce_weight:
+        CE 分数权重
+    original_weight:
+        原始 best_score 权重
+    use_matched_pair_text:
+        True:
+            MC 用 ("query_mode [SEP] query_cause", "matched_mode [SEP] matched_cause")
+            ME 用 ("query_mode [SEP] query_effect", "matched_mode [SEP] matched_effect")
+        False:
+            MC 用 ("query_mode", "matched_mode") 与 ("query_cause", "matched_cause") 分别打分再平均
+            ME 用 ("query_mode", "matched_mode") 与 ("query_effect", "matched_effect") 分别打分再平均
+    sigmoid_ce_score:
+        如果 cross_encoder_model.predict(...) 输出的是 logit，可设为 True 做 sigmoid
+
+    返回
+    ----
+    {
+        "MC": [... reranked rows ...],
+        "ME": [... reranked rows ...],
+    }
+    """
+
+    strong = get_strong_semi_chains_from_query_combo_stats(
+        results_graph,
+        min_count=min_count,
+        min_best_score=min_best_score,
+        keep_example=True,
+    )
+
+    mc_rows: List[Dict[str, Any]] = strong.get("MC", []) or []
+    me_rows: List[Dict[str, Any]] = strong.get("ME", []) or []
+
+    def _safe(x: Any) -> str:
+        return "" if x is None else str(x).strip()
+
+    def _sigmoid(x: float) -> float:
+        import math
+        return 1.0 / (1.0 + math.exp(-float(x)))
+
+    def _get_qc(r: Dict[str, Any]) -> List[str]:
+        return list(r.get("query_combo") or [])
+
+    def _get_mc_qmode_qcause(r: Dict[str, Any]) -> Tuple[str, str]:
+        qc = _get_qc(r)
+        q_mode, q_cause = (qc + ["", ""])[:2]
+        return _safe(q_mode), _safe(q_cause)
+
+    def _get_me_qmode_qeffect(r: Dict[str, Any]) -> Tuple[str, str]:
+        qc = _get_qc(r)
+        q_mode, q_effect = (qc + ["", ""])[:2]
+        return _safe(q_mode), _safe(q_effect)
+
+    def _normalize_ce_scores(scores: List[float]) -> List[float]:
+        if not scores:
+            return []
+        vals = [float(s) for s in scores]
+        if sigmoid_ce_score:
+            vals = [_sigmoid(v) for v in vals]
+            return vals
+
+        # 若不是 sigmoid 模式，做一个稳妥的 min-max 到 [0,1]
+        lo = min(vals)
+        hi = max(vals)
+        if abs(hi - lo) < 1e-12:
+            return [0.5 for _ in vals]
+        return [(v - lo) / (hi - lo) for v in vals]
+
+    def _rerank_mc(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not rows:
+            return []
+
+        if use_matched_pair_text:
+            pairs: List[Tuple[str, str]] = []
+            for r in rows:
+                q_mode, q_cause = _get_mc_qmode_qcause(r)
+                ex = r.get("example") or {}
+                matched_mode = _safe(ex.get("matched_mode"))
+                matched_cause = _safe(ex.get("matched_cause"))
+
+                left = f"Failure mode: {q_mode}. Caused by: {q_cause}."
+                right = f"Failure mode: {matched_mode}. Caused by: {matched_cause}."
+                pairs.append((left, right))
+
+            ce_scores_raw = list(cross_encoder_model.predict(pairs))
+            ce_scores = _normalize_ce_scores([float(s) for s in ce_scores_raw])
+
+            out: List[Dict[str, Any]] = []
+            for r, ce_score in zip(rows, ce_scores):
+                row = dict(r)
+                row["ce_score"] = float(ce_score)
+                row["rerank_score"] = (
+                    float(original_weight) * float(r.get("best_score", 0.0))
+                    + float(ce_weight) * float(ce_score)
+                )
+                out.append(row)
+
+            out.sort(key=lambda x: (float(x["rerank_score"]), float(x.get("best_score", 0.0)), int(x.get("count", 0))), reverse=True)
+            return out
+
+        # 分别打 mode / cause 再平均
+        pairs: List[Tuple[str, str]] = []
+        pair_owner: List[Tuple[int, str]] = []
+
+        for idx, r in enumerate(rows):
+            q_mode, q_cause = _get_mc_qmode_qcause(r)
+            ex = r.get("example") or {}
+            matched_mode = _safe(ex.get("matched_mode"))
+            matched_cause = _safe(ex.get("matched_cause"))
+
+            pairs.append((q_mode, matched_mode))
+            pair_owner.append((idx, "mode"))
+
+            pairs.append((q_cause, matched_cause))
+            pair_owner.append((idx, "cause"))
+
+        ce_scores_raw = list(cross_encoder_model.predict(pairs))
+        ce_scores = _normalize_ce_scores([float(s) for s in ce_scores_raw])
+
+        agg: Dict[int, Dict[str, float]] = {}
+        for (idx, tag), score in zip(pair_owner, ce_scores):
+            agg.setdefault(idx, {})
+            agg[idx][tag] = float(score)
+
+        out = []
+        for idx, r in enumerate(rows):
+            mode_score = float((agg.get(idx) or {}).get("mode", 0.0))
+            cause_score = float((agg.get(idx) or {}).get("cause", 0.0))
+            ce_score = (mode_score + cause_score) / 2.0
+
+            row = dict(r)
+            row["ce_mode_score"] = mode_score
+            row["ce_cause_score"] = cause_score
+            row["ce_score"] = ce_score
+            row["rerank_score"] = (
+                float(original_weight) * float(r.get("best_score", 0.0))
+                + float(ce_weight) * ce_score
+            )
+            out.append(row)
+
+        out.sort(key=lambda x: (float(x["rerank_score"]), float(x.get("best_score", 0.0)), int(x.get("count", 0))), reverse=True)
+        return out
+
+    def _rerank_me(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not rows:
+            return []
+
+        if use_matched_pair_text:
+            pairs: List[Tuple[str, str]] = []
+            for r in rows:
+                q_mode, q_effect = _get_me_qmode_qeffect(r)
+                ex = r.get("example") or {}
+                matched_mode = _safe(ex.get("matched_mode"))
+                matched_effect = _safe(ex.get("matched_effect"))
+
+                left = f"Failure mode: {q_mode}. Leads to: {q_effect}."
+                right = f"Failure mode: {matched_mode}. Leads to: {matched_effect}."
+                pairs.append((left, right))
+
+            ce_scores_raw = list(cross_encoder_model.predict(pairs))
+            ce_scores = _normalize_ce_scores([float(s) for s in ce_scores_raw])
+
+            out: List[Dict[str, Any]] = []
+            for r, ce_score in zip(rows, ce_scores):
+                row = dict(r)
+                row["ce_score"] = float(ce_score)
+                row["rerank_score"] = (
+                    float(original_weight) * float(r.get("best_score", 0.0))
+                    + float(ce_weight) * float(ce_score)
+                )
+                out.append(row)
+
+            out.sort(key=lambda x: (float(x["rerank_score"]), float(x.get("best_score", 0.0)), int(x.get("count", 0))), reverse=True)
+            return out
+
+        # 分别打 mode / effect 再平均
+        pairs: List[Tuple[str, str]] = []
+        pair_owner: List[Tuple[int, str]] = []
+
+        for idx, r in enumerate(rows):
+            q_mode, q_effect = _get_me_qmode_qeffect(r)
+            ex = r.get("example") or {}
+            matched_mode = _safe(ex.get("matched_mode"))
+            matched_effect = _safe(ex.get("matched_effect"))
+
+            pairs.append((q_mode, matched_mode))
+            pair_owner.append((idx, "mode"))
+
+            pairs.append((q_effect, matched_effect))
+            pair_owner.append((idx, "effect"))
+
+        ce_scores_raw = list(cross_encoder_model.predict(pairs))
+        ce_scores = _normalize_ce_scores([float(s) for s in ce_scores_raw])
+
+        agg: Dict[int, Dict[str, float]] = {}
+        for (idx, tag), score in zip(pair_owner, ce_scores):
+            agg.setdefault(idx, {})
+            agg[idx][tag] = float(score)
+
+        out = []
+        for idx, r in enumerate(rows):
+            mode_score = float((agg.get(idx) or {}).get("mode", 0.0))
+            effect_score = float((agg.get(idx) or {}).get("effect", 0.0))
+            ce_score = (mode_score + effect_score) / 2.0
+
+            row = dict(r)
+            row["ce_mode_score"] = mode_score
+            row["ce_effect_score"] = effect_score
+            row["ce_score"] = ce_score
+            row["rerank_score"] = (
+                float(original_weight) * float(r.get("best_score", 0.0))
+                + float(ce_weight) * ce_score
+            )
+            out.append(row)
+
+        out.sort(key=lambda x: (float(x["rerank_score"]), float(x.get("best_score", 0.0)), int(x.get("count", 0))), reverse=True)
+        return out
+
+    return {
+        "MC": _rerank_mc(mc_rows),
+        "ME": _rerank_me(me_rows),
+    }
+
+
+def print_reranked_semi_chains(
+    reranked: Dict[str, List[Dict[str, Any]]],
+    *,
+    max_rows: int = 25,
+) -> None:
+    def _print_rows(rows: List[Dict[str, Any]], title: str, is_mc: bool) -> None:
+        print("\n" + "=" * 90)
+        print(f"{title}: {len(rows)} (showing up to {max_rows})")
+        print("=" * 90)
+
+        for i, r in enumerate(rows[:max_rows], 1):
+            qc = list(r.get("query_combo") or [])
+            ex = r.get("example") or {}
+
+            print(
+                f"[{i:02d}] rerank_score={float(r.get('rerank_score', 0.0)):.6f}  "
+                f"ce_score={float(r.get('ce_score', 0.0)):.6f}  "
+                f"best_score={float(r.get('best_score', 0.0)):.6f}  "
+                f"count={int(r.get('count', 0))}"
+            )
+
+            if is_mc:
+                q_mode, q_cause = (qc + ["", ""])[:2]
+                print(f"     query_mode : {q_mode}")
+                print(f"     query_cause: {q_cause}")
+                print("     --- example ---")
+                print(f"     matched_mode : {ex.get('matched_mode','')}")
+                print(f"     matched_cause: {ex.get('matched_cause','')}")
+            else:
+                q_mode, q_effect = (qc + ["", ""])[:2]
+                print(f"     query_mode  : {q_mode}")
+                print(f"     query_effect: {q_effect}")
+                print("     --- example ---")
+                print(f"     matched_mode  : {ex.get('matched_mode','')}")
+                print(f"     matched_effect: {ex.get('matched_effect','')}")
+
+            print()
+
+    _print_rows(reranked.get("MC", []) or [], "RERANKED MC semi-chains", is_mc=True)
+    _print_rows(reranked.get("ME", []) or [], "RERANKED ME semi-chains", is_mc=False)
 

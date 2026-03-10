@@ -366,137 +366,46 @@ Please provide the results in JSON format following this schema:
 """
 
 failure_inference_prompt_RAG_FILL ="""
-=====================================================
-ROLE
-=====================================================
-You are a senior motor-drive system FMEA architect and failure-physics expert.
+You are an expert FMEA analyst in the motor drives domain.
 
-Primary task: FILL the missing field(s) (cause or effect) in the provided MC/ME semi chains
-with the MOST physically consistent choice from Structure Analysis (SA).
+Your task is to complete partial FMEA failure entities into full failure chains.
 
-This is NOT a generation task.
-This is NOT a free inference task.
-This is a BEST-FIT COMPLETION task (SA-only).
+Context:
+- The input contains semi-structured FMEA items.
+- Each item is a partial failure entity, usually in the form of:
+  - (failure_mode -> failure_effect), with missing failure_cause
+  - or (failure_cause -> failure_mode), with missing failure_effect
+- For each semi chain, a known failure_element is given.
+- The cause discipline is already constrained, and the model must choose the most appropriate cause text from the provided top candidate list.
+- A valid failure chain must follow physical / functional FMEA logic:
 
+  failure_cause -> failure_mode -> failure_effect
 
-=====================================================
-YOU WILL RECEIVE
-=====================================================
-1) Structure Analysis (SA) JSON: the ONLY allowed text inventory
-2) Input Failure Entities:
-   - MC semi chains: usually (element, mode, cause) and missing effect
-   - ME semi chains: usually (element, mode, effect) and missing cause
-   - Some may be complete already
+Key requirement:
+- Choose the candidate cause that is on the same failure level as the given failure mode.
+- Do not choose a cause that is actually an upstream system-level effect or a lower-level implementation detail that does not directly explain the mode.
+- Focus on motor drives / power train logic, such as gear train behavior, motor torque capability, transmission ratio stability, sensing errors, control errors, wear, slipping, and actuation limitations.
+- Prefer candidates that are mechanically and causally consistent with the given mode and effect.
 
+Important rules:
+1. Keep the original failure_element and failure_mode unless a very small correction is necessary for consistency.
+2. Select the best candidate failure_cause from the provided top-five candidate texts.
+3. A single semi chain may produce multiple valid chains if multiple candidates are plausible and correspond to different causal interpretations.
+4. Only produce chains that are physically meaningful in the motor drives domain.
+5. Use confidence:
+   - high: direct and strong causal match
+   - medium: plausible but somewhat indirect or ambiguous
+   - low: weak inference or limited evidence
+6. fill_from_id must contain the input semi-chain id(s) used to generate that output chain.
+7. inference_reason should briefly explain:
+   - why the selected cause matches the mode,
+   - why it is at the same failure level,
+   - and how the mode leads to the effect.
+8. Output JSON only. No markdown, no commentary, no extra text.
+9. Return valid JSON strictly matching the required schema.
+110. Output only the clean failure entity text. Do not copy discipline labels, category prefixes, numbering, or other metadata from the input candidates. For example, if a candidate is written as "Mechanical: Gears loose on motor shaft (slips)", output only "Gears loose on motor shaft (slips)".
 
-=====================================================
-HARD CONSTRAINTS (NON-NEGOTIABLE)
-=====================================================
-
-[HC-1] Structure Dominance (Output Vocabulary Lock)
-- ALL output fields MUST be EXACT texts from SA.
-- Do NOT use KB wording in the final output.
-- Do NOT invent any new text outside SA.
-
-[HC-2] Exact-Match Canonicalization
-For every chain field:
-- failure_element: MUST be exact from SA.failure_element
-- failure_mode: MUST be exact from SA.modes
-- failure_cause: MUST be exact from SA.causes
-- failure_effect: MUST be exact from SA.effects
-
-If an input field is not an exact SA text:
-- Replace it with the closest SA exact text (same meaning, minimum edit).
-- Then continue filling.
-
-[HC-3] Physics-Causal Validity (Must Pass)
-Every completed chain MUST satisfy:
-    failure_cause -> failure_mode -> failure_effect
-and be realistic in motor-drive context:
-1) Cause can physically produce Mode
-2) Mode can physically lead to Effect
-3) The chain is subsystem-consistent (same failure_element context)
-
-If a chain cannot be made valid using SA-only:
-- Output it as INVALID and give a brief SA-only reason.
-
-
-=====================================================
-FILLING RULES (BEST-FIT)
-=====================================================
-
-[FR-1] Fill Only What Is Missing
-- If failure_effect is "____": fill ONE best SA.effect.
-- If failure_cause is "____": fill ONE best SA.cause.
-- If both are "____": fill both (cause first, then effect).
-- Do NOT change non-blank fields unless required by HC-2 or to restore HC-3 validity.
-
-[FR-2] Mode-Centered Matching (MC <-> ME Use As HINT)
-When filling:
-- Prefer SA effects that are already observed in any ME chain with the SAME
-  (failure_element + failure_mode), if available.
-- Prefer SA causes that are already observed in any MC chain with the SAME
-  (failure_element + failure_mode), if available.
-This is a preference, not a hard rule; physics consistency still dominates.
-
-[FR-3] Minimal Repair (Only If Needed)
-If a provided non-blank field makes the chain physically impossible:
-- Prefer changing ONLY ONE field to restore validity:
-  Priority: effect -> cause -> mode
-- Never change failure_element unless it is not in SA.
-
-[FR-4] Specificity Bias
-- Prefer the most specific SA option that matches the mechanism,
-  avoid overly generic effects/causes when a more specific SA text fits better.
-
-
-=====================================================
-WORKFLOW
-=====================================================
-
-Step 0 — Parse & Normalize
-- Treat each [MC_*] or [ME_*] block as one item.
-- Ignore node_id/stats/best_score (not output fields).
-- Canonicalize all non-blank fields to SA exact texts (HC-2).
-
-Step 1 — Fill Missing Field(s)
-For each item:
-- If missing effect: choose the single best SA.effect so that
-  cause -> mode -> effect is valid.
-- If missing cause: choose the single best SA.cause so that
-  cause -> mode -> effect is valid.
-
-Step 2 — Validate
-- Enforce HC-3; apply FR-3 only if necessary.
-- Mark VALID / INVALID.
-
-Step 3 — Output (No Extra Inference)
-- DO NOT add new chains beyond completing the given inputs.
-- Return one completed result per input block.
-
-
-=====================================================
-DEDUPLICATION & SORTING (FINAL OUTPUT SHAPING)
-=====================================================
-
-Step 4 — Deduplicate (Strict)
-If multiple candidates share the SAME signature:
-    (failure_mode + failure_cause + failure_effect)
-THEN:
-- Merge into one candidate
-- Keep the most appropriate failure_element (closest subsystem fit)
-- Set failure_function = "N/A" (if present / required by your schema)
-- Collect merged ids into fill_from_id (list)
-
-
-Return only the final deduplicated & sorted list.
-
-
-=====================================================
-STRUCTURE ANALYSIS (JSON)
-=====================================================
-
-{structure_analysis}
+You will receive the input in the following structure:
 
 =====================================================
 INPUT FAILURE ENTITIES
@@ -528,3 +437,5 @@ Return valid JSON in the following format:
 """
 
 failure_evaluate_prompt = """"""
+
+failure_inference_prompt_single  = """"""

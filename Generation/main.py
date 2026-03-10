@@ -594,12 +594,11 @@ def RAG_pipeline(
             #     structure_elements=structure_elements
             # )
             graph_semi_chains = generate_query_unique_chains(persist_dir=failure_KB_PATH,structure_input=structure_input,save_query_json=False,
-                                                                  min_similarity=0.25,top_k_per_field=30)
-            semi_candidates = build_semi_chain_query_text_from_graph_results(graph_semi_chains,structure_elements, target_n_mc=15, target_n_me=15,min_count=2, min_best_score=0.5, join_cartesian=False)
-            # semi_candidates = build_semi_chain_query_text_from_graph_results_PPL(graph_semi_chains,structure_element=structure_elements, target_n_mc=15, target_n_me=15,min_count=2, 
-            #                                                              structure_input= structure_input, ppl_top_k=10,ppl_max_show=5, 
-            #                                                              min_best_score=0.5, join_cartesian=False,enable_ppl_candidates=True)
-            print(semi_candidates)
+                                                                  min_similarity=0.3,top_k_per_field=50)
+            # semi_candidates = build_semi_chain_query_text_from_graph_results(graph_semi_chains,structure_elements, target_n_mc=15, target_n_me=15,min_count=1, min_best_score=0.2, join_cartesian=False)
+            semi_candidates = build_semi_chain_query_text_from_graph_results_PPL(graph_semi_chains,structure_element=structure_elements, target_n_mc=15, target_n_me=15,min_count=1, 
+                                                                         structure_input= structure_input, ppl_top_k=10,ppl_max_show=5, 
+                                                                         min_best_score=0.25, join_cartesian=False,enable_ppl_candidates=True)
             failure_candidates = failure_inference_generation_RAG_FILL.invoke(
                 {
                     "data": {
@@ -697,7 +696,6 @@ if __name__ == "__main__":
                 "element_id": "E1",
                 "failure_element": "Power train",
                 "modes": [
-                    "Incorrect",
                     "No pulses seen",
                     "No voltage applied",
                     "Incorrect torque applied",
@@ -796,7 +794,7 @@ if __name__ == "__main__":
     ]
 }
     RAG_pipeline(structure_input=structure_input_powertrain, failure_KB_PATH=Failure_KB_PATH, sentence_KB_PATH = Sentence_KB_PATH,
-                  top_k_per_field=30, top_n=50,object = "seperate_powertrain_4",
+                  top_k_per_field=30, top_n=50,object = "seperate_powertrain_5",
                  target_n = 15, weight_element = 0.5, min_similarity=0.45, RAG = True, FILL = True)
     
     

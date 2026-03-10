@@ -4,7 +4,7 @@ from pathlib import Path
 from Retriever.failure_query_tools import _load_kb,query_semantic_kb
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 import math
-
+from rank_bm25 import BM25Okapi
 import random
 import json
 BASE_DIR = Path(__file__).resolve().parent
@@ -259,7 +259,7 @@ def normalize_similarity(sim, field):
     return (sim - p50) / (p95 - p50)
 
 
-def _accumulate_candidate_scores(
+def _accumulate_candidate_scores_old(
     kb: Any,
     semantic_query_result: Dict[str, Any],
     candidate_scores: Dict[str, Any],
@@ -336,6 +336,150 @@ def _accumulate_candidate_scores(
                 "structure_text": query_text,
                 "kb_text": kb_text,
             })
+
+def _ensure_candidate_entry(candidate_scores: Dict[str, Any], fid: str) -> None:
+    """
+    Ensure candidate_scores[fid] has all required fields.
+    Safe to call repeatedly.
+    """
+    if fid not in candidate_scores:
+        candidate_scores[fid] = {
+            "score": 0.0,          # final normalized score (weighted average)
+            "raw_score": 0.0,      # sum of hybrid_score * weight
+            "weight_sum": 0.0,     # sum of weights of accepted matched items
+            "field_hits": set(),
+            "matched": {
+                "element": [],
+                "mode": [],
+                "cause": [],
+                "effect": [],
+            },
+        }
+        return
+
+    candidate_scores[fid].setdefault("score", 0.0)
+    candidate_scores[fid].setdefault("raw_score", 0.0)
+    candidate_scores[fid].setdefault("weight_sum", 0.0)
+    candidate_scores[fid].setdefault("field_hits", set())
+    candidate_scores[fid].setdefault("matched", {})
+    candidate_scores[fid]["matched"].setdefault("element", [])
+    candidate_scores[fid]["matched"].setdefault("mode", [])
+    candidate_scores[fid]["matched"].setdefault("cause", [])
+    candidate_scores[fid]["matched"].setdefault("effect", [])
+
+
+def _recompute_candidate_final_score(candidate_entry: Dict[str, Any]) -> None:
+    """
+    score = weighted average of accepted hybrid scores
+          = raw_score / weight_sum
+    """
+    raw_score = float(candidate_entry.get("raw_score", 0.0))
+    weight_sum = float(candidate_entry.get("weight_sum", 0.0))
+
+    if weight_sum > 0.0:
+        candidate_entry["score"] = raw_score
+    else:
+        candidate_entry["score"] = 0.0
+
+
+def _accumulate_candidate_scores(
+    kb: Any,
+    semantic_query_result: Dict[str, Any],
+    candidate_scores: Dict[str, Any],
+    query_text: str,
+    field_type: str,
+    weight: float,
+    min_similarity: float = 0.35,
+) -> None:
+    """
+    Improved accumulation logic:
+    - threshold uses hybrid_score if available, else semantic similarity
+    - "better" uses hybrid_score if available, else semantic similarity
+    - stored 'similarity' is the chosen score used for ranking (hybrid preferred)
+    - semantic similarity is still preserved as 'semantic_similarity' for debugging
+    - final candidate score is weighted average:
+          score = sum(hybrid_score * weight) / sum(weight)
+      and raw_score is kept as the unnormalized accumulation
+    """
+
+    ids = (semantic_query_result.get("ids", [[]]) or [[]])[0] or []
+    dists = (semantic_query_result.get("distances", [[]]) or [[]])[0] or []
+    hyb_scores = (semantic_query_result.get("hybrid_scores", [[]]) or [[]])[0]
+
+    has_hybrid = isinstance(hyb_scores, list) and len(hyb_scores) == len(ids)
+
+    for idx, (sid, dist) in enumerate(zip(ids, dists)):
+        try:
+            sem_sim = max(0.0, 1.0 - float(dist))
+        except Exception:
+            continue
+
+        hybrid_sim = float(hyb_scores[idx]) if has_hybrid else float(sem_sim)
+
+        # threshold now uses hybrid score
+        if hybrid_sim  < float(min_similarity):
+            continue
+
+        node = kb.field_store.get(sid, {}) or {}
+        failure_ids = node.get("failure_ids", []) or []
+        if not failure_ids:
+            continue
+
+        kb_text = node.get("text", "")
+        kb_text = kb_text.strip() if isinstance(kb_text, str) else ""
+
+        for fid in failure_ids:
+            _ensure_candidate_entry(candidate_scores, fid)
+
+            entry = candidate_scores[fid]
+            matched_list = entry["matched"][field_type]
+
+            existing = None
+            for m in matched_list:
+                if m.get("semantic_id") == sid:
+                    existing = m
+                    break
+
+            # ---------------------------------
+            # Case 1: already matched same semantic_id
+            # ---------------------------------
+            if existing is not None:
+                old_used = float(existing.get("hybrid_score", existing.get("similarity", 0.0)))
+
+                # better judged by hybrid score
+                if hybrid_sim > old_used:
+                    # replace contribution delta in raw_score
+                    delta_raw = (hybrid_sim - old_used) * float(weight)
+                    if delta_raw > 0.0:
+                        entry["raw_score"] += delta_raw
+
+                    existing["similarity"] = round(float(hybrid_sim), 4)              # ranking score
+                    existing["hybrid_score"] = round(float(hybrid_sim), 4)           # ranking score
+                    existing["semantic_similarity"] = round(float(sem_sim), 4)       # debug
+                    existing["structure_text"] = query_text
+                    existing["kb_text"] = kb_text
+
+                    _recompute_candidate_final_score(entry)
+
+                continue
+
+            # ---------------------------------
+            # Case 2: new hit
+            # ---------------------------------
+            entry["raw_score"] += hybrid_sim * float(weight)
+            entry["weight_sum"] += float(weight)
+            entry["field_hits"].add(field_type)
+
+            matched_list.append({
+                "semantic_id": sid,
+                "similarity": round(float(hybrid_sim), 4),            # now uses hybrid
+                "hybrid_score": round(float(hybrid_sim), 4),
+                "semantic_similarity": round(float(sem_sim), 4),      # keep semantic for debug
+                "structure_text": query_text,
+                "kb_text": kb_text,
+            })
+
+            _recompute_candidate_final_score(entry)
 
 def _apply_controlled_reinforcement(
     score: float,
@@ -430,9 +574,9 @@ def generate_failure_chains_from_structure(
                 min_count=min_count,
                 source_type=source_type,
                 hybrid=hybrid_score,
-                alpha = 0.8,
+                alpha = 0.7,
             )
-            _accumulate_candidate_scores(
+            _accumulate_candidate_scores_old(
                 kb=kb,
                 semantic_query_result=res,
                 candidate_scores=candidate_scores,
@@ -604,7 +748,7 @@ if  __name__ == "__main__":
                     "No voltage applied",
                     "Incorrect torque applied",
                     "Not enough torque",
-                    "Motor breaks/overheats (e.g. resulting in demagnetisation)",
+                    "Motor breaks/overheats",
                     "Unstable regulation",
                     "High loss in torque transfer",
                     "Gear train breaks/wears out",
@@ -618,32 +762,32 @@ if  __name__ == "__main__":
                     "Too much friction in gear train",
                     "Gears material/design choice",
                     "Manufacturing tolerances of gears",
-                    "Lubrication choice (e.g. degradation)",
-                    "Motor design (temperature spec, actuation length/duty cycle)",
+                    "Lubrication choice",
+                    "Motor design",
                     "Encoder circuit crosstalk",
                     "HW cannot supply enough power",
-                    "ADC measurements incorrect (incl. bandwidth)",
-                    "Wrong motor driver dimension (current rating etc.)",
-                    "Overcurrent detection incorrect (threshold etc.)",
-                    "Incorrect control loop (bandwidth)",
+                    "ADC measurements incorrect",
+                    "Wrong motor driver dimension",
+                    "Overcurrent detection incorrect",
+                    "Incorrect control loop",
                     "Motor not shorted while device is not powered",
                     "Control parameters incorrect",
-                    "Thermal protection fails (e.g. I2T)"
+                    "Thermal protection fails"
                 ],
                 "effects": [
                     "Does not shift gear",
                     "Incorrect gear shift",
-                    # "Incorrect cadence (offset)",
-                    # "Unstable cadence setting",
-                    # "Incorrect cadence (fixed gear ratio)",
-                    # "Incorrect ratio (offset)",
-                    # "Unstable ratio setting",
-                    # "Does not enter limp home mode",
-                    # "Sets wrong gear ratio",
-                    # "Gear ratio drifts when battery is empty",
-                    # "Firmware update not possible/fails",
-                    # "Device bricked",
-                    # "Update takes too much time (>5 minutes)",
+                    "Incorrect cadence (offset)",
+                    "Unstable cadence setting",
+                    "Incorrect cadence (fixed gear ratio)",
+                    "Incorrect ratio (offset)",
+                    "Unstable ratio setting",
+                    "Does not enter limp home mode",
+                    "Sets wrong gear ratio",
+                    "Gear ratio drifts when battery is empty",
+                    "Firmware update not possible/fails",
+                    "Device bricked",
+                    "Update takes too much time (>5 minutes)",
                     "Too much noise",
                 ]
             }
@@ -703,12 +847,12 @@ if  __name__ == "__main__":
         persist_dir=KB_PATH,
         structure_input=structure_input,
         weight_element=0.2,
-        top_k_per_field=30,
+        top_k_per_field=200,
         # minimum_field_match=2,
-        min_similarity=0.45,
-        top_n=100,
+        min_similarity=0.4,
+        top_n=200,
         replace=True,
-        hybrid_score=False,
+        hybrid_score=True,
         source_type=["new_fmea","old_fmea"],
     )
 
@@ -826,7 +970,7 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=15,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=20,strict_unique=True)
     print(results)
 
 

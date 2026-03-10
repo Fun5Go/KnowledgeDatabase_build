@@ -6,6 +6,8 @@ from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 import json
 from .entity import structure_input_motorcontrol, structure_input_powertrain
 import re
+from sentence_transformers import CrossEncoder
+from .utils import rerank_strong_semi_chains_with_cross_encoder, print_reranked_semi_chains
 BASE_DIR = Path(__file__).resolve().parent
 
 
@@ -18,10 +20,11 @@ FIELD_WEIGHTS = {
     "effect": 0.8,
 }
 
-COMPLETE_CHAIN_BONUS = 1.4
-GRAPH_CONNECTION_WEIGHT = 0.3
-GRAPH_EXPAND_DEFAULT_SIM = 0.6
-
+MIN_SIMILARITY_BY_FIELD = {
+    "mode": 0.4,
+    "cause": 0.3,
+    "effect": 0.3,
+}
 
 
 def generate_query_unique_chains(
@@ -30,23 +33,36 @@ def generate_query_unique_chains(
     *,
     # semantic retrieval
     min_count: Optional[int] = None,
-    min_similarity: float = 0.75,
+    min_similarity: float = 0.35,
+    min_similarity_by_field: Optional[Dict[str, float]] = None,
     source_type: Optional[str] = None,
     top_k_per_field: int = 5,
+    max_query_texts_per_semantic_node: Optional[int] = 3,
+
+    # score normalization
+    normalize_similarity_by_field: bool = False,
+    field_similarity_stats: Optional[Dict[str, Dict[str, float]]] = None,
+    normalize_method: str = "p50_p95",   # "none" | "p05_p95" | "p50_p95"
+    normalized_score_floor: float = 0.0,
+
     # scoring
     field_weights: Optional[Dict[str, float]] = None,
     graph_connection_weight: float = 0.00,
-    edge_count_weight: float = 0.00,
+    edge_count_weight: float = 0.02,
+
     # join controls
     enable_query_mode_join: bool = True,
-    query_mode_join_scope: str = "node",   # "node" or "global"  (node更安全：node_id::qmode)
-    query_mode_join_topk: int = 10,        # 限制 query-mode join 时每个 key 的 topK（防止笛卡尔积爆炸）
+    query_mode_join_scope: str = "node",
+    query_mode_join_topk: int = 10,
+
     # limits
     top_n_complete: int = 50,
     top_n_partial: int = 50,
+
     # persist
     save_query_json: bool = True,
     query_match_log_name: str = "query_match_log.json",
+
     # Hybrid score = similarity + BM25 SCORE
     hybrid: bool = True,
     hybrid_alpha: float = 0.7,
@@ -88,6 +104,13 @@ def generate_query_unique_chains(
     if field_weights is None:
         field_weights = {"mode": 0.4, "cause": 0.3, "effect": 0.3}
 
+    if min_similarity_by_field is None:
+        min_similarity_by_field = {
+            "mode": min_similarity,
+            "cause": min_similarity,
+            "effect": min_similarity,
+        }
+
     persist_dir = Path(persist_dir)
     kb = _load_kb(persist_dir)
 
@@ -110,6 +133,35 @@ def generate_query_unique_chains(
         t = re.sub(r"\s+", " ", t)
         t = re.sub(r"[^\w\s\-]+", "", t)  # remove punctuation (keep letters/numbers/_/space/-)
         return t
+    def _normalize_similarity(score: float, field: str) -> float:
+        """
+        normalize retrieval score by field background distribution.
+        returns clipped score in [0, 1].
+        """
+        s = float(score)
+
+        if not normalize_similarity_by_field:
+            return s
+
+        stats = (field_similarity_stats or {}).get(field) or {}
+        if not stats:
+            return s
+
+        method = _safe(normalize_method).lower() or "p50_p95"
+
+        if method == "p05_p95":
+            lo = float(stats.get("p05", 0.0))
+            hi = float(stats.get("p95", 1.0))
+        elif method == "p50_p95":
+            lo = float(stats.get("p50", 0.0))
+            hi = float(stats.get("p95", 1.0))
+        else:
+            return s
+
+        denom = max(1e-8, hi - lo)
+        x = (s - lo) / denom
+        x = max(float(normalized_score_floor), min(1.0, x))
+        return float(x)
 
     # debug/audit
     query_match_map: Dict[str, Any] = {}
@@ -149,29 +201,27 @@ def generate_query_unique_chains(
             extra_args["discipline"] = [discipline, "unknown"]
 
         res = query_semantic_kb(
-                persist_dir,
-                qt,
-                field_type=field,
-                n_results=top_k_per_field,
-                min_count=min_count,
-                source_type=source_type,
-                alpha=hybrid_alpha,
-                hybrid=hybrid,
-                **extra_args
-            ) or {}
+            persist_dir,
+            qt,
+            field_type=field,
+            n_results=top_k_per_field,
+            min_count=min_count,
+            source_type=source_type,
+            alpha=hybrid_alpha,
+            hybrid=hybrid,
+            **extra_args
+        ) or {}
 
         docs = (res.get("documents") or [[]])[0] or []
         metas = (res.get("metadatas") or [[]])[0] or []
         ids = (res.get("ids") or [[]])[0] or []
 
-        # semantic-only fallback
         dists = (res.get("distances") or [[]])[0] or []
-
-        # hybrid fields (only available when query_semantic_kb(..., hybrid=True))
         hyb_scores = (res.get("hybrid_scores") or [[]])[0] or []
         hyb_dists = (res.get("hybrid_distances") or [[]])[0] or []
 
         out: List[Dict[str, Any]] = []
+        field_threshold = float((min_similarity_by_field or {}).get(field, min_similarity))
 
         n = max(len(docs), len(metas), len(ids), len(dists), len(hyb_scores))
         for i in range(n):
@@ -180,44 +230,55 @@ def generate_query_unique_chains(
             sid = ids[i] if i < len(ids) else ""
 
             try:
+                dist = float(dists[i]) if i < len(dists) else 1.0
+                semantic_sim = 1.0 - dist
+
+                hybrid_score = None
+
                 if hybrid and i < len(hyb_scores):
-                    sim = float(hyb_scores[i])          # 直接用 hybrid score 作为 similarity
-                    raw_distance = float(hyb_dists[i]) if i < len(hyb_dists) else float(1.0 - sim)
+                    hybrid_score = float(hyb_scores[i])
                     score_source = "hybrid"
+                    score_for_ranking = hybrid_score
                 else:
-                    dist = float(dists[i]) if i < len(dists) else 1.0
-                    sim = 1.0 - dist                    # fallback: cosine similarity
-                    raw_distance = dist
                     score_source = "semantic"
+                    score_for_ranking = semantic_sim
             except Exception:
                 continue
 
-            if sim < min_similarity:
+            # threshold 用原始 retrieval score 判断
+            if semantic_sim < field_threshold:
                 continue
 
             semantic_id = _safe(sid) or _safe((meta or {}).get("semantic_id"))
             matched_text = _id_to_text(semantic_id) or _safe(doc)
 
-            out.append(
-                {
-                    "semantic_id": semantic_id,
-                    "matched_text": matched_text,
-                    "similarity": float(sim),          # 后续统一拿这个打分
-                    "query_text": qt,
-                    "field": field,
-                    "score_source": score_source,      # 方便审计
-                    "raw_distance": float(raw_distance),
-                    "hybrid_score": float(sim) if score_source == "hybrid" else None,
-                }
-            )
+            sim = _normalize_similarity(score_for_ranking, field)
+
+            out.append({
+                "semantic_id": semantic_id,
+                "matched_text": matched_text,
+
+                "similarity": float(sim),          # normalized score used downstream
+                "raw_similarity": float(semantic_sim),
+
+                "hybrid_score": hybrid_score,
+
+                "query_text": qt,
+                "field": field,
+                "score_source": score_source,
+            })
 
         query_match_map[qt] = {
             "field": field,
             "scoring_mode": "hybrid" if hybrid else "semantic",
+            "threshold_used": round(field_threshold, 4),
+            "normalize_similarity_by_field": bool(normalize_similarity_by_field),
+            "normalize_method": normalize_method,
             "matched": [
                 {
                     "matched_text": n["matched_text"],
                     "semantic_id": n["semantic_id"],
+                    "raw_similarity": round(float(n["raw_similarity"]), 4),
                     "similarity": round(float(n["similarity"]), 4),
                     "score_source": n.get("score_source", "semantic"),
                     "hybrid_score": (
@@ -225,7 +286,6 @@ def generate_query_unique_chains(
                         if n.get("hybrid_score") is not None
                         else None
                     ),
-                    "raw_distance": round(float(n["raw_distance"]), 4),
                 }
                 for n in out
             ],
@@ -242,7 +302,7 @@ def generate_query_unique_chains(
     #     return list(best.values())
     def dedup_nodes_keep_list(
         nodes: List[Dict[str, Any]],
-        max_query_texts_per_semantic_node: Optional[int] = 3,
+        max_query_texts_per_semantic_node: Optional[int] = 1,
     ) -> List[Dict[str, Any]]:
         """
         1) dedup by (field, query_text, semantic_id); keep best similarity
@@ -1143,10 +1203,16 @@ if  __name__ == "__main__":
     "cause": 1.0,
     "effect": 1.0,
 }
+    
+    MIN_SIMILARITY_BY_FIELD = {
+    "mode": 0.4,
+    "cause": 0.3,
+    "effect": 0.3,
+}
 
 
-    results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_powertrain,save_query_json=False,
-                                                                  min_similarity=0.3,top_k_per_field=200,hybrid=False)
+    results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_powertrain,save_query_json=True,
+                                                                  min_similarity=0.6,top_k_per_field=50,hybrid=False)
     # print_query_chain_results(
     #     results_graph,
     #     top_query_combos=30,
@@ -1155,4 +1221,17 @@ if  __name__ == "__main__":
     #     show_ids=False,        # True if you want semantic IDs printed
     #     show_edge_counts=True,
     # )
-    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=1, min_best_score=0.2, max_rows=20,join_cartesian=False)
+    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=2, min_best_score=0.2, max_rows=15,join_cartesian=False)
+    # ce_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+
+    # reranked = rerank_strong_semi_chains_with_cross_encoder(
+    #     results_graph,
+    #     ce_model,
+    #     min_count=1,
+    #     min_best_score=0.1,
+    #     ce_weight=0.5,
+    #     original_weight=0.5,
+    #     use_matched_pair_text=True,
+    #     sigmoid_ce_score=False,
+    # )
+    # print_reranked_semi_chains(reranked)

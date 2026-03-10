@@ -603,7 +603,7 @@ def build_semi_chain_query_text_from_graph_results_PPL(
             coh = it.get("coh", None)
             f_nll = it.get("f_nll", None)
 
-            lines.append(f"  -{text}")
+            lines.append(f"  -{prefix}{text}")
             # optional filtering
             # if coh is not None and f_nll is not None:
             #     lines.append(f"  - {text}  (coh={float(coh):.4f}, f_nll={float(f_nll):.4f})")

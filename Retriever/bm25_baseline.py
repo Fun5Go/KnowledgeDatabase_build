@@ -196,7 +196,7 @@ class BM25SemanticFieldRetriever:
 # -----------------------------
 if __name__ == "__main__":
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb"
     )
 
     kb = FMEAFailureKB(KB_PATH)
@@ -216,8 +216,8 @@ if __name__ == "__main__":
 #     for r in results:
 #         print(r)
     results = bm25_retriever.query_single_field(
-    query_text="Motor overheat",
-    field="mode",
+    query_text="Motor can not provide enough torque",
+    field="cause",
     top_k=10
     )
     # print(results)

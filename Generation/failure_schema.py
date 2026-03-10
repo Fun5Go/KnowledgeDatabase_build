@@ -46,3 +46,9 @@ class FailureCandidates_PURE(BaseModel):
 
 class FailureCandidates_RAG_FILL(BaseModel):
     failure_candidates: List[FailureEntity_RAG_FILL]
+
+class FailureCandidatesSingle(BaseModel):
+    selected_failure_cause: Optional[str] = Field(default=None)
+    selected_failure_effect: Optional[str] = Field(default=None)
+    confidence: float = Field(default=0.0)
+    inference_reason: str = Field(default="")

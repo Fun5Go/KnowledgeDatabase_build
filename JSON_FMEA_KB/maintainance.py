@@ -39,5 +39,5 @@ failure_kb = FMEAFailureKB(persist_dir=KB_PATH)
 # )
 
 
-# failure_kb.delete_failure(failure_id="FMEA6799210115R03__F20",delete_linked_causes=True)
-failure_kb.delete_by_semantic_node("element:0c4432535cbf")
+failure_kb.delete_failure(failure_id="FMEA6799210115R03__F20",delete_linked_causes=True)
+# failure_kb.delete_by_semantic_node("element:0c4432535cbf")

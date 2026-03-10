@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Any, Dict, List, Union
-
+from rank_bm25 import BM25Okapi
 import chromadb
 from chromadb.utils import embedding_functions
 from pathlib import Path
@@ -12,7 +12,7 @@ from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 from sentence_transformers import CrossEncoder
 import numpy as np
 from .utils import load_group_maps,print_semantic_results_with_group, print_semantic_results, compute_bm25
-
+import re
 # =========================================================
 # 1) Load KB
 # =========================================================
@@ -95,6 +95,96 @@ def sort_by_score(documents, metadatas, scores):
     items.sort(key=lambda x: x["score"], reverse=True)
     return items
 
+# ====== BM25 =======
+_GLOBAL_BM25 = {}
+_GLOBAL_ID_MAP = {}
+def simple_tokenize(text: Any) -> List[str]:
+    text = "" if text is None else str(text)
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return [t for t in text.split() if t]
+
+
+def _safe_text(x: Any) -> str:
+    return "" if x is None else str(x)
+
+def build_global_bm25_from_kb(kb):
+
+    global _GLOBAL_BM25, _GLOBAL_ID_MAP
+
+    if _GLOBAL_BM25:
+        return
+
+    semantic_ids = {
+        "element": [],
+        "mode": [],
+        "cause": [],
+        "effect": [],
+    }
+
+    corpus = {
+        "element": [],
+        "mode": [],
+        "cause": [],
+        "effect": [],
+    }
+
+    for sid, node in kb.field_store.items():
+
+        field = node.get("field_type")
+
+        if field not in semantic_ids:
+            continue
+
+        text = _safe_text(node.get("text", ""))
+
+        semantic_ids[field].append(sid)
+        corpus[field].append(simple_tokenize(text))
+
+    for f in corpus:
+
+        if not corpus[f]:
+            continue
+
+        _GLOBAL_BM25[f] = BM25Okapi(corpus[f])
+        _GLOBAL_ID_MAP[f] = {
+            sid: i for i, sid in enumerate(semantic_ids[f])
+        }
+
+    print("Global BM25 index built.")
+
+
+def tokenize(text):
+    # Simple tokenization
+    return re.findall(r"\w+", text.lower())
+def compute_bm25_global(query_text, doc_ids, metas):
+
+    tokenized_query = tokenize(query_text)
+
+    scores = []
+
+    for doc_id, meta in zip(doc_ids, metas):
+
+        field = meta.get("field_type")
+
+        bm25 = _GLOBAL_BM25.get(field)
+
+        if bm25 is None:
+            scores.append(0.0)
+            continue
+
+        idx = _GLOBAL_ID_MAP[field].get(doc_id)
+
+        if idx is None:
+            scores.append(0.0)
+            continue
+
+        field_scores = bm25.get_scores(tokenized_query)
+
+        scores.append(field_scores[idx])
+
+    return np.array(scores)
+
 
 def query_semantic_kb(
     persist_dir: Union[str, Path],
@@ -105,10 +195,13 @@ def query_semantic_kb(
     min_count: Optional[int] = None,
     discipline: Optional[str] = None,
     include: Optional[List[str]] = None,
-    alpha: float = 0.6,
+    alpha: float = 0.7,
     hybrid: bool = True,
 ):
     col = _get_collection(persist_dir)
+
+    kb = _load_kb(persist_dir)
+    build_global_bm25_from_kb(kb)
 
     where = _build_where(
         field_type=field_type,
@@ -158,10 +251,10 @@ def query_semantic_kb(
         sem = np.clip(sem, 0.0, 1.0)
 
         # ---- bm25 ----
-        bm25 = compute_bm25(query_text, docs)
+        bm25 = compute_bm25_global(query_text, ids, metas)
 
         # ---- normalize ----
-        sem_n = normalize(sem)
+        sem_n = sem
         bm25_n = normalize(bm25)
 
         # ---- hybrid score ----
@@ -590,22 +683,22 @@ if  __name__ == "__main__":
 }
     group_maps = load_group_maps(group_files)
 
-    query_text = "Too much friction in gear train"  
+    query_text = "ADC measurements incorrect (incl. bandwidth)"
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
         field_type=["cause"],
-        n_results=15,
+        n_results=50,
         min_count=1,
-        hybrid=False,
-        discipline=["mechanics","unknown"]
+        hybrid=True,
+        # discipline=["mechanics","unknown"]
         # source_type="8D"
     )
     # for r in res[:30]:
     #     print(r["score"], r["text"])
     # print_semantic_results(res,kb,max_failure_ids=5)
-    print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=15)
+    print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=15,collapse_groups=False)
 
     # result = query_linked_failure_fields(
     #     persist_dir=KB_PATH,
