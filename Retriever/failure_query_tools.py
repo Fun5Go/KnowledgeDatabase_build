@@ -684,22 +684,22 @@ if  __name__ == "__main__":
 }
     group_maps = load_group_maps(group_files)
 
-    query_text = "Motor cannot start"
+    query_text = "Not enough torque"
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
-        field_type=["effect"],
-        n_results=50,
+        field_type=["mode"],
+        n_results=20,
         min_count=1,
-        hybrid=True,
+        hybrid=False,
         # discipline=["mechanics","unknown"]
         # source_type="8D"
     )
     # for r in res[:30]:
     #     print(r["score"], r["text"])
     # print_semantic_results(res,kb,max_failure_ids=5)
-    # print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=15,collapse_groups=False)
+    print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=15,collapse_groups=False)
 
     # result = query_linked_failure_fields(
     #     persist_dir=KB_PATH,
@@ -709,136 +709,136 @@ if  __name__ == "__main__":
     # )
 
 
-    reranked = rerank_semantic_results(query_text, res, top_k=20)
+#     reranked = rerank_semantic_results(query_text, res, top_k=20)
 
-    print("\n====== Reranked Semantic Results ======\n")
+#     print("\n====== Reranked Semantic Results ======\n")
 
-    for i, item in enumerate(reranked, start=1):
+#     for i, item in enumerate(reranked, start=1):
 
-        semantic_id = item["id"]
-        node = kb.field_store.get(semantic_id, {}) or {}
-        failure_ids = node.get("failure_ids", [])
+#         semantic_id = item["id"]
+#         node = kb.field_store.get(semantic_id, {}) or {}
+#         failure_ids = node.get("failure_ids", [])
 
-        print("=" * 100)
-        print(f"[{i:02d}] semantic_id: {semantic_id}")
-        print(f"  text: {item['doc']}")
-        print(f"  CE score: {item['ce_score']:.4f}")
-        print(f"  original similarity: {1 - float(item['dist']):.4f}")
-        print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")
+#         print("=" * 100)
+#         print(f"[{i:02d}] semantic_id: {semantic_id}")
+#         print(f"  text: {item['doc']}")
+#         print(f"  CE score: {item['ce_score']:.4f}")
+#         print(f"  original similarity: {1 - float(item['dist']):.4f}")
+#         print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")
 
 
-#--------------Entity retrieval
-#     FAILURE_ENTITY = {
-#     "failure_mode_text": "Motor stalls during operation",
-#     "failure_element_text": "Conveyor mechanism",
-#     "failure_effect_text": "Process is delayed",
-#     "failure_cause_text": "Incorrect motor or driver specification"
-#   }
-#     result = retrieve_similar_failures_from_entity(persist_dir=KB_PATH, failure_entity=FAILURE_ENTITY,top_n=20,min_similarity=0.4, top_k_per_field=15)
-    def build_ground_truth_input(
-            results: List[Dict],
-            target_n: Optional[int] = None,
-            strict_unique: bool = False,
-        ) -> str:
-            """
-            Build LLM-readable GT examples.
+# #--------------Entity retrieval
+# #     FAILURE_ENTITY = {
+# #     "failure_mode_text": "Motor stalls during operation",
+# #     "failure_element_text": "Conveyor mechanism",
+# #     "failure_effect_text": "Process is delayed",
+# #     "failure_cause_text": "Incorrect motor or driver specification"
+# #   }
+# #     result = retrieve_similar_failures_from_entity(persist_dir=KB_PATH, failure_entity=FAILURE_ENTITY,top_n=20,min_similarity=0.4, top_k_per_field=15)
+#     def build_ground_truth_input(
+#             results: List[Dict],
+#             target_n: Optional[int] = None,
+#             strict_unique: bool = False,
+#         ) -> str:
+#             """
+#             Build LLM-readable GT examples.
 
-            Args:
-                results: retrieved chains
-                target_n: desired number of output cases
-                strict_unique:
-                    False → backfill duplicates if unique not enough
-                    True  → do NOT backfill, return fewer and warn
-            """
+#             Args:
+#                 results: retrieved chains
+#                 target_n: desired number of output cases
+#                 strict_unique:
+#                     False → backfill duplicates if unique not enough
+#                     True  → do NOT backfill, return fewer and warn
+#             """
 
-            if not results:
-                return "No similar failure chains were retrieved from the knowledge base."
+#             if not results:
+#                 return "No similar failure chains were retrieved from the knowledge base."
 
-            if target_n is None:
-                target_n = len(results)
+#             if target_n is None:
+#                 target_n = len(results)
 
-            def norm(x):
-                if x is None:
-                    return ""
-                return " ".join(str(x).strip().split()).lower()
+#             def norm(x):
+#                 if x is None:
+#                     return ""
+#                 return " ".join(str(x).strip().split()).lower()
 
-            def sig(r):
-                return (
-                    norm(r.get("element")),
-                    norm(r.get("function")),
-                    norm(r.get("mode")),
-                    norm(r.get("effect")),
-                    norm(r.get("cause")),
-                )
+#             def sig(r):
+#                 return (
+#                     norm(r.get("element")),
+#                     norm(r.get("function")),
+#                     norm(r.get("mode")),
+#                     norm(r.get("effect")),
+#                     norm(r.get("cause")),
+#                 )
 
-            # -------------------------------------------------
-            # 1️⃣ Collect unique chains
-            # -------------------------------------------------
-            selected = []
-            seen = set()
-            duplicates = []
+#             # -------------------------------------------------
+#             # 1️⃣ Collect unique chains
+#             # -------------------------------------------------
+#             selected = []
+#             seen = set()
+#             duplicates = []
 
-            for r in results:
-                s = sig(r)
-                if s in seen:
-                    duplicates.append(r)
-                    continue
-                seen.add(s)
-                selected.append(r)
-                if len(selected) >= target_n:
-                    break
+#             for r in results:
+#                 s = sig(r)
+#                 if s in seen:
+#                     duplicates.append(r)
+#                     continue
+#                 seen.add(s)
+#                 selected.append(r)
+#                 if len(selected) >= target_n:
+#                     break
 
-            # -------------------------------------------------
-            # 2️⃣ Backfill only if NOT strict
-            # -------------------------------------------------
-            if not strict_unique and len(selected) < target_n:
-                need = target_n - len(selected)
-                selected.extend(duplicates[:need])
+#             # -------------------------------------------------
+#             # 2️⃣ Backfill only if NOT strict
+#             # -------------------------------------------------
+#             if not strict_unique and len(selected) < target_n:
+#                 need = target_n - len(selected)
+#                 selected.extend(duplicates[:need])
 
-            # In strict mode, do nothing (may be fewer)
+#             # In strict mode, do nothing (may be fewer)
 
-            # -------------------------------------------------
-            # 3️⃣ Format
-            # -------------------------------------------------
-            lines = []
-            lines.append("Retrieved Similar FMEA Failure Chains:\n")
+#             # -------------------------------------------------
+#             # 3️⃣ Format
+#             # -------------------------------------------------
+#             lines = []
+#             lines.append("Retrieved Similar FMEA Failure Chains:\n")
 
-            if strict_unique and len(selected) < target_n:
-                lines.append(
-                    f"⚠ WARNING: Only {len(selected)} unique chains available "
-                    f"(requested {target_n}). No duplicate backfilling applied.\n"
-                )
+#             if strict_unique and len(selected) < target_n:
+#                 lines.append(
+#                     f"⚠ WARNING: Only {len(selected)} unique chains available "
+#                     f"(requested {target_n}). No duplicate backfilling applied.\n"
+#                 )
 
-            for idx, r in enumerate(selected, start=1):
-                lines.append(f"Rank {idx}")
-                lines.append(f"Failure ID: {r.get('failure_id')}")
-                lines.append(f"Relevance Score: {r.get('score')}")
-                lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
+#             for idx, r in enumerate(selected, start=1):
+#                 lines.append(f"Rank {idx}")
+#                 lines.append(f"Failure ID: {r.get('failure_id')}")
+#                 lines.append(f"Relevance Score: {r.get('score')}")
+#                 lines.append(f"Matched Fields: {', '.join(r.get('matched_fields', []))}")
 
-                lines.append("Failure Chain:")
-                tagged = r.get("tagged") or {}
-                def fmt(field_name: str, fallback_key: str):
-                    obj = tagged.get(field_name)
-                    if isinstance(obj, dict) and "text" in obj:
-                        return f"{obj.get('text')}  [{obj.get('tag', 'UNKNOWN')}]"
-                    return f"{r.get(fallback_key)}"
+#                 lines.append("Failure Chain:")
+#                 tagged = r.get("tagged") or {}
+#                 def fmt(field_name: str, fallback_key: str):
+#                     obj = tagged.get(field_name)
+#                     if isinstance(obj, dict) and "text" in obj:
+#                         return f"{obj.get('text')}  [{obj.get('tag', 'UNKNOWN')}]"
+#                     return f"{r.get(fallback_key)}"
 
-                lines.append(f"  Element : {fmt('element', 'element')}")
-                lines.append(f"  Mode    : {fmt('mode', 'mode')}")
-                lines.append(f"  Effect  : {fmt('effect', 'effect')}")
-                lines.append(f"  Cause   : {fmt('cause', 'cause')}")
-                match_detail = r.get("match_detail", {}) or {}
-                if isinstance(match_detail, dict):
-                    for field_type, matches in match_detail.items():
-                        if matches:
-                            lines.append(f"  {str(field_type).upper()}:")
-                            for m in matches:
-                                display = dict(m)
-                                lines.append(f"    - {display}")
-                lines.append("-" * 60)
-                lines.append("-" * 60)
+#                 lines.append(f"  Element : {fmt('element', 'element')}")
+#                 lines.append(f"  Mode    : {fmt('mode', 'mode')}")
+#                 lines.append(f"  Effect  : {fmt('effect', 'effect')}")
+#                 lines.append(f"  Cause   : {fmt('cause', 'cause')}")
+#                 match_detail = r.get("match_detail", {}) or {}
+#                 if isinstance(match_detail, dict):
+#                     for field_type, matches in match_detail.items():
+#                         if matches:
+#                             lines.append(f"  {str(field_type).upper()}:")
+#                             for m in matches:
+#                                 display = dict(m)
+#                                 lines.append(f"    - {display}")
+#                 lines.append("-" * 60)
+#                 lines.append("-" * 60)
 
-            return "\n".join(lines)
+#             return "\n".join(lines)
 
 
     # results = build_ground_truth_input(result,target_n=10,strict_unique=True)
