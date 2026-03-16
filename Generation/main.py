@@ -531,11 +531,11 @@ def RAG_pipeline(
     retrieval_payload = None
 
     if RAG:
-        if product_pnID !=None:
-            sentences =  query_sentence_kb_from_structure(persist_dir=sentence_KB_PATH,structure_input=structure_input, use_role_separation=False,
-                                                        productPnID=product_pnID,top_k=15,similarity_threshold=0.3,n_results_per_query=5)
-            structred_sentences = build_llm_case_context(sentences)
-            D_failures=  build_8d_failure_context_from_grouped(structred_sentences,entity_store_path=ENTITY_PATH, max_cases=4)
+        # if product_pnID !=None:
+            # sentences =  query_sentence_kb_from_structure(persist_dir=sentence_KB_PATH,structure_input=structure_input, use_role_separation=False,
+            #                                             productPnID=product_pnID,top_k=15,similarity_threshold=0.3,n_results_per_query=5)
+            # structred_sentences = build_llm_case_context(sentences)
+            # D_failures=  build_8d_failure_context_from_grouped(structred_sentences,entity_store_path=ENTITY_PATH, max_cases=4)
         if not FILL:
             similar_failure = generate_failure_chains_from_structure(
                 persist_dir=failure_KB_PATH,
@@ -563,7 +563,7 @@ def RAG_pipeline(
                     "data": {
                         "structure_analysis": structure_input_json_min,
                         "gt_example": failure_example,
-                        "sentences": D_failures,
+                        # "sentences": D_failures,
                     }
                 }
             )

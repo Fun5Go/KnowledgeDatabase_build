@@ -78,27 +78,35 @@ structure_input_motorcontrol = {
                 "Relay cannot close",
                 "False turn-on / turn-off"
             ],
-            "causes": [
+            "causes": {
+            "mechanics": [
                 "Cooling insufficient",
-                "Compressor vibrations",
+                "Compressor vibrations"
+            ],
+            "hardware": [
                 "(Starting) Motor current too high for chosen components",
                 "Overvoltage due to motor disconnect",
                 "Under Voltage due to incorrect triggering",
-                "Live switching of relays",
+                "Live switching of relays"
+            ],
+            "software": [
                 "Priority zero-crossing interrupt too low",
-                "Open loop control",
+                "Open loop control"
+            ],
+            "other": [
                 "No (correctly designed) snubber design",
                 "Too high dT junction as a result of power cycling of component"
-            ],
+            ]
+            },
             "effects": [
                 "Motor cannot start",
                 "Overcurrent towards motor",
                 "Motor starts without soft start",
                 #Extra
-                "(Final) Pressure deviates from setpoints",
-                "Overpressure",
-                "No pressure build-up",
-                "No user control",
+                # "(Final) Pressure deviates from setpoints",
+                # "Overpressure",
+                # "No pressure build-up",
+                # "No user control",
             ]
         }
     ]

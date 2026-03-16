@@ -161,17 +161,20 @@ def compute_bm25_global(query_text, doc_ids, metas):
 
     tokenized_query = tokenize(query_text)
 
+    field_cache = {}
     scores = []
 
     for doc_id, meta in zip(doc_ids, metas):
 
         field = meta.get("field_type")
-
         bm25 = _GLOBAL_BM25.get(field)
 
         if bm25 is None:
             scores.append(0.0)
             continue
+
+        if field not in field_cache:
+            field_cache[field] = bm25.get_scores(tokenized_query)
 
         idx = _GLOBAL_ID_MAP[field].get(doc_id)
 
@@ -179,9 +182,7 @@ def compute_bm25_global(query_text, doc_ids, metas):
             scores.append(0.0)
             continue
 
-        field_scores = bm25.get_scores(tokenized_query)
-
-        scores.append(field_scores[idx])
+        scores.append(field_cache[field][idx])
 
     return np.array(scores)
 
@@ -683,12 +684,12 @@ if  __name__ == "__main__":
 }
     group_maps = load_group_maps(group_files)
 
-    query_text = "ADC measurements incorrect (incl. bandwidth)"
+    query_text = "Motor cannot start"
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
-        field_type=["cause"],
+        field_type=["effect"],
         n_results=50,
         min_count=1,
         hybrid=True,
@@ -698,7 +699,7 @@ if  __name__ == "__main__":
     # for r in res[:30]:
     #     print(r["score"], r["text"])
     # print_semantic_results(res,kb,max_failure_ids=5)
-    print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=15,collapse_groups=False)
+    # print_semantic_results_with_group(res,kb=kb, group_maps=group_maps,top_n=15,collapse_groups=False)
 
     # result = query_linked_failure_fields(
     #     persist_dir=KB_PATH,
@@ -708,22 +709,22 @@ if  __name__ == "__main__":
     # )
 
 
-    # reranked = rerank_semantic_results(query_text, res, top_k=20)
+    reranked = rerank_semantic_results(query_text, res, top_k=20)
 
-    # print("\n====== Reranked Semantic Results ======\n")
+    print("\n====== Reranked Semantic Results ======\n")
 
-    # for i, item in enumerate(reranked, start=1):
+    for i, item in enumerate(reranked, start=1):
 
-    #     semantic_id = item["id"]
-    #     node = kb.field_store.get(semantic_id, {}) or {}
-    #     failure_ids = node.get("failure_ids", [])
+        semantic_id = item["id"]
+        node = kb.field_store.get(semantic_id, {}) or {}
+        failure_ids = node.get("failure_ids", [])
 
-    #     print("=" * 100)
-    #     print(f"[{i:02d}] semantic_id: {semantic_id}")
-    #     print(f"  text: {item['doc']}")
-    #     print(f"  CE score: {item['ce_score']:.4f}")
-    #     print(f"  original similarity: {1 - float(item['dist']):.4f}")
-    #     print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")
+        print("=" * 100)
+        print(f"[{i:02d}] semantic_id: {semantic_id}")
+        print(f"  text: {item['doc']}")
+        print(f"  CE score: {item['ce_score']:.4f}")
+        print(f"  original similarity: {1 - float(item['dist']):.4f}")
+        print(f"  failure_ids({len(failure_ids)}): {failure_ids[:10]}")
 
 
 #--------------Entity retrieval

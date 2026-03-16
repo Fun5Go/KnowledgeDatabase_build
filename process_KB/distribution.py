@@ -307,7 +307,7 @@ if __name__ == "__main__":
     KB_PATH = Path(
             r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb"
         )
-    # results = compute_cross_field_similarity_stats(KB_PATH)
-    # print(results)
-    out = compute_cross_field_tfidf_similarity_stats(KB_PATH, ngram_range=(1,2))
-    print(out)
+    results = compute_cross_field_similarity_stats(KB_PATH)
+    print(results)
+    # out = compute_cross_field_tfidf_similarity_stats(KB_PATH, ngram_range=(1,2))
+    # print(out)

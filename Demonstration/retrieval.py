@@ -184,6 +184,7 @@ def generate_failure_chains_from_structure(
                 n_results=top_k_per_field,
                 min_count=min_count,
                 source_type=source_type,
+                hybrid = False,
                 **extra_args
             )
             _accumulate_candidate_scores(

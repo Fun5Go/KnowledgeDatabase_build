@@ -1,7 +1,7 @@
 from typing import Dict, List, Union, Optional, Any, Tuple, Set
 from collections import defaultdict
 from pathlib import Path
-from Retriever.failure_query_tools import _load_kb,query_semantic_kb
+from Retriever.failure_query_tools import _load_kb,query_semantic_kb, rerank_semantic_results
 from JSON_FMEA_KB.kb_structure import FMEAFailureKB
 import json
 from .entity import structure_input_motorcontrol, structure_input_powertrain
@@ -66,6 +66,8 @@ def generate_query_unique_chains(
     # Hybrid score = similarity + BM25 SCORE
     hybrid: bool = True,
     hybrid_alpha: float = 0.7,
+
+    rerank =True,
 ) -> Dict[str, Any]:
     """
     1) 从 query 候选 nodes 两两拼接出 semi chains：
@@ -209,7 +211,7 @@ def generate_query_unique_chains(
             source_type=source_type,
             alpha=hybrid_alpha,
             hybrid=hybrid,
-            **extra_args
+            # **extra_args
         ) or {}
 
         docs = (res.get("documents") or [[]])[0] or []
@@ -219,6 +221,15 @@ def generate_query_unique_chains(
         dists = (res.get("distances") or [[]])[0] or []
         hyb_scores = (res.get("hybrid_scores") or [[]])[0] or []
         hyb_dists = (res.get("hybrid_distances") or [[]])[0] or []
+
+        # -----------------------
+        # NEW: rerank scores
+        # -----------------------
+        rerank_scores = {}
+        if rerank and docs:
+            reranked = rerank_semantic_results(qt, res)
+            for r in reranked:
+                rerank_scores[_safe(r["id"])] = float(r["ce_score"])
 
         out: List[Dict[str, Any]] = []
         field_threshold = float((min_similarity_by_field or {}).get(field, min_similarity))
@@ -251,22 +262,33 @@ def generate_query_unique_chains(
 
             semantic_id = _safe(sid) or _safe((meta or {}).get("semantic_id"))
             matched_text = _id_to_text(semantic_id) or _safe(doc)
-
             sim = _normalize_similarity(score_for_ranking, field)
 
             out.append({
                 "semantic_id": semantic_id,
                 "matched_text": matched_text,
 
-                "similarity": float(sim),          # normalized score used downstream
+                "similarity": float(sim),
                 "raw_similarity": float(semantic_sim),
 
                 "hybrid_score": hybrid_score,
+                "rerank_score": rerank_scores.get(semantic_id),   # NEW
 
                 "query_text": qt,
                 "field": field,
                 "score_source": score_source,
             })
+
+        # -----------------------
+        # NEW: only json matched order follows rerank_score
+        # -----------------------
+        matched_for_json = list(out)
+        if rerank:
+            matched_for_json.sort(
+                key=lambda x: float(x.get("rerank_score") if x.get("rerank_score") is not None else -1e18),
+                reverse=True,
+            )
+            matched_for_json = matched_for_json[:5]
 
         query_match_map[qt] = {
             "field": field,
@@ -286,10 +308,16 @@ def generate_query_unique_chains(
                         if n.get("hybrid_score") is not None
                         else None
                     ),
+                    "rerank_score": (
+                        round(float(n["rerank_score"]), 4)
+                        if n.get("rerank_score") is not None
+                        else None
+                    ),
                 }
-                for n in out
+                for n in matched_for_json
             ],
         }
+
         return out
 
     # def dedup_nodes_keep_best(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1191,7 +1219,7 @@ if  __name__ == "__main__":
     # 1) KB Path
     # -----------------------------------------------------
     KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_miniLM\failure_kb"
     )
 
     # -----------------------------------------------------
@@ -1211,8 +1239,8 @@ if  __name__ == "__main__":
 }
 
 
-    results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_powertrain,save_query_json=True,
-                                                                  min_similarity=0.6,top_k_per_field=50,hybrid=False)
+    results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_motorcontrol,save_query_json=True,
+                                                                  min_similarity=0.3,top_k_per_field=15,hybrid=False, rerank = True)
     # print_query_chain_results(
     #     results_graph,
     #     top_query_combos=30,
@@ -1221,7 +1249,7 @@ if  __name__ == "__main__":
     #     show_ids=False,        # True if you want semantic IDs printed
     #     show_edge_counts=True,
     # )
-    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=2, min_best_score=0.2, max_rows=15,join_cartesian=False)
+    print_strong_semi_chains_3parts_cartesian(results_graph, min_count=1, min_best_score=0.1, max_rows=15,join_cartesian=False)
     # ce_model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
     # reranked = rerank_strong_semi_chains_with_cross_encoder(

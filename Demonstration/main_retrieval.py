@@ -16,7 +16,7 @@ results = generate_failure_chains_from_structure(
         #The number of top candidates to retrieve per field type
         top_k_per_field=30,
         # Similarity threshold
-        min_similarity=0.45,
+        min_similarity=0.5,
         top_n=100, # Return list of failure entity number
         replace=True,
         # Weight score
@@ -25,5 +25,5 @@ results = generate_failure_chains_from_structure(
         weight_cause = 1.0,
         weight_effect= 1.0,
     )
-structrued_res = build_ground_truth_input(results, target_n=20) # To better read
+structrued_res = build_ground_truth_input(results, target_n=50) # To better read
 print(structrued_res)

@@ -361,11 +361,11 @@ def plot_in_batches(all_results, batch_size=10, drop_last=False):
 if __name__ == "__main__":
 
     GT_JSON = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_allPT_MC\failure_kb\entity_store.json"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\failure_kb\entity_store.json"
     )
 
     PRED_FOLDER = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\RAG_FILL\min_similarity_045"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\batch_outputs\PURE\INTEGRATE"
     )
 
     gt_list = load_gt(GT_JSON, target_element=TARGET_ELEMENT_2)
@@ -410,6 +410,12 @@ if __name__ == "__main__":
         print(f"Avg Recall    : {avg('recall_complete'):.4f}")
         print(f"Avg F1        : {avg('f1_complete'):.4f}")
         print(f"F1 STD        : {std('f1_complete'):.4f}")
+
+        print("\n---- PARTIAL (2/3) ----")
+        print(f"Avg Precision : {avg('precision_partial'):.4f}")
+        print(f"Avg Recall    : {avg('recall_partial'):.4f}")
+        print(f"Avg F1        : {avg('f1_partial'):.4f}")
+        print(f"F1 STD        : {std('f1_partial'):.4f}")
 
         print("\n---- RELAXED (≥2 fields) ----")
         print(f"Avg Precision : {avg('precision_relaxed'):.4f}")

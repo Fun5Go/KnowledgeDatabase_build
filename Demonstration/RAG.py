@@ -1,5 +1,5 @@
 from Generation.LLM_function import  failure_inference_generation_RAG, failure_inference_generation_PURE, failure_inference_generation_RAG_FILL
-from Retriever.SA_query import build_failure_chains_from_structure,generate_failure_chains_from_structure
+from .retrieval import generate_failure_chains_from_structure
 from typing import Dict, List, Optional
 from pathlib import Path
 from langsmith import traceable
@@ -257,12 +257,7 @@ def save_failure_candidates_to_json(result: dict, output_path: Path):
 def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_field: int = 10,  
                  require_cause: bool = False,weight_element: float = 0.3, target_n: int =30,
                  min_similarity: float=0.55,require_cause_plus: bool = False, RAG: bool = True, FILL: bool=True):
-
-
-
-    # structure_input = build_structure_analysis_input(structure_input)
     structure_input_json = json.dumps(structure_input, ensure_ascii=False,indent=2) # Build json SA input
-
     if RAG:
         if not FILL:
             # Retrieval results
@@ -291,7 +286,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 }
             })
             OUTPUT_PATH = Path(
-            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG.json")
+            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Demonstration\failure_candidates_RAG.json")
 
         else:
             semi_candidates = generate_failure_chains_from_structure(
@@ -318,7 +313,7 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 }
             })
             OUTPUT_PATH = Path(
-            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_RAG_FILL.json"
+            r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Demonstration\failure_candidates_RAG_FILL.json"
         )
     else:
        failure_candidates = failure_inference_generation_PURE.invoke({
@@ -326,5 +321,5 @@ def RAG_pipeline(structure_input: Dict, KB_PATH: str, top_n: int = 25,top_k_per_
                 "structure_analysis": structure_input_json, # Sentences with annotations
             }
        })
-       OUTPUT_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\failure_candidates_pure.json")
+       OUTPUT_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\Demonstration\failure_candidates_pure.json")
     return failure_candidates,OUTPUT_PATH

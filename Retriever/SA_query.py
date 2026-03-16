@@ -849,10 +849,10 @@ if  __name__ == "__main__":
         weight_element=0.2,
         top_k_per_field=200,
         # minimum_field_match=2,
-        min_similarity=0.4,
+        min_similarity=0.55,
         top_n=200,
         replace=True,
-        hybrid_score=True,
+        hybrid_score=False,
         source_type=["new_fmea","old_fmea"],
     )
 
@@ -970,7 +970,7 @@ if  __name__ == "__main__":
         return "\n".join(lines)
 
 
-    results = build_ground_truth_input(results,target_n=20,strict_unique=True)
+    results = build_ground_truth_input(results,target_n=50,strict_unique=True)
     print(results)
 
 
