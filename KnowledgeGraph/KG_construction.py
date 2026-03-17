@@ -2,16 +2,17 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict, Optional
+from collections import defaultdict
 
 from dotenv import load_dotenv
-from neo4j import GraphDatabase
 from tqdm import tqdm
+from neo4j import GraphDatabase
 from chromadb.utils import embedding_functions
 
 
 # ============================================
-# ENV
+# CONFIG
 # ============================================
 
 load_dotenv()
@@ -19,8 +20,15 @@ load_dotenv()
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
-JSON_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb\entity_store.json"
+# failure/entity json
+JSON_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_expand\failure_kb\entity_store.json"
+
+# sentence json
+SENTENCE_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_expand\sentence_kb\sentence_store.json"
+
+CAUSE_GROUP = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\cause_groups_refined_v2.json"
 
 
 # ============================================
@@ -28,13 +36,23 @@ JSON_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_
 # ============================================
 
 def stable_id(text: str) -> str:
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    return hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
 
 
 def safe_text(value) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def unique_preserve_order(items):
+    seen = set()
+    out = []
+    for x in items:
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
 
 
 # ============================================
@@ -50,6 +68,8 @@ _embedding_cache: Dict[str, list] = {}
 
 def embed(text: str):
     text = safe_text(text)
+    if not text:
+        return None
     if text in _embedding_cache:
         return _embedding_cache[text]
     vec = embedder([text])[0]
@@ -62,8 +82,9 @@ def embed(text: str):
 # ============================================
 
 class FMEAVectorKGBuilder:
-    def __init__(self, uri, user, password):
+    def __init__(self, uri, user, password, database="neo4j"):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        self.database = database
 
     def close(self):
         self.driver.close()
@@ -93,10 +114,22 @@ class FMEAVectorKGBuilder:
             """
             CREATE CONSTRAINT effect_id IF NOT EXISTS
             FOR (n:Effect) REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT failure_id IF NOT EXISTS
+            FOR (n:Failure) REQUIRE n.failure_id IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT product_id IF NOT EXISTS
+            FOR (n:Product) REQUIRE n.productPnID IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT sentence_group_id IF NOT EXISTS
+            FOR (n:SentenceGroup) REQUIRE n.group_id IS UNIQUE
             """
         ]
 
-        with self.driver.session() as session:
+        with self.driver.session(database=self.database) as session:
             for q in queries:
                 session.run(q)
 
@@ -150,10 +183,19 @@ class FMEAVectorKGBuilder:
                 `vector.dimensions`: 384,
                 `vector.similarity_function`: 'cosine'
             }}
+            """,
+            """
+            CREATE VECTOR INDEX sentence_embedding IF NOT EXISTS
+            FOR (n:SentenceGroup)
+            ON (n.embedding)
+            OPTIONS {indexConfig:{
+                `vector.dimensions`: 384,
+                `vector.similarity_function`: 'cosine'
+            }}
             """
         ]
 
-        with self.driver.session() as session:
+        with self.driver.session(database=self.database) as session:
             for q in queries:
                 session.run(q)
 
@@ -167,6 +209,9 @@ class FMEAVectorKGBuilder:
             return None
 
         text = safe_text(item.get("failure_element_text"))
+        if not text:
+            return None
+
         embedding = embed(f"Component: {text}")
 
         session.run(
@@ -176,7 +221,7 @@ class FMEAVectorKGBuilder:
                 e.embedding=$embedding,
                 e.source_type=$source_type,
                 e.fmea_type=$fmea_type,
-                e.name = $text
+                e.name=$text
             """,
             id=element_id,
             text=text,
@@ -201,7 +246,7 @@ class FMEAVectorKGBuilder:
                 f.embedding=$embedding,
                 f.source_type=$source_type,
                 f.fmea_type=$fmea_type,
-                f.name = $text
+                f.name=$text
             """,
             id=function_id,
             text=text,
@@ -209,7 +254,6 @@ class FMEAVectorKGBuilder:
             source_type=safe_text(item.get("source_type")),
             fmea_type=safe_text(item.get("fmea_type")),
         )
-
         return function_id
 
     def merge_mode(self, session, item) -> Optional[str]:
@@ -218,6 +262,9 @@ class FMEAVectorKGBuilder:
             return None
 
         text = safe_text(item.get("failure_mode_text"))
+        if not text:
+            return None
+
         embedding = embed(f"Failure mode: {text}")
 
         session.run(
@@ -227,7 +274,7 @@ class FMEAVectorKGBuilder:
                 m.embedding=$embedding,
                 m.source_type=$source_type,
                 m.fmea_type=$fmea_type,
-                m.name = $text
+                m.name=$text
             """,
             id=mode_id,
             text=text,
@@ -243,6 +290,9 @@ class FMEAVectorKGBuilder:
             return None
 
         text = safe_text(item.get("failure_cause_text"))
+        if not text:
+            return None
+
         embedding = embed(f"Failure cause: {text}")
 
         session.run(
@@ -253,7 +303,7 @@ class FMEAVectorKGBuilder:
                 c.source_type=$source_type,
                 c.fmea_type=$fmea_type,
                 c.discipline=$discipline,
-                c.name = $text
+                c.name=$text
             """,
             id=cause_id,
             text=text,
@@ -270,6 +320,9 @@ class FMEAVectorKGBuilder:
             return None
 
         text = safe_text(item.get("failure_effect_text"))
+        if not text:
+            return None
+
         embedding = embed(f"Failure effect: {text}")
 
         session.run(
@@ -279,7 +332,7 @@ class FMEAVectorKGBuilder:
                 e.embedding=$embedding,
                 e.source_type=$source_type,
                 e.fmea_type=$fmea_type,
-                e.name = $text
+                e.name=$text
             """,
             id=effect_id,
             text=text,
@@ -288,12 +341,11 @@ class FMEAVectorKGBuilder:
             fmea_type=safe_text(item.get("fmea_type")),
         )
         return effect_id
-    
-    #------------------------------
-    # Failiure entity node
-    #------------------------------
-    def merge_failure(self, session, item) -> str:
-        fid = item.get("failure_id")
+
+    def merge_failure(self, session, item) -> Optional[str]:
+        failure_id = item.get("failure_id")
+        if not failure_id:
+            return None
 
         session.run(
             """
@@ -302,24 +354,79 @@ class FMEAVectorKGBuilder:
                 f.file_name=$file_name,
                 f.system=$system,
                 f.severity=$severity,
+                f.occurrence=$occurrence,
+                f.detection=$detection,
+                f.rpn=$rpn,
                 f.source_type=$source_type,
                 f.fmea_type=$fmea_type,
-                f.product_domain=$product_domain
+                f.product_domain=$product_domain,
+                f.productPnID=$productPnID,
+                f.released_year=$released_year
             """,
-            fid=fid,
-            name=fid,  # 或者拼一个更可读的
+            fid=failure_id,
+            name=failure_id,
             file_name=safe_text(item.get("file_name")),
             system=safe_text(item.get("system")),
             severity=item.get("severity"),
+            occurrence=item.get("occurrence"),
+            detection=item.get("detection"),
+            rpn=item.get("rpn"),
             source_type=safe_text(item.get("source_type")),
             fmea_type=safe_text(item.get("fmea_type")),
             product_domain=safe_text(item.get("product_domain")),
+            productPnID=item.get("productPnID"),
+            released_year=item.get("released_year"),
         )
+        return failure_id
 
-        return fid
+    def merge_product(self, session, item) -> Optional[int]:
+        pnid = item.get("productPnID")
+        if pnid is None:
+            return None
+
+        session.run(
+            """
+            MERGE (p:Product {productPnID:$pnid})
+            SET p.name=$name,
+                p.product_domain=$domain
+            """,
+            pnid=pnid,
+            name=f"product:{pnid}",
+            domain=safe_text(item.get("product_domain"))
+        )
+        return pnid
+
+    def merge_sentence_group(self, session, group_id: str, text: str, source: str, group_type: str, ref_id: Optional[str] = None):
+        text = safe_text(text)
+        if not text:
+            return None
+
+        embedding = embed(text)
+        sentence_count = len([x for x in text.split(".") if safe_text(x)])
+
+        session.run(
+            """
+            MERGE (s:SentenceGroup {group_id:$gid})
+            SET s.text=$text,
+                s.embedding=$embedding,
+                s.source=$source,
+                s.group_type=$group_type,
+                s.ref_id=$ref_id,
+                s.size=$size,
+                s.name=$gid
+            """,
+            gid=group_id,
+            text=text,
+            embedding=embedding,
+            source=source,
+            group_type=group_type,
+            ref_id=ref_id,
+            size=sentence_count
+        )
+        return group_id
 
     # ----------------------------------------
-    # RELATIONS
+    # RELATIONS: ORIGINAL KG (保持不变)
     # ----------------------------------------
 
     def create_edges(
@@ -379,55 +486,116 @@ class FMEAVectorKGBuilder:
                 effect=effect_id,
             )
 
+    # ----------------------------------------
+    # FAILURE INSTANCE LAYER
+    # ----------------------------------------
+
     def create_failure_edges(
-                                self,
-                                session,
-                                failure_id,
-                                element_id,
-                                function_id,
-                                mode_id,
-                                cause_id,
-                                effect_id,
-                            ):
+        self,
+        session,
+        failure_id: Optional[str],
+        element_id: Optional[str],
+        function_id: Optional[str],
+        mode_id: Optional[str],
+        cause_id: Optional[str],
+        effect_id: Optional[str],
+    ):
         if failure_id and element_id:
-            session.run("""
+            session.run(
+                """
                 MATCH (f:Failure {failure_id:$fid})
                 MATCH (e:Element {semantic_id:$eid})
                 MERGE (f)-[:HAS_ELEMENT]->(e)
-            """, fid=failure_id, eid=element_id)
+                """,
+                fid=failure_id, eid=element_id
+            )
 
         if failure_id and function_id:
-            session.run("""
+            session.run(
+                """
                 MATCH (f:Failure {failure_id:$fid})
-                MATCH (fn:Function {semantic_id:$fid2})
+                MATCH (fn:Function {semantic_id:$fnid})
                 MERGE (f)-[:HAS_FUNCTION]->(fn)
-            """, fid=failure_id, fid2=function_id)
+                """,
+                fid=failure_id, fnid=function_id
+            )
 
         if failure_id and mode_id:
-            session.run("""
+            session.run(
+                """
                 MATCH (f:Failure {failure_id:$fid})
                 MATCH (m:Mode {semantic_id:$mid})
                 MERGE (f)-[:HAS_MODE]->(m)
-            """, fid=failure_id, mid=mode_id)
+                """,
+                fid=failure_id, mid=mode_id
+            )
 
         if failure_id and cause_id:
-            session.run("""
+            session.run(
+                """
                 MATCH (f:Failure {failure_id:$fid})
                 MATCH (c:Cause {semantic_id:$cid})
                 MERGE (f)-[:HAS_CAUSE]->(c)
-            """, fid=failure_id, cid=cause_id)
+                """,
+                fid=failure_id, cid=cause_id
+            )
 
         if failure_id and effect_id:
-            session.run("""
+            session.run(
+                """
                 MATCH (f:Failure {failure_id:$fid})
                 MATCH (e:Effect {semantic_id:$eid})
                 MERGE (f)-[:HAS_EFFECT]->(e)
-            """, fid=failure_id, eid=effect_id)
-
-
+                """,
+                fid=failure_id, eid=effect_id
+            )
 
     # ----------------------------------------
-    # BUILD GRAPH
+    # PRODUCT LAYER
+    # ----------------------------------------
+
+    def link_product_failure(self, session, pnid: Optional[int], failure_id: Optional[str]):
+        if pnid is None or not failure_id:
+            return
+
+        session.run(
+            """
+            MATCH (p:Product {productPnID:$pnid})
+            MATCH (f:Failure {failure_id:$fid})
+            MERGE (p)-[:HAS_FAILURE]->(f)
+            """,
+            pnid=pnid,
+            fid=failure_id
+        )
+
+    # ----------------------------------------
+    # EVIDENCE LAYER
+    # ----------------------------------------
+
+    def link_cause_sentence(self, session, cause_id: str, group_id: str):
+        session.run(
+            """
+            MATCH (c:Cause {semantic_id:$cid})
+            MATCH (s:SentenceGroup {group_id:$gid})
+            MERGE (c)-[:INFERRED_BY]->(s)
+            """,
+            cid=cause_id,
+            gid=group_id
+        )
+
+    def link_failure_sentence(self, session, failure_id: str, group_id: str):
+        session.run(
+            """
+            MATCH (f:Failure {failure_id:$fid})
+            MATCH (s:SentenceGroup {group_id:$gid})
+            MERGE (f)-[:INFERRED_BY]->(s)
+            """,
+            fid=failure_id,
+            gid=group_id
+        )
+
+    # ----------------------------------------
+    # BUILD MAIN GRAPH
     # ----------------------------------------
 
     def build_graph(self, json_path):
@@ -439,10 +607,12 @@ class FMEAVectorKGBuilder:
             "mode": 0,
             "cause": 0,
             "effect": 0,
+            "failure": 0,
+            "product": 0,
         }
 
-        with self.driver.session() as session:
-            for item in tqdm(data.values(), total=len(data)):
+        with self.driver.session(database=self.database) as session:
+            for item in tqdm(data.values(), total=len(data), desc="Building main KG"):
                 element_id = self.merge_element(session, item)
                 if not element_id:
                     skipped["element"] += 1
@@ -464,7 +634,14 @@ class FMEAVectorKGBuilder:
                     skipped["effect"] += 1
 
                 failure_id = self.merge_failure(session, item)
+                if not failure_id:
+                    skipped["failure"] += 1
 
+                pnid = self.merge_product(session, item)
+                if pnid is None:
+                    skipped["product"] += 1
+
+                # failure entity structure 
                 self.create_edges(
                     session=session,
                     element_id=element_id,
@@ -473,19 +650,169 @@ class FMEAVectorKGBuilder:
                     cause_id=cause_id,
                     effect_id=effect_id,
                 )
+
+                # Failure 实例层
                 self.create_failure_edges(
-                        session,
-                        failure_id,
-                        element_id,
-                        function_id,
-                        mode_id,
-                        cause_id,
-                        effect_id
-                    )
+                    session=session,
+                    failure_id=failure_id,
+                    element_id=element_id,
+                    function_id=function_id,
+                    mode_id=mode_id,
+                    cause_id=cause_id,
+                    effect_id=effect_id
+                )
+
+                # Product 聚合层
+                self.link_product_failure(
+                    session=session,
+                    pnid=pnid,
+                    failure_id=failure_id
+                )
 
         print("Build finished.")
         print("Skipped counts:", skipped)
         print("Embedding cache size:", len(_embedding_cache))
+
+    # ----------------------------------------
+    # BUILD CAUSE -> SENTENCE GROUP
+    # ----------------------------------------
+
+    def build_cause_sentence_groups(self, sentence_json_path):
+        sentence_data = json.loads(Path(sentence_json_path).read_text(encoding="utf-8"))
+
+        cause_groups = defaultdict(list)
+
+        for sid, item in sentence_data.items():
+            cause_id = item.get("cause_id")
+            text = safe_text(item.get("text"))
+
+            if cause_id and text:
+                cause_groups[cause_id].append(text)
+
+        with self.driver.session(database=self.database) as session:
+            for cause_id, texts in tqdm(cause_groups.items(), desc="Building cause sentence groups"):
+                texts = unique_preserve_order(texts)
+                combined_text = ". ".join(texts)
+
+                group_id = f"cause_group:{cause_id}"
+
+                self.merge_sentence_group(
+                    session=session,
+                    group_id=group_id,
+                    text=combined_text,
+                    source="sentence_store",
+                    group_type="cause_group",
+                    ref_id=cause_id
+                )
+
+                self.link_cause_sentence(
+                    session=session,
+                    cause_id=cause_id,
+                    group_id=group_id
+                )
+
+    # ----------------------------------------
+    # BUILD 8D FAILURE -> SENTENCE GROUP
+    # ----------------------------------------
+
+    def build_failure_sentence_groups(self, entity_json_path, sentence_json_path):
+        entity_data = json.loads(Path(entity_json_path).read_text(encoding="utf-8"))
+        sentence_data = json.loads(Path(sentence_json_path).read_text(encoding="utf-8"))
+
+        with self.driver.session(database=self.database) as session:
+            for item in tqdm(entity_data.values(), desc="Building failure sentence groups"):
+                if safe_text(item.get("source_type")) != "8D":
+                    continue
+
+                failure_id = item.get("failure_id")
+                if not failure_id:
+                    continue
+
+                sentence_ids = item.get("supporting_sentence_ids", [])
+                if not sentence_ids:
+                    continue
+
+                texts = []
+                for sid in sentence_ids:
+                    s_item = sentence_data.get(sid)
+                    if not s_item:
+                        continue
+                    s_text = safe_text(s_item.get("text"))
+                    if s_text:
+                        texts.append(s_text)
+
+                texts = unique_preserve_order(texts)
+                if not texts:
+                    continue
+
+                combined_text = ". ".join(texts)
+                group_id = f"failure_group:{failure_id}"
+
+                self.merge_sentence_group(
+                    session=session,
+                    group_id=group_id,
+                    text=combined_text,
+                    source="8D",
+                    group_type="failure_group",
+                    ref_id=failure_id
+                )
+
+                self.link_failure_sentence(
+                    session=session,
+                    failure_id=failure_id,
+                    group_id=group_id
+                )
+
+    def merge_cause_group(self, group_item):
+        member_ids = group_item["member_node_ids"]
+        canonical_text = group_item["canonical_text"]
+
+        cypher = """
+        MATCH (c:Cause)
+        WHERE c.semantic_id IN $member_ids
+
+        WITH collect(c) AS causes
+        WITH causes, head(causes) AS canonical
+
+        SET canonical.text = $canonical_text,
+            canonical.name = $canonical_text,
+            canonical.is_canonical = true
+
+        WITH canonical, causes
+        UNWIND causes AS c
+        WITH canonical, c
+        WHERE c <> canonical
+
+        OPTIONAL MATCH (m:Mode)-[r:CAUSED_BY]->(c)
+        MERGE (m)-[r2:CAUSED_BY]->(canonical)
+        SET r2.weight = coalesce(r2.weight,0) + coalesce(r.weight,1)
+        DELETE r
+
+        WITH canonical, c
+        OPTIONAL MATCH (f:Failure)-[r:HAS_CAUSE]->(c)
+        MERGE (f)-[:HAS_CAUSE]->(canonical)
+        DELETE r
+
+        WITH canonical, c
+        OPTIONAL MATCH (c)-[r:INFERRED_BY]->(s:SentenceGroup)
+        MERGE (canonical)-[:INFERRED_BY]->(s)
+        DELETE r
+
+        DETACH DELETE c
+        """
+
+        with self.driver.session(database=self.database) as session:
+            session.run(
+                cypher,
+                member_ids=member_ids,
+                canonical_text=canonical_text
+            )
+
+    def merge_all_groups(self, group_json_path):
+        groups = json.loads(Path(group_json_path).read_text())
+
+        for g in tqdm(groups, desc="Merging cause groups"):
+            self.merge_cause_group(g)
 
 
 # ============================================
@@ -497,14 +824,30 @@ def main():
         NEO4J_URI,
         NEO4J_USER,
         NEO4J_PASSWORD,
-        database="FMEAV2"
+        database=NEO4J_DATABASE
     )
 
     try:
+        print("Creating constraints...")
         builder.create_constraints()
+
+        print("Creating vector indexes...")
         builder.create_vector_indexes()
+
+        print("Building main graph...")
         builder.build_graph(JSON_FILE)
-        print("Vector KG build complete")
+
+        print("Building cause sentence groups...")
+        builder.build_cause_sentence_groups(SENTENCE_JSON)
+
+        print("Building 8D failure sentence groups...")
+        builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
+
+        print("Vector KG build complete.")
+
+        # print("Merge and group canonical nodes:")
+        # builder.merge_all_groups(CAUSE_GROUP)
+
     finally:
         builder.close()
 

@@ -192,16 +192,22 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
             result = session.run("""
                 CALL db.index.vector.queryNodes(
                     'mode_embedding',
-                    $k,
+                    100,
                     $embedding
                 )
                 YIELD node, score
-                RETURN node, score
+
+                WITH node,
+                    vector.similarity.cosine(node.embedding, $embedding) AS refined_score
+
+                RETURN node, refined_score
+                ORDER BY refined_score DESC
+                LIMIT $k
             """, k=top_k, embedding=emb)
 
             for r in result:
-                if r["score"] >= 0.85:
-                    mode_results.append((r["node"], r["score"], text))
+                if r["refined_score"] >= min_score:
+                    mode_results.append((r["node"], r["refined_score"], text))
 
         mode_results = deduplicate_by_semantic_id(mode_results)
 
@@ -214,18 +220,24 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
             result = session.run("""
                 CALL db.index.vector.queryNodes(
                     'cause_embedding',
-                    $k,
+                    100,
                     $embedding
                 )
                 YIELD node, score
 
+                WITH node,
+                    vector.similarity.cosine(node.embedding, $embedding) AS refined_score
+
                 MATCH (m:Mode)-[:CAUSED_BY]->(node)
-                RETURN m AS mode, score
+
+                RETURN m AS mode, refined_score
+                ORDER BY refined_score DESC
+                LIMIT $k
             """, k=top_k, embedding=emb)
 
             for r in result:
-                if r["score"] >= min_score:
-                    cause_modes.append((r["mode"], r["score"], text))
+                if r["refined_score"] >= min_score:
+                    cause_modes.append((r["mode"], r["refined_score"], text))
 
         cause_modes = deduplicate_by_semantic_id(cause_modes)
 
@@ -238,18 +250,24 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
             result = session.run("""
                 CALL db.index.vector.queryNodes(
                     'effect_embedding',
-                    $k,
+                    100,
                     $embedding
                 )
                 YIELD node, score
 
+                WITH node,
+                    vector.similarity.cosine(node.embedding, $embedding) AS refined_score
+
                 MATCH (m:Mode)-[:LEADS_TO]->(node)
-                RETURN m AS mode, score
+
+                RETURN m AS mode, refined_score
+                ORDER BY refined_score DESC
+                LIMIT $k
             """, k=top_k, embedding=emb)
 
             for r in result:
-                if r["score"] >= min_score:
-                    effect_modes.append((r["mode"], r["score"], text))
+                if r["refined_score"] >= min_score:
+                    effect_modes.append((r["mode"], r["refined_score"], text))
 
         effect_modes = deduplicate_by_semantic_id(effect_modes)
 
@@ -443,7 +461,7 @@ if __name__ == "__main__":
         print(f"Causes  : {len(query['causes'])}")
         print(f"Effects : {len(query['effects'])}")
 
-        results = semantic_failure_search(query, top_k=200, min_score= 0.8)
+        results = semantic_failure_search(query, top_k=50, min_score= 0.85)
         print_results(results)
 
     finally:
