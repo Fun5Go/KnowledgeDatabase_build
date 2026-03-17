@@ -86,56 +86,78 @@ def flatten_causes(causes):
 
 def deduplicate_by_semantic_id(node_score_list):
     """
-    node_score_list: [(node, score), ...]
-    对同一个 semantic_id 保留最高分
+    支持:
+    (node, score, query_text)
+
+    对同一个 semantic_id:
+    - 保留最高 score
+    - 同时保留对应 query_text
     """
+
     best = {}
-    for node, score in node_score_list:
+
+    for node, score, query_text in node_score_list:
         sid = node.get("semantic_id")
         if not sid:
             continue
+
         if sid not in best or score > best[sid][1]:
-            best[sid] = (node, score)
+            best[sid] = (node, score, query_text)
+
     return list(best.values())
 
 
-def print_results(results, title="Search Results"):
+def print_results(results):
     print("\n" + "=" * 80)
-    print(title)
+    print("Semantic Failure Search Results")
     print("=" * 80)
 
-    if not results:
-        print("No results found.")
-        return
-
     for i, item in enumerate(results, 1):
-        print(f"\n[{i}] Score   : {item.get('score', 0)}")
-        print(f"    Element : {item.get('element', '')}")
-        print(f"    Function: {item.get('function', '')}")
-        print(f"    Mode    : {item.get('mode', '')}")
+        print(f"\n[{i}] Score   : {item['score']}")
+        print(f"    Element : {item['element']}")
+        print(f"    Function: {item['function']}")
+        print(f"    Mode    : {item['mode']}")
 
-        print("    Causes  :")
-        causes = item.get("causes", [])
-        if causes:
-            for c in causes:
-                print(f"      - {c}")
-        else:
-            print("      - None")
+        # =========================
+        # CAUSES
+        # =========================
+        print("\n    Causes:")
+        for c in item["causes"]:
+            print(f"      - {c}")
 
-        print("    Effects :")
-        effects = item.get("effects", [])
-        if effects:
-            for ef in effects:
-                print(f"      - {ef}")
-        else:
-            print("      - None")
+        # =========================
+        # EFFECTS
+        # =========================
+        print("\n    Effects:")
+        for ef in item["effects"]:
+            print(f"      - {ef}")
+
+        # =========================
+        # 🔍 MATCHED QUERIES
+        # =========================
+        print("\n    🔍 Matched Queries:")
+
+        if item["mode_matches"]:
+            print("      Mode Match:")
+            for m in item["mode_matches"]:
+                print(f"        - \"{m['query']}\" (score: {m['score']})")
+
+        if item["cause_matches"]:
+            print("      Cause Match:")
+            for c in item["cause_matches"]:
+                print(f"        - \"{c['query']}\" (score: {c['score']})")
+
+        if item["effect_matches"]:
+            print("      Effect Match:")
+            for e in item["effect_matches"]:
+                print(f"        - \"{e['query']}\" (score: {e['score']})")
 
 
 ############################################
 # CORE SEARCH
 ############################################
 
-def semantic_failure_search(query, top_k=5):
+def semantic_failure_search(query, top_k=5, min_score = 0.75):
     """
     Multi-field semantic search on Vector KG
 
@@ -165,7 +187,8 @@ def semantic_failure_search(query, top_k=5):
         # 1. MODE SEARCH
         # ===============================
         mode_results = []
-        for emb in mode_embs:
+
+        for text, emb in zip(mode_texts, mode_embs):
             result = session.run("""
                 CALL db.index.vector.queryNodes(
                     'mode_embedding',
@@ -176,7 +199,9 @@ def semantic_failure_search(query, top_k=5):
                 RETURN node, score
             """, k=top_k, embedding=emb)
 
-            mode_results.extend([(r["node"], r["score"]) for r in result])
+            for r in result:
+                if r["score"] >= 0.85:
+                    mode_results.append((r["node"], r["score"], text))
 
         mode_results = deduplicate_by_semantic_id(mode_results)
 
@@ -184,7 +209,8 @@ def semantic_failure_search(query, top_k=5):
         # 2. CAUSE SEARCH -> MODE
         # ===============================
         cause_modes = []
-        for emb in cause_embs:
+
+        for text, emb in zip(cause_texts, cause_embs):
             result = session.run("""
                 CALL db.index.vector.queryNodes(
                     'cause_embedding',
@@ -197,7 +223,9 @@ def semantic_failure_search(query, top_k=5):
                 RETURN m AS mode, score
             """, k=top_k, embedding=emb)
 
-            cause_modes.extend([(r["mode"], r["score"]) for r in result])
+            for r in result:
+                if r["score"] >= min_score:
+                    cause_modes.append((r["mode"], r["score"], text))
 
         cause_modes = deduplicate_by_semantic_id(cause_modes)
 
@@ -205,7 +233,8 @@ def semantic_failure_search(query, top_k=5):
         # 3. EFFECT SEARCH -> MODE
         # ===============================
         effect_modes = []
-        for emb in effect_embs:
+
+        for text, emb in zip(effect_texts, effect_embs):
             result = session.run("""
                 CALL db.index.vector.queryNodes(
                     'effect_embedding',
@@ -218,7 +247,9 @@ def semantic_failure_search(query, top_k=5):
                 RETURN m AS mode, score
             """, k=top_k, embedding=emb)
 
-            effect_modes.extend([(r["mode"], r["score"]) for r in result])
+            for r in result:
+                if r["score"] >= min_score:
+                    effect_modes.append((r["mode"], r["score"], text))
 
         effect_modes = deduplicate_by_semantic_id(effect_modes)
 
@@ -227,20 +258,38 @@ def semantic_failure_search(query, top_k=5):
         # ===============================
         mode_score_map = {}
 
-        def accumulate(modes, weight):
-            for m, score in modes:
+        def accumulate(modes, weight, field):
+            for m, score, query_text in modes:
                 mid = m.get("semantic_id")
                 if not mid:
                     continue
 
                 if mid not in mode_score_map:
-                    mode_score_map[mid] = {"node": m, "score": 0.0}
+                    mode_score_map[mid] = {
+                        "node": m,
+                        "score": 0,
+                        "mode_matches": [],
+                        "cause_matches": [],
+                        "effect_matches": []
+                    }
 
                 mode_score_map[mid]["score"] += weight * float(score)
 
-        accumulate(mode_results, 1.0)
-        accumulate(cause_modes, 0.8)
-        accumulate(effect_modes, 0.8)
+                match_info = {
+                    "query": query_text,
+                    "score": round(float(score), 4)
+                }
+
+                if field == "mode":
+                    mode_score_map[mid]["mode_matches"].append(match_info)
+                elif field == "cause":
+                    mode_score_map[mid]["cause_matches"].append(match_info)
+                elif field == "effect":
+                    mode_score_map[mid]["effect_matches"].append(match_info)
+
+        accumulate(mode_results, 1.0, "mode")
+        accumulate(cause_modes, 0.8, "cause")
+        accumulate(effect_modes, 0.8, "effect")
 
         # ===============================
         # 5. TOP MODES
@@ -280,9 +329,13 @@ def semantic_failure_search(query, top_k=5):
                     "element": chain_result["element"],
                     "function": chain_result["function"],
                     "mode": chain_result["mode"],
-                    "causes": [x for x in chain_result["causes"] if x],
-                    "effects": [x for x in chain_result["effects"] if x],
-                    "score": round(score, 4)
+                    "causes": [c for c in chain_result["causes"] if c],
+                    "effects": [e for e in chain_result["effects"] if e],
+                    "score": round(score, 4),
+
+                    "mode_matches": item["mode_matches"],
+                    "cause_matches": item["cause_matches"],
+                    "effect_matches": item["effect_matches"]
                 })
 
         return results
@@ -390,8 +443,8 @@ if __name__ == "__main__":
         print(f"Causes  : {len(query['causes'])}")
         print(f"Effects : {len(query['effects'])}")
 
-        results = semantic_failure_search(query, top_k=20)
-        print_results(results, title="Semantic Failure Search Results")
+        results = semantic_failure_search(query, top_k=200, min_score= 0.8)
+        print_results(results)
 
     finally:
         driver.close()

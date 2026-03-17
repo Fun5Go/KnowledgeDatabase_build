@@ -175,7 +175,8 @@ class FMEAVectorKGBuilder:
             SET e.text=$text,
                 e.embedding=$embedding,
                 e.source_type=$source_type,
-                e.fmea_type=$fmea_type
+                e.fmea_type=$fmea_type,
+                e.name = $text
             """,
             id=element_id,
             text=text,
@@ -199,7 +200,8 @@ class FMEAVectorKGBuilder:
             SET f.text=$text,
                 f.embedding=$embedding,
                 f.source_type=$source_type,
-                f.fmea_type=$fmea_type
+                f.fmea_type=$fmea_type,
+                f.name = $text
             """,
             id=function_id,
             text=text,
@@ -224,7 +226,8 @@ class FMEAVectorKGBuilder:
             SET m.text=$text,
                 m.embedding=$embedding,
                 m.source_type=$source_type,
-                m.fmea_type=$fmea_type
+                m.fmea_type=$fmea_type,
+                m.name = $text
             """,
             id=mode_id,
             text=text,
@@ -248,8 +251,9 @@ class FMEAVectorKGBuilder:
             SET c.text=$text,
                 c.embedding=$embedding,
                 c.source_type=$source_type,
-                c.fmea_type=$fmea_type
-                c.discipline=$discipline
+                c.fmea_type=$fmea_type,
+                c.discipline=$discipline,
+                c.name = $text
             """,
             id=cause_id,
             text=text,
@@ -274,7 +278,8 @@ class FMEAVectorKGBuilder:
             SET e.text=$text,
                 e.embedding=$embedding,
                 e.source_type=$source_type,
-                e.fmea_type=$fmea_type
+                e.fmea_type=$fmea_type,
+                e.name = $text
             """,
             id=effect_id,
             text=text,
@@ -283,6 +288,35 @@ class FMEAVectorKGBuilder:
             fmea_type=safe_text(item.get("fmea_type")),
         )
         return effect_id
+    
+    #------------------------------
+    # Failiure entity node
+    #------------------------------
+    def merge_failure(self, session, item) -> str:
+        fid = item.get("failure_id")
+
+        session.run(
+            """
+            MERGE (f:Failure {failure_id:$fid})
+            SET f.name=$name,
+                f.file_name=$file_name,
+                f.system=$system,
+                f.severity=$severity,
+                f.source_type=$source_type,
+                f.fmea_type=$fmea_type,
+                f.product_domain=$product_domain
+            """,
+            fid=fid,
+            name=fid,  # 或者拼一个更可读的
+            file_name=safe_text(item.get("file_name")),
+            system=safe_text(item.get("system")),
+            severity=item.get("severity"),
+            source_type=safe_text(item.get("source_type")),
+            fmea_type=safe_text(item.get("fmea_type")),
+            product_domain=safe_text(item.get("product_domain")),
+        )
+
+        return fid
 
     # ----------------------------------------
     # RELATIONS
@@ -324,7 +358,9 @@ class FMEAVectorKGBuilder:
                 """
                 MATCH (m:Mode {semantic_id:$mode})
                 MATCH (c:Cause {semantic_id:$cause})
-                MERGE (m)-[:CAUSED_BY]->(c)
+                MERGE (m)-[r:CAUSED_BY]->(c)
+                ON CREATE SET r.weight = 1
+                ON MATCH SET r.weight = r.weight + 1
                 """,
                 mode=mode_id,
                 cause=cause_id,
@@ -335,11 +371,60 @@ class FMEAVectorKGBuilder:
                 """
                 MATCH (m:Mode {semantic_id:$mode})
                 MATCH (e:Effect {semantic_id:$effect})
-                MERGE (m)-[:LEADS_TO]->(e)
+                MERGE (m)-[r:LEADS_TO]->(e)
+                ON CREATE SET r.weight = 1
+                ON MATCH SET r.weight = r.weight + 1
                 """,
                 mode=mode_id,
                 effect=effect_id,
             )
+
+    def create_failure_edges(
+                                self,
+                                session,
+                                failure_id,
+                                element_id,
+                                function_id,
+                                mode_id,
+                                cause_id,
+                                effect_id,
+                            ):
+        if failure_id and element_id:
+            session.run("""
+                MATCH (f:Failure {failure_id:$fid})
+                MATCH (e:Element {semantic_id:$eid})
+                MERGE (f)-[:HAS_ELEMENT]->(e)
+            """, fid=failure_id, eid=element_id)
+
+        if failure_id and function_id:
+            session.run("""
+                MATCH (f:Failure {failure_id:$fid})
+                MATCH (fn:Function {semantic_id:$fid2})
+                MERGE (f)-[:HAS_FUNCTION]->(fn)
+            """, fid=failure_id, fid2=function_id)
+
+        if failure_id and mode_id:
+            session.run("""
+                MATCH (f:Failure {failure_id:$fid})
+                MATCH (m:Mode {semantic_id:$mid})
+                MERGE (f)-[:HAS_MODE]->(m)
+            """, fid=failure_id, mid=mode_id)
+
+        if failure_id and cause_id:
+            session.run("""
+                MATCH (f:Failure {failure_id:$fid})
+                MATCH (c:Cause {semantic_id:$cid})
+                MERGE (f)-[:HAS_CAUSE]->(c)
+            """, fid=failure_id, cid=cause_id)
+
+        if failure_id and effect_id:
+            session.run("""
+                MATCH (f:Failure {failure_id:$fid})
+                MATCH (e:Effect {semantic_id:$eid})
+                MERGE (f)-[:HAS_EFFECT]->(e)
+            """, fid=failure_id, eid=effect_id)
+
+
 
     # ----------------------------------------
     # BUILD GRAPH
@@ -378,6 +463,8 @@ class FMEAVectorKGBuilder:
                 if not effect_id:
                     skipped["effect"] += 1
 
+                failure_id = self.merge_failure(session, item)
+
                 self.create_edges(
                     session=session,
                     element_id=element_id,
@@ -386,6 +473,15 @@ class FMEAVectorKGBuilder:
                     cause_id=cause_id,
                     effect_id=effect_id,
                 )
+                self.create_failure_edges(
+                        session,
+                        failure_id,
+                        element_id,
+                        function_id,
+                        mode_id,
+                        cause_id,
+                        effect_id
+                    )
 
         print("Build finished.")
         print("Skipped counts:", skipped)
@@ -401,6 +497,7 @@ def main():
         NEO4J_URI,
         NEO4J_USER,
         NEO4J_PASSWORD,
+        database="FMEAV2"
     )
 
     try:

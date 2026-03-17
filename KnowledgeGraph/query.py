@@ -47,12 +47,25 @@ def structured_print(records):
 # SEMANTIC SEARCH
 ############################################
 
-def semantic_search(label, index_name, query, top_k=5):
-
+def semantic_search(label, index_name, query, discipline=None, top_k=5):
     if label == "Mode":
         embedding = embed("Failure mode: " + query)
     elif label == "Function":
         embedding = embed("Function: " + query)
+    elif label == "Cause":
+        embedding = embed("Failure cause: " + query)
+    else:
+        raise ValueError(f"Unsupported label: {label}")
+
+    where_clause = ""
+    if label == "Cause":
+        where_clause = """
+        WHERE $discipline IS NULL
+           OR size($discipline) = 0
+           OR toLower(coalesce(node.discipline, "unknown")) IN
+              [x IN $discipline | toLower(x)]
+        """
+
     cypher = f"""
     CALL db.index.vector.queryNodes(
         '{index_name}',
@@ -60,20 +73,27 @@ def semantic_search(label, index_name, query, top_k=5):
         $embedding
     )
     YIELD node, score
-    RETURN node.semantic_id AS id,
-           node.text AS text,
-           score
+
+    {where_clause}
+
+    RETURN
+        node.semantic_id AS id,
+        node.text AS text,
+        node.discipline AS discipline,
+        score
+    ORDER BY score DESC
     """
 
     with driver.session() as session:
         result = session.run(
             cypher,
             embedding=embedding,
-            k=top_k
+            k=top_k,
+            discipline=discipline
         )
 
-        records = [dict(r) for r in result]     
-        structured_print(records)     
+        records = [dict(r) for r in result]
+        structured_print(records)
         return records
 
 
@@ -103,7 +123,7 @@ def mode_reasoning(query):
     score
     """
 
-    with driver.session() as session:
+    with driver.session(database="fmeav2") as session:
         result = session.run(cypher, embedding=embedding)
 
         records = [dict(r) for r in result]     
@@ -260,10 +280,11 @@ if __name__ == "__main__":
 
     print("\n=== Semantic Search Mode ===")
     semantic_search(
-        "Function",
-        "function_embedding",
-        "Hold tranmission ratio",
-        top_k=20
+        "Cause",
+        "cause_embedding",
+        "Motor can not provide enough torque",
+        discipline=["mechanics", "unknown"],
+        top_k=10
     )
 
     # print("\n=== Mode Reasoning ===")
