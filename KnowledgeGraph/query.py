@@ -49,8 +49,10 @@ def structured_print(records):
 
 def semantic_search(label, index_name, query, top_k=5):
 
-    embedding = embed("Failure mode: " + query)
-
+    if label == "Mode":
+        embedding = embed("Failure mode: " + query)
+    elif label == "Function":
+        embedding = embed("Function: " + query)
     cypher = f"""
     CALL db.index.vector.queryNodes(
         '{index_name}',
@@ -256,14 +258,22 @@ if __name__ == "__main__":
     #     top_k=20
     # ))
 
+    print("\n=== Semantic Search Mode ===")
+    semantic_search(
+        "Function",
+        "function_embedding",
+        "Hold tranmission ratio",
+        top_k=20
+    )
+
     # print("\n=== Mode Reasoning ===")
     # print(mode_reasoning("Not enough torque"))
 
     # print("\n=== Failure Chain ===")
     # print(failure_chain_search("Not enough torque"))
 
-    print("\n=== Find Modes by Cause ===")
-    find_modes_by_cause("ADC measurements incorrect (incl. bandwidth")
+    # print("\n=== Find Modes by Cause ===")
+    # find_modes_by_cause("ADC measurements incorrect (incl. bandwidth")
 
     # print("\n=== Find Failure by Element ===")
     # find_failure_by_element("Power train")

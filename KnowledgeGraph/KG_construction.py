@@ -249,12 +249,14 @@ class FMEAVectorKGBuilder:
                 c.embedding=$embedding,
                 c.source_type=$source_type,
                 c.fmea_type=$fmea_type
+                c.discipline=$discipline
             """,
             id=cause_id,
             text=text,
             embedding=embedding,
             source_type=safe_text(item.get("source_type")),
             fmea_type=safe_text(item.get("fmea_type")),
+            discipline=safe_text(item.get("discipline"))
         )
         return cause_id
 

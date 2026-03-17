@@ -689,7 +689,7 @@ if  __name__ == "__main__":
     res = query_semantic_kb(
         persist_dir=KB_PATH,
         query_text=query_text,
-        field_type=["mode"],
+        field_type=["cause"],
         n_results=20,
         min_count=1,
         hybrid=False,
