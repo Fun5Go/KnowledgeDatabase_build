@@ -120,8 +120,12 @@ def load_dfmea_table(path, sheet_index=1):
 
     df = df.rename(columns=col_map)
 
-    df = df[df["failure_cause"].notna()]
-    df = df[df["failure_cause"].astype(str).str.strip() != ""]
+    df = df[
+        df[["failure_mode", "failure_effect", "failure_cause"]]
+        .astype(str)
+        .apply(lambda x: x.str.strip() != "")
+        .any(axis=1)
+    ]
     df = df[df["severity"].astype(str).str.strip() != "-"]
 
     return df
@@ -184,6 +188,24 @@ def build_flat_failures(
 
     records = []
 
+    # ===== last cache =====
+    last_failure_mode = ""
+    last_failure_effect = ""
+    last_controls_prevention = ""
+    last_current_detection = ""
+    last_recommended_action = ""
+    last_function = ""
+
+    # ===== clean function（关键修复 NaN）=====
+    import pandas as pd
+    def clean(x):
+        if x is None or pd.isna(x):
+            return ""
+        s = str(x).strip()
+        if s.lower() == "nan":
+            return ""
+        return s
+
     for _, row in dfmea.iterrows():
 
         system_element, function = find_context_for_row(
@@ -191,19 +213,74 @@ def build_flat_failures(
             row["excel_row"]
         )
 
-        failure_mode = strip_prefix(to_scalar(row.get("failure_mode", "")))
-        failure_effect = strip_prefix(to_scalar(row.get("failure_effect", "")))
-        discipline, failure_cause = extract_discipline(
-            to_scalar(row.get("failure_cause", ""))
-        )
-        controls_prevention = str(to_scalar(row.get("controls_prevention", ""))).strip()
-        current_detection = str(to_scalar(row.get("current_detection", ""))).strip()
-        recommended_action = str(to_scalar(row.get("recommended_action", ""))).strip()
+        # ===== function 切换 → reset block =====
+        if function != last_function:
+            last_failure_mode = ""
+            last_failure_effect = ""
+            last_controls_prevention = ""
+            last_current_detection = ""
+            last_recommended_action = ""
+            last_function = function
+
+        # ===== raw =====
+        failure_mode_raw = clean(row.get("failure_mode", ""))
+        failure_effect_raw = clean(row.get("failure_effect", ""))
+        failure_cause_raw = clean(row.get("failure_cause", ""))
+
+        controls_prevention_raw = clean(row.get("controls_prevention", ""))
+        current_detection_raw = clean(row.get("current_detection", ""))
+        recommended_action_raw = clean(row.get("recommended_action", ""))
+
+        # ===== 判断是否有效行（不依赖 severity）=====
+        has_text = any([
+            failure_mode_raw,
+            failure_effect_raw,
+            failure_cause_raw
+        ])
+
+        if not has_text:
+            continue
+
+        # ===== mode 继承 =====
+        if failure_mode_raw:
+            failure_mode = strip_prefix(failure_mode_raw)
+            last_failure_mode = failure_mode
+        else:
+            failure_mode = last_failure_mode
+
+        # ===== effect 继承 =====
+        if failure_effect_raw:
+            failure_effect = strip_prefix(failure_effect_raw)
+            last_failure_effect = failure_effect
+        else:
+            failure_effect = last_failure_effect
+
+        # ===== cause（不继承）=====
+        discipline, failure_cause = extract_discipline(failure_cause_raw)
+
+        # ===== controls 继承 =====
+        if controls_prevention_raw:
+            controls_prevention = controls_prevention_raw
+            last_controls_prevention = controls_prevention
+        else:
+            controls_prevention = last_controls_prevention
+
+        if current_detection_raw:
+            current_detection = current_detection_raw
+            last_current_detection = current_detection
+        else:
+            current_detection = last_current_detection
+
+        if recommended_action_raw:
+            recommended_action = recommended_action_raw
+            last_recommended_action = recommended_action
+        else:
+            recommended_action = last_recommended_action
+
+        # ===== text =====
         def safe_str(x):
-            if x is None:
-                return ""
-            s = str(x).strip()
-            return s
+            return str(x).strip() if x is not None else ""
+
         text = (
             f"Product: {safe_str(metadata.get('productName'))}. "
             f"System name: {safe_str(system_name)}. "
@@ -216,13 +293,11 @@ def build_flat_failures(
             f"Controls (prevention): {safe_str(controls_prevention)}. "
             f"Controls (detection): {safe_str(current_detection)}. "
             f"Recommended action: {safe_str(recommended_action)}."
-)
+        )
 
         record = {
             "source_type": "new_fmea",
 
-            # ===== metadata =====
-            
             "file_name": file_name,
             "project_description": project_description,
             "released": metadata.get("released"),
@@ -250,10 +325,10 @@ def build_flat_failures(
 
             "text": text
         }
+
         records.append(record)
 
     return records
-
 
 
 ###############################################################################
