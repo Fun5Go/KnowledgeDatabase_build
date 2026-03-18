@@ -185,6 +185,8 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
 
         # ===============================
         # 1. MODE SEARCH
+        #    keep: group mode + single mode
+        #    drop: submode
         # ===============================
         mode_results = []
 
@@ -200,6 +202,10 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
                 WITH node,
                     vector.similarity.cosine(node.embedding, $embedding) AS refined_score
 
+                WHERE
+                    coalesce(node.is_group, false) = true
+                    OR NOT (node)-[:BELONGS_TO]->(:Mode)
+
                 RETURN node, refined_score
                 ORDER BY refined_score DESC
                 LIMIT $k
@@ -211,8 +217,13 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
 
         mode_results = deduplicate_by_semantic_id(mode_results)
 
+
         # ===============================
         # 2. CAUSE SEARCH -> MODE
+        #    keep queried cause: group cause + single cause
+        #    drop queried cause: subcause
+        #    keep returned mode: group mode + single mode
+        #    drop returned mode: submode
         # ===============================
         cause_modes = []
 
@@ -228,7 +239,14 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
                 WITH node,
                     vector.similarity.cosine(node.embedding, $embedding) AS refined_score
 
+                WHERE
+                    coalesce(node.is_group, false) = true
+                    OR NOT (node)-[:BELONGS_TO]->(:Cause)
+
                 MATCH (m:Mode)-[:CAUSED_BY]->(node)
+                WHERE
+                    coalesce(m.is_group, false) = true
+                    OR NOT (m)-[:BELONGS_TO]->(:Mode)
 
                 RETURN m AS mode, refined_score
                 ORDER BY refined_score DESC
@@ -241,8 +259,13 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
 
         cause_modes = deduplicate_by_semantic_id(cause_modes)
 
+
         # ===============================
         # 3. EFFECT SEARCH -> MODE
+        #    keep queried effect: group effect + single effect
+        #    drop queried effect: subeffect
+        #    keep returned mode: group mode + single mode
+        #    drop returned mode: submode
         # ===============================
         effect_modes = []
 
@@ -258,7 +281,14 @@ def semantic_failure_search(query, top_k=5, min_score = 0.75):
                 WITH node,
                     vector.similarity.cosine(node.embedding, $embedding) AS refined_score
 
+                WHERE
+                    coalesce(node.is_group, false) = true
+                    OR NOT (node)-[:BELONGS_TO]->(:Effect)
+
                 MATCH (m:Mode)-[:LEADS_TO]->(node)
+                WHERE
+                    coalesce(m.is_group, false) = true
+                    OR NOT (m)-[:BELONGS_TO]->(:Mode)
 
                 RETURN m AS mode, refined_score
                 ORDER BY refined_score DESC

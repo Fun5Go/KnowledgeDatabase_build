@@ -50,10 +50,16 @@ def structured_print(records):
 def semantic_search(label, index_name, query, discipline=None, top_k=5):
     if label == "Mode":
         embedding = embed("Failure mode: " + query)
+
     elif label == "Function":
         embedding = embed("Function: " + query)
+
     elif label == "Cause":
         embedding = embed("Failure cause: " + query)
+
+    elif label == "Effect":
+        embedding = embed("Failure effect: " + query)
+
     else:
         raise ValueError(f"Unsupported label: {label}")
 
@@ -69,6 +75,19 @@ def semantic_search(label, index_name, query, discipline=None, top_k=5):
         AND (
             coalesce(node.is_group, false) = true
             OR NOT (node)-[:BELONGS_TO]->(:Cause)
+        )
+        """
+    if label == "Effect":
+        where_clause = """
+        WHERE (
+            $discipline IS NULL
+            OR size($discipline) = 0
+            OR toLower(coalesce(node.discipline, "unknown")) IN
+            [x IN $discipline | toLower(x)]
+        )
+        AND (
+            coalesce(node.is_group, false) = true
+            OR NOT (node)-[:BELONGS_TO]->(:Effect)
         )
         """
 
@@ -286,11 +305,11 @@ if __name__ == "__main__":
 
     print("\n=== Semantic Search Mode ===")
     semantic_search(
-        "Cause",
-        "cause_embedding",
-        "Loss of power",
+        "Effect",
+        "effect_embedding",
+        "Motor overheat",
         # discipline=["mechanics", "unknown"],
-        top_k=10
+        top_k=20
     )
 
     # print("\n=== Mode Reasoning ===")

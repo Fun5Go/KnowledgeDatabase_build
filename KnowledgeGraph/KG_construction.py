@@ -30,6 +30,8 @@ JSON_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_
 SENTENCE_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_expand\sentence_kb\sentence_store.json"
 
 CAUSE_GROUP = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\cause_groups_refined_v2.json"
+EFFECT_GROUP = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\effect_groups_refined_v2.json"
+MODE_GROUP = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\mode_groups_refined_v2.json"
 
 
 # ============================================
@@ -866,6 +868,255 @@ class FMEAVectorKGBuilder:
 
         return True
 
+    def merge_effect_group_v3(self, group_item):
+        member_ids = group_item.get("member_node_ids", [])
+        canonical_text = safe_text(group_item.get("canonical_text"))
+        group_id = safe_text(group_item.get("group_id"))
+
+        if not member_ids or len(member_ids) <= 1:
+            return False
+
+        if not canonical_text or not group_id:
+            return False
+
+        group_semantic_id = f"group:{group_id}"
+
+        with self.driver.session(database=self.database) as session:
+
+            # ----------------------------------------
+            # 1️⃣ 获取已有 Effect embedding
+            # ----------------------------------------
+            result = session.run(
+                """
+                MATCH (e:Effect)
+                WHERE e.semantic_id IN $member_ids
+                RETURN e.semantic_id AS sid, e.embedding AS emb
+                """,
+                member_ids=member_ids
+            )
+
+            rows = [r for r in result if r["emb"] is not None]
+
+            if len(rows) <= 1:
+                return False
+
+            embeddings = [r["emb"] for r in rows]
+            import numpy as np
+            avg_embedding = np.mean(np.array(embeddings, dtype=float), axis=0).tolist()
+
+            # ----------------------------------------
+            # 2️⃣ 创建 Effect Group
+            # ----------------------------------------
+            session.run(
+                """
+                MERGE (eg:Effect {semantic_id:$group_semantic_id})
+                SET eg.text = $canonical_text,
+                    eg.name = $canonical_text,
+                    eg.embedding = $embedding,
+                    eg.is_group = true
+                """,
+                group_semantic_id=group_semantic_id,
+                canonical_text=canonical_text,
+                embedding=avg_embedding
+            )
+
+            # ----------------------------------------
+            # 3️⃣ 标记 SubEffect + BELONGS_TO
+            # ----------------------------------------
+            session.run(
+                """
+                MATCH (eg:Effect {semantic_id:$group_semantic_id})
+                MATCH (e:Effect)
+                WHERE e.semantic_id IN $member_ids
+                AND e.semantic_id <> $group_semantic_id
+
+                SET e:SubEffect,
+                    e.is_group = false
+
+                MERGE (e)-[:BELONGS_TO]->(eg)
+                """,
+                group_semantic_id=group_semantic_id,
+                member_ids=member_ids
+            )
+
+            # ----------------------------------------
+            # 4️⃣ 迁移关系 + 删除旧边
+            # ----------------------------------------
+            session.run(
+                """
+                MATCH (eg:Effect {semantic_id:$group_semantic_id})
+                MATCH (se:SubEffect)-[:BELONGS_TO]->(eg)
+                WHERE se.semantic_id IN $member_ids
+
+                // ---- Mode -> SubEffect → Mode -> EffectGroup ----
+                OPTIONAL MATCH (m:Mode)-[r1:LEADS_TO]->(se)
+                FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (m)-[r2:LEADS_TO]->(eg)
+                    ON CREATE SET r2.weight = coalesce(r1.weight, 1)
+                    ON MATCH SET r2.weight = coalesce(r2.weight, 0) + coalesce(r1.weight, 1)
+                    DELETE r1
+                )
+
+                WITH eg, se
+
+                // ---- Failure -> SubEffect → Failure -> EffectGroup ----
+                OPTIONAL MATCH (f:Failure)-[r3:HAS_EFFECT]->(se)
+                FOREACH (_ IN CASE WHEN r3 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (f)-[:HAS_EFFECT]->(eg)
+                    DELETE r3
+                )
+
+                WITH eg, se
+
+                // ---- Sentence → EffectGroup（保留原 SubEffect->Sentence）----
+                OPTIONAL MATCH (se)-[r4:INFERRED_BY]->(s:SentenceGroup)
+                FOREACH (_ IN CASE WHEN r4 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (eg)-[:INFERRED_BY]->(s)
+                )
+                """,
+                group_semantic_id=group_semantic_id,
+                member_ids=member_ids
+            )
+
+        return True
+
+    def merge_mode_group_v3(self, group_item):
+        member_ids = group_item.get("member_node_ids", [])
+        canonical_text = safe_text(group_item.get("canonical_text"))
+        group_id = safe_text(group_item.get("group_id"))
+
+        if not member_ids or len(member_ids) <= 1:
+            return False
+
+        if not canonical_text or not group_id:
+            return False
+
+        group_semantic_id = f"group:{group_id}"
+
+        with self.driver.session(database=self.database) as session:
+
+            # ----------------------------------------
+            # 1️⃣ 获取 embedding（平均）
+            # ----------------------------------------
+            result = session.run("""
+                MATCH (m:Mode)
+                WHERE m.semantic_id IN $member_ids
+                RETURN m.embedding AS emb
+            """, member_ids=member_ids)
+
+            rows = [r for r in result if r["emb"]]
+
+            if len(rows) <= 1:
+                return False
+
+            import numpy as np
+            embeddings = [r["emb"] for r in rows]
+            avg_embedding = np.mean(np.array(embeddings), axis=0).tolist()
+
+            # ----------------------------------------
+            # 2️⃣ 创建 Group Mode
+            # ----------------------------------------
+            session.run("""
+                MERGE (gm:Mode {semantic_id:$gid})
+                SET gm.text = $text,
+                    gm.name = $text,
+                    gm.embedding = $embedding,
+                    gm.is_group = true
+            """,
+            gid=group_semantic_id,
+            text=canonical_text,
+            embedding=avg_embedding
+            )
+
+            # ----------------------------------------
+            # 3️⃣ SubMode 标记 + BELONGS_TO
+            # ----------------------------------------
+            session.run("""
+                MATCH (gm:Mode {semantic_id:$gid})
+                MATCH (m:Mode)
+                WHERE m.semantic_id IN $member_ids
+                AND m.semantic_id <> $gid
+
+                SET m:SubMode,
+                    m.is_group = false
+
+                MERGE (m)-[:BELONGS_TO]->(gm)
+            """,
+            gid=group_semantic_id,
+            member_ids=member_ids
+            )
+
+            # ----------------------------------------
+            # 4️⃣ 迁移所有关系到 GroupMode + 删除旧边
+            # ----------------------------------------
+            session.run("""
+                MATCH (gm:Mode {semantic_id:$gid})
+                MATCH (sm:SubMode)-[:BELONGS_TO]->(gm)
+                WHERE sm.semantic_id IN $member_ids
+
+                // -------------------------
+                // Function -> SubMode → GroupMode
+                // -------------------------
+                OPTIONAL MATCH (f:Function)-[r1:HAS_MODE]->(sm)
+
+                WITH gm, sm, f, r1
+
+                FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (f)-[:HAS_MODE]->(gm)
+                    DELETE r1
+                )
+
+                WITH gm, sm
+
+                // -------------------------
+                // GroupMode -> Cause
+                // -------------------------
+                OPTIONAL MATCH (sm)-[r2:CAUSED_BY]->(c)
+
+                WITH gm, sm, c, r2, coalesce(r2.weight, 1) AS w
+
+                FOREACH (_ IN CASE WHEN r2 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (gm)-[r:CAUSED_BY]->(c)
+                    ON CREATE SET r.weight = w
+                    ON MATCH SET r.weight = coalesce(r.weight, 0) + w
+                    DELETE r2
+                )
+
+                WITH gm, sm
+
+                // -------------------------
+                // GroupMode -> Effect
+                // -------------------------
+                OPTIONAL MATCH (sm)-[r3:LEADS_TO]->(e)
+
+                WITH gm, sm, e, r3, coalesce(r3.weight, 1) AS w
+
+                FOREACH (_ IN CASE WHEN r3 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (gm)-[r:LEADS_TO]->(e)
+                    ON CREATE SET r.weight = w
+                    ON MATCH SET r.weight = coalesce(r.weight, 0) + w
+                    DELETE r3
+                )
+                WITH gm, sm
+
+                // -------------------------
+                // Failure -> SubMode → GroupMode
+                // -------------------------
+                OPTIONAL MATCH (f:Failure)-[r4:HAS_MODE]->(sm)
+
+                WITH gm, sm, f, r4
+
+                FOREACH (_ IN CASE WHEN r4 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (f)-[:HAS_MODE]->(gm)
+                    DELETE r4
+                )
+            """,
+            gid=group_semantic_id,
+            member_ids=member_ids
+            )
+
+        return True
+
     def merge_all_groups(self, group_json_path):
         groups = json.loads(Path(group_json_path).read_text(encoding="utf-8"))
 
@@ -881,7 +1132,7 @@ class FMEAVectorKGBuilder:
                 skipped_single += 1
                 continue
 
-            ok = self.merge_cause_group_v3(g)
+            ok = self.merge_mode_group_v3(g)
             if ok:
                 created += 1
             else:
@@ -925,7 +1176,7 @@ def main():
     #     print("Vector KG build complete.")
 
         print("Merge and group canonical nodes:")
-        builder.merge_all_groups(CAUSE_GROUP)
+        builder.merge_all_groups(MODE_GROUP)
 
     finally:
         builder.close()
