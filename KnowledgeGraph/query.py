@@ -60,10 +60,16 @@ def semantic_search(label, index_name, query, discipline=None, top_k=5):
     where_clause = ""
     if label == "Cause":
         where_clause = """
-        WHERE $discipline IS NULL
-           OR size($discipline) = 0
-           OR toLower(coalesce(node.discipline, "unknown")) IN
-              [x IN $discipline | toLower(x)]
+        WHERE (
+            $discipline IS NULL
+            OR size($discipline) = 0
+            OR toLower(coalesce(node.discipline, "unknown")) IN
+            [x IN $discipline | toLower(x)]
+        )
+        AND (
+            coalesce(node.is_group, false) = true
+            OR NOT (node)-[:BELONGS_TO]->(:Cause)
+        )
         """
 
     cypher = f"""
@@ -282,8 +288,8 @@ if __name__ == "__main__":
     semantic_search(
         "Cause",
         "cause_embedding",
-        "Motor can not provide enough torque",
-        discipline=["mechanics", "unknown"],
+        "Loss of power",
+        # discipline=["mechanics", "unknown"],
         top_k=10
     )
 

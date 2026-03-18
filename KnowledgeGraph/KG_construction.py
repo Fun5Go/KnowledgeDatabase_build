@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from tqdm import tqdm
 from neo4j import GraphDatabase
 from chromadb.utils import embedding_functions
+import numpy as np
 
 
 # ============================================
@@ -763,56 +764,134 @@ class FMEAVectorKGBuilder:
                     group_id=group_id
                 )
 
-    def merge_cause_group(self, group_item):
-        member_ids = group_item["member_node_ids"]
-        canonical_text = group_item["canonical_text"]
+    def merge_cause_group_v3(self, group_item):
+        member_ids = group_item.get("member_node_ids", [])
+        canonical_text = safe_text(group_item.get("canonical_text"))
+        group_id = safe_text(group_item.get("group_id"))
 
-        cypher = """
-        MATCH (c:Cause)
-        WHERE c.semantic_id IN $member_ids
+        if not member_ids or len(member_ids) <= 1:
+            return False
 
-        WITH collect(c) AS causes
-        WITH causes, head(causes) AS canonical
+        if not canonical_text or not group_id:
+            return False
 
-        SET canonical.text = $canonical_text,
-            canonical.name = $canonical_text,
-            canonical.is_canonical = true
-
-        WITH canonical, causes
-        UNWIND causes AS c
-        WITH canonical, c
-        WHERE c <> canonical
-
-        OPTIONAL MATCH (m:Mode)-[r:CAUSED_BY]->(c)
-        MERGE (m)-[r2:CAUSED_BY]->(canonical)
-        SET r2.weight = coalesce(r2.weight,0) + coalesce(r.weight,1)
-        DELETE r
-
-        WITH canonical, c
-        OPTIONAL MATCH (f:Failure)-[r:HAS_CAUSE]->(c)
-        MERGE (f)-[:HAS_CAUSE]->(canonical)
-        DELETE r
-
-        WITH canonical, c
-        OPTIONAL MATCH (c)-[r:INFERRED_BY]->(s:SentenceGroup)
-        MERGE (canonical)-[:INFERRED_BY]->(s)
-        DELETE r
-
-        DETACH DELETE c
-        """
+        group_semantic_id = f"group:{group_id}"
 
         with self.driver.session(database=self.database) as session:
+            # 1) 从已有 KG 读取 member cause 的 embedding
+            result = session.run(
+                """
+                MATCH (c:Cause)
+                WHERE c.semantic_id IN $member_ids
+                RETURN c.semantic_id AS sid, c.embedding AS emb
+                """,
+                member_ids=member_ids
+            )
+            rows = [r for r in result if r["emb"] is not None]
+
+            # 至少匹配到两个已有 cause，才建 group
+            if len(rows) <= 1:
+                return False
+
+            embeddings = [r["emb"] for r in rows]
+            avg_embedding = np.mean(np.array(embeddings, dtype=float), axis=0).tolist()
+
+            # 2) 创建 group cause 节点
             session.run(
-                cypher,
-                member_ids=member_ids,
-                canonical_text=canonical_text
+                """
+                MERGE (cg:Cause {semantic_id:$group_semantic_id})
+                SET cg.text = $canonical_text,
+                    cg.name = $canonical_text,
+                    cg.embedding = $embedding,
+                    cg.is_group = true
+                """,
+                group_semantic_id=group_semantic_id,
+                canonical_text=canonical_text,
+                embedding=avg_embedding
             )
 
-    def merge_all_groups(self, group_json_path):
-        groups = json.loads(Path(group_json_path).read_text())
+            # 3) 标记 SubCause，并建立 BELONGS_TO
+            session.run(
+                """
+                MATCH (cg:Cause {semantic_id:$group_semantic_id})
+                MATCH (c:Cause)
+                WHERE c.semantic_id IN $member_ids
+                  AND c.semantic_id <> $group_semantic_id
 
-        for g in tqdm(groups, desc="Merging cause groups"):
-            self.merge_cause_group(g)
+                SET c:SubCause,
+                    c.is_group = false
+
+                MERGE (c)-[:BELONGS_TO]->(cg)
+                """,
+                group_semantic_id=group_semantic_id,
+                member_ids=member_ids
+            )
+
+            # 4) 汇总关系到 group，并删除指向 SubCause 的旧边
+            session.run(
+                """
+                MATCH (cg:Cause {semantic_id:$group_semantic_id})
+                MATCH (sc:SubCause)-[:BELONGS_TO]->(cg)
+                WHERE sc.semantic_id IN $member_ids
+
+                // ---- Mode -> SubCause 迁移到 Mode -> Group ----
+                OPTIONAL MATCH (m:Mode)-[r1:CAUSED_BY]->(sc)
+                FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (m)-[r2:CAUSED_BY]->(cg)
+                    ON CREATE SET r2.weight = coalesce(r1.weight, 1)
+                    ON MATCH SET r2.weight = coalesce(r2.weight, 0) + coalesce(r1.weight, 1)
+                    DELETE r1
+                )
+
+                WITH cg, sc
+
+                // ---- Failure -> SubCause 迁移到 Failure -> Group ----
+                OPTIONAL MATCH (f:Failure)-[r3:HAS_CAUSE]->(sc)
+                FOREACH (_ IN CASE WHEN r3 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (f)-[:HAS_CAUSE]->(cg)
+                    DELETE r3
+                )
+
+                WITH cg, sc
+
+                // ---- Sentence 复制到 group；原 SubCause->Sentence 可保留 ----
+                OPTIONAL MATCH (sc)-[r4:INFERRED_BY]->(s:SentenceGroup)
+                FOREACH (_ IN CASE WHEN r4 IS NOT NULL THEN [1] ELSE [] END |
+                    MERGE (cg)-[:INFERRED_BY]->(s)
+                )
+                """,
+                group_semantic_id=group_semantic_id,
+                member_ids=member_ids
+            )
+
+        return True
+
+    def merge_all_groups(self, group_json_path):
+        groups = json.loads(Path(group_json_path).read_text(encoding="utf-8"))
+
+        total = len(groups)
+        created = 0
+        skipped_single = 0
+        skipped_not_found = 0
+
+        for g in tqdm(groups, desc="Grouping cause nodes"):
+            member_ids = g.get("member_node_ids", [])
+
+            if not member_ids or len(member_ids) <= 1:
+                skipped_single += 1
+                continue
+
+            ok = self.merge_cause_group_v3(g)
+            if ok:
+                created += 1
+            else:
+                skipped_not_found += 1
+
+        print("\n===== Group Summary =====")
+        print(f"Total groups         : {total}")
+        print(f"Created groups       : {created}")
+        print(f"Skipped single nodes : {skipped_single}")
+        print(f"Skipped not found    : {skipped_not_found}")
 
 
 # ============================================
@@ -828,25 +907,25 @@ def main():
     )
 
     try:
-        print("Creating constraints...")
-        builder.create_constraints()
+    #     print("Creating constraints...")
+    #     builder.create_constraints()
 
-        print("Creating vector indexes...")
-        builder.create_vector_indexes()
+    #     print("Creating vector indexes...")
+    #     builder.create_vector_indexes()
 
-        print("Building main graph...")
-        builder.build_graph(JSON_FILE)
+    #     print("Building main graph...")
+    #     builder.build_graph(JSON_FILE)
 
-        print("Building cause sentence groups...")
-        builder.build_cause_sentence_groups(SENTENCE_JSON)
+    #     print("Building cause sentence groups...")
+    #     builder.build_cause_sentence_groups(SENTENCE_JSON)
 
-        print("Building 8D failure sentence groups...")
-        builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
+    #     print("Building 8D failure sentence groups...")
+    #     builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
 
-        print("Vector KG build complete.")
+    #     print("Vector KG build complete.")
 
-        # print("Merge and group canonical nodes:")
-        # builder.merge_all_groups(CAUSE_GROUP)
+        print("Merge and group canonical nodes:")
+        builder.merge_all_groups(CAUSE_GROUP)
 
     finally:
         builder.close()
