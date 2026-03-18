@@ -2,7 +2,7 @@ import os
 import json
 import hashlib
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Any, List
 from collections import defaultdict
 
 from dotenv import load_dotenv
@@ -766,7 +766,29 @@ class FMEAVectorKGBuilder:
                     group_id=group_id
                 )
 
-    def merge_cause_group_v3(self, group_item):
+        # =========================================================
+    # Common helper
+    # =========================================================
+    def _compute_avg_embedding(self, session, label: str, member_ids: List[str]):
+        query = f"""
+        MATCH (n:{label})
+        WHERE n.semantic_id IN $member_ids
+        RETURN n.semantic_id AS sid, n.embedding AS emb
+        """
+        result = session.run(query, member_ids=member_ids)
+        rows = [r for r in result if r["emb"] is not None]
+
+        if len(rows) <= 1:
+            return None, rows
+
+        embeddings = [r["emb"] for r in rows]
+        avg_embedding = np.mean(np.array(embeddings, dtype=float), axis=0).tolist()
+        return avg_embedding, rows
+
+    # =========================================================
+    # Cause Group Merge
+    # =========================================================
+    def merge_cause_group_v3(self, group_item: Dict[str, Any]):
         member_ids = group_item.get("member_node_ids", [])
         canonical_text = safe_text(group_item.get("canonical_text"))
         group_id = safe_text(group_item.get("group_id"))
@@ -780,23 +802,10 @@ class FMEAVectorKGBuilder:
         group_semantic_id = f"group:{group_id}"
 
         with self.driver.session(database=self.database) as session:
-            # 1) 从已有 KG 读取 member cause 的 embedding
-            result = session.run(
-                """
-                MATCH (c:Cause)
-                WHERE c.semantic_id IN $member_ids
-                RETURN c.semantic_id AS sid, c.embedding AS emb
-                """,
-                member_ids=member_ids
-            )
-            rows = [r for r in result if r["emb"] is not None]
-
-            # 至少匹配到两个已有 cause，才建 group
-            if len(rows) <= 1:
+            # 1) 获取已有 Cause embedding
+            avg_embedding, rows = self._compute_avg_embedding(session, "Cause", member_ids)
+            if avg_embedding is None:
                 return False
-
-            embeddings = [r["emb"] for r in rows]
-            avg_embedding = np.mean(np.array(embeddings, dtype=float), axis=0).tolist()
 
             # 2) 创建 group cause 节点
             session.run(
@@ -856,7 +865,7 @@ class FMEAVectorKGBuilder:
 
                 WITH cg, sc
 
-                // ---- Sentence 复制到 group；原 SubCause->Sentence 可保留 ----
+                // ---- Sentence 复制到 group；原 SubCause->Sentence 保留 ----
                 OPTIONAL MATCH (sc)-[r4:INFERRED_BY]->(s:SentenceGroup)
                 FOREACH (_ IN CASE WHEN r4 IS NOT NULL THEN [1] ELSE [] END |
                     MERGE (cg)-[:INFERRED_BY]->(s)
@@ -868,7 +877,10 @@ class FMEAVectorKGBuilder:
 
         return True
 
-    def merge_effect_group_v3(self, group_item):
+    # =========================================================
+    # Effect Group Merge
+    # =========================================================
+    def merge_effect_group_v3(self, group_item: Dict[str, Any]):
         member_ids = group_item.get("member_node_ids", [])
         canonical_text = safe_text(group_item.get("canonical_text"))
         group_id = safe_text(group_item.get("group_id"))
@@ -882,31 +894,12 @@ class FMEAVectorKGBuilder:
         group_semantic_id = f"group:{group_id}"
 
         with self.driver.session(database=self.database) as session:
-
-            # ----------------------------------------
-            # 1️⃣ 获取已有 Effect embedding
-            # ----------------------------------------
-            result = session.run(
-                """
-                MATCH (e:Effect)
-                WHERE e.semantic_id IN $member_ids
-                RETURN e.semantic_id AS sid, e.embedding AS emb
-                """,
-                member_ids=member_ids
-            )
-
-            rows = [r for r in result if r["emb"] is not None]
-
-            if len(rows) <= 1:
+            # 1) 获取已有 Effect embedding
+            avg_embedding, rows = self._compute_avg_embedding(session, "Effect", member_ids)
+            if avg_embedding is None:
                 return False
 
-            embeddings = [r["emb"] for r in rows]
-            import numpy as np
-            avg_embedding = np.mean(np.array(embeddings, dtype=float), axis=0).tolist()
-
-            # ----------------------------------------
-            # 2️⃣ 创建 Effect Group
-            # ----------------------------------------
+            # 2) 创建 Effect Group
             session.run(
                 """
                 MERGE (eg:Effect {semantic_id:$group_semantic_id})
@@ -920,15 +913,13 @@ class FMEAVectorKGBuilder:
                 embedding=avg_embedding
             )
 
-            # ----------------------------------------
-            # 3️⃣ 标记 SubEffect + BELONGS_TO
-            # ----------------------------------------
+            # 3) 标记 SubEffect + BELONGS_TO
             session.run(
                 """
                 MATCH (eg:Effect {semantic_id:$group_semantic_id})
                 MATCH (e:Effect)
                 WHERE e.semantic_id IN $member_ids
-                AND e.semantic_id <> $group_semantic_id
+                  AND e.semantic_id <> $group_semantic_id
 
                 SET e:SubEffect,
                     e.is_group = false
@@ -939,9 +930,7 @@ class FMEAVectorKGBuilder:
                 member_ids=member_ids
             )
 
-            # ----------------------------------------
-            # 4️⃣ 迁移关系 + 删除旧边
-            # ----------------------------------------
+            # 4) 迁移关系 + 删除旧边
             session.run(
                 """
                 MATCH (eg:Effect {semantic_id:$group_semantic_id})
@@ -980,7 +969,10 @@ class FMEAVectorKGBuilder:
 
         return True
 
-    def merge_mode_group_v3(self, group_item):
+    # =========================================================
+    # Mode Group Merge
+    # =========================================================
+    def merge_mode_group_v3(self, group_item: Dict[str, Any]):
         member_ids = group_item.get("member_node_ids", [])
         canonical_text = safe_text(group_item.get("canonical_text"))
         group_id = safe_text(group_item.get("group_id"))
@@ -994,62 +986,45 @@ class FMEAVectorKGBuilder:
         group_semantic_id = f"group:{group_id}"
 
         with self.driver.session(database=self.database) as session:
-
-            # ----------------------------------------
-            # 1️⃣ 获取 embedding（平均）
-            # ----------------------------------------
-            result = session.run("""
-                MATCH (m:Mode)
-                WHERE m.semantic_id IN $member_ids
-                RETURN m.embedding AS emb
-            """, member_ids=member_ids)
-
-            rows = [r for r in result if r["emb"]]
-
-            if len(rows) <= 1:
+            # 1) 获取 Mode embedding
+            avg_embedding, rows = self._compute_avg_embedding(session, "Mode", member_ids)
+            if avg_embedding is None:
                 return False
 
-            import numpy as np
-            embeddings = [r["emb"] for r in rows]
-            avg_embedding = np.mean(np.array(embeddings), axis=0).tolist()
-
-            # ----------------------------------------
-            # 2️⃣ 创建 Group Mode
-            # ----------------------------------------
-            session.run("""
+            # 2) 创建 Group Mode
+            session.run(
+                """
                 MERGE (gm:Mode {semantic_id:$gid})
                 SET gm.text = $text,
                     gm.name = $text,
                     gm.embedding = $embedding,
                     gm.is_group = true
-            """,
-            gid=group_semantic_id,
-            text=canonical_text,
-            embedding=avg_embedding
+                """,
+                gid=group_semantic_id,
+                text=canonical_text,
+                embedding=avg_embedding
             )
 
-            # ----------------------------------------
-            # 3️⃣ SubMode 标记 + BELONGS_TO
-            # ----------------------------------------
-            session.run("""
+            # 3) SubMode 标记 + BELONGS_TO
+            session.run(
+                """
                 MATCH (gm:Mode {semantic_id:$gid})
                 MATCH (m:Mode)
                 WHERE m.semantic_id IN $member_ids
-                AND m.semantic_id <> $gid
+                  AND m.semantic_id <> $gid
 
                 SET m:SubMode,
                     m.is_group = false
 
                 MERGE (m)-[:BELONGS_TO]->(gm)
-            """,
-            gid=group_semantic_id,
-            member_ids=member_ids
+                """,
+                gid=group_semantic_id,
+                member_ids=member_ids
             )
 
-            # ----------------------------------------
-            # 4️⃣ 迁移所有关系到 GroupMode + 删除旧边
-            # ----------------------------------------
-            session.run("""
+            # 4) 迁移所有关系到 GroupMode + 删除旧边
+            session.run(
+                """
                 MATCH (gm:Mode {semantic_id:$gid})
                 MATCH (sm:SubMode)-[:BELONGS_TO]->(gm)
                 WHERE sm.semantic_id IN $member_ids
@@ -1058,9 +1033,7 @@ class FMEAVectorKGBuilder:
                 // Function -> SubMode → GroupMode
                 // -------------------------
                 OPTIONAL MATCH (f:Function)-[r1:HAS_MODE]->(sm)
-
                 WITH gm, sm, f, r1
-
                 FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END |
                     MERGE (f)-[:HAS_MODE]->(gm)
                     DELETE r1
@@ -1072,9 +1045,7 @@ class FMEAVectorKGBuilder:
                 // GroupMode -> Cause
                 // -------------------------
                 OPTIONAL MATCH (sm)-[r2:CAUSED_BY]->(c)
-
                 WITH gm, sm, c, r2, coalesce(r2.weight, 1) AS w
-
                 FOREACH (_ IN CASE WHEN r2 IS NOT NULL THEN [1] ELSE [] END |
                     MERGE (gm)-[r:CAUSED_BY]->(c)
                     ON CREATE SET r.weight = w
@@ -1088,35 +1059,66 @@ class FMEAVectorKGBuilder:
                 // GroupMode -> Effect
                 // -------------------------
                 OPTIONAL MATCH (sm)-[r3:LEADS_TO]->(e)
-
                 WITH gm, sm, e, r3, coalesce(r3.weight, 1) AS w
-
                 FOREACH (_ IN CASE WHEN r3 IS NOT NULL THEN [1] ELSE [] END |
                     MERGE (gm)-[r:LEADS_TO]->(e)
                     ON CREATE SET r.weight = w
                     ON MATCH SET r.weight = coalesce(r.weight, 0) + w
                     DELETE r3
                 )
+
                 WITH gm, sm
 
                 // -------------------------
                 // Failure -> SubMode → GroupMode
                 // -------------------------
                 OPTIONAL MATCH (f:Failure)-[r4:HAS_MODE]->(sm)
-
-                WITH gm, sm, f, r4
-
                 FOREACH (_ IN CASE WHEN r4 IS NOT NULL THEN [1] ELSE [] END |
                     MERGE (f)-[:HAS_MODE]->(gm)
                     DELETE r4
                 )
-            """,
-            gid=group_semantic_id,
-            member_ids=member_ids
+                """,
+                gid=group_semantic_id,
+                member_ids=member_ids
             )
 
         return True
 
+    # =========================================================
+    # Dispatch
+    # =========================================================
+    def merge_group_item(self, group_item: Dict[str, Any]):
+        """
+        自动识别 field_type:
+        - cause
+        - effect
+        - mode
+
+        若 field_type 缺失，则尝试从 group_id 推断。
+        """
+        field_type = safe_text(group_item.get("field_type")).lower()
+        group_id = safe_text(group_item.get("group_id")).lower()
+
+        if not field_type:
+            if "cause" in group_id:
+                field_type = "cause"
+            elif "effect" in group_id:
+                field_type = "effect"
+            elif "mode" in group_id:
+                field_type = "mode"
+
+        if field_type == "cause":
+            return self.merge_cause_group_v3(group_item)
+        elif field_type == "effect":
+            return self.merge_effect_group_v3(group_item)
+        elif field_type == "mode":
+            return self.merge_mode_group_v3(group_item)
+        else:
+            return None  # unknown type
+
+    # =========================================================
+    # Batch Merge
+    # =========================================================
     def merge_all_groups(self, group_json_path):
         groups = json.loads(Path(group_json_path).read_text(encoding="utf-8"))
 
@@ -1124,25 +1126,30 @@ class FMEAVectorKGBuilder:
         created = 0
         skipped_single = 0
         skipped_not_found = 0
+        skipped_unknown_type = 0
 
-        for g in tqdm(groups, desc="Grouping cause nodes"):
+        for g in tqdm(groups, desc="Merging canonical groups"):
             member_ids = g.get("member_node_ids", [])
 
             if not member_ids or len(member_ids) <= 1:
                 skipped_single += 1
                 continue
 
-            ok = self.merge_mode_group_v3(g)
-            if ok:
+            result = self.merge_group_item(g)
+
+            if result is True:
                 created += 1
+            elif result is None:
+                skipped_unknown_type += 1
             else:
                 skipped_not_found += 1
 
         print("\n===== Group Summary =====")
-        print(f"Total groups         : {total}")
-        print(f"Created groups       : {created}")
-        print(f"Skipped single nodes : {skipped_single}")
-        print(f"Skipped not found    : {skipped_not_found}")
+        print(f"Total groups          : {total}")
+        print(f"Created groups        : {created}")
+        print(f"Skipped single nodes  : {skipped_single}")
+        print(f"Skipped not found     : {skipped_not_found}")
+        print(f"Skipped unknown type  : {skipped_unknown_type}")
 
 
 # ============================================
@@ -1175,8 +1182,14 @@ def main():
 
     #     print("Vector KG build complete.")
 
-        print("Merge and group canonical nodes:")
+        print("Merge mode groups:")
         builder.merge_all_groups(MODE_GROUP)
+
+        print("\nMerge cause groups:")
+        builder.merge_all_groups(CAUSE_GROUP)
+
+        print("\nMerge effect groups:")
+        builder.merge_all_groups(EFFECT_GROUP)
 
     finally:
         builder.close()

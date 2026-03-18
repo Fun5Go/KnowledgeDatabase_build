@@ -16,7 +16,7 @@ def get_occurrence_count(item: dict) -> int:
     return 0
 
 BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\FMEA\FMEA_deduplicated.json")
+OUTPUT_JSON = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\FS\FS_deduplicated.json")
 
 with open(OUTPUT_JSON, "r", encoding="utf-8") as f:
     data = json.load(f)  # data: list[dict]

@@ -84,7 +84,7 @@ if __name__ == "__main__":
     )
     cross_encoder = create_cross_encoder()
 
-    query = "Cause: ADC measurements incorrect (incl. bandwidth)"
+    query = "Motor design (temperature spec, actuation length/duty cycle)"
 
     # Step 1: vector search
     initial_results = query_vector_store(
@@ -99,7 +99,7 @@ if __name__ == "__main__":
         query,
         initial_results,
         cross_encoder,
-        top_n=5
+        top_n=10
     )
 
     print("\n==== FINAL RESULTS ====\n")

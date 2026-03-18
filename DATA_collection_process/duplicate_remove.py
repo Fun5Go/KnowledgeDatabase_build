@@ -13,8 +13,8 @@ from pathlib import Path
 # CONFIG
 # ===============================
 # INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D.json"
-INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\8D\8D_deduplicated.json"
-OPERATION = "type_classify"  # "deduplicate" | "type_classify"
+INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\FS\FS.json"
+OPERATION = "deduplicate"  # "deduplicate" | "type_classify"
 
 PROCESS_WORDS = [
     # "pfmea",
@@ -59,40 +59,54 @@ def load_json_smart(path: Path):
 
     with path.open("r", encoding="latin1") as f:
         return json.load(f)
+    
+def extract_record_list(data):
+    """
+    兼容两种输入格式：
+    1) [ {...}, {...} ]
+    2) { "value": [ {...}, {...} ] }
+    返回统一的 list[dict]
+    """
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict) and isinstance(data.get("value"), list):
+        return data["value"]
+
+    raise ValueError("Input JSON must be a list, or an object with a 'value' list")
 
 # ===============================
 # OPERATION 1: DEDUPLICATE
 # ===============================
 def deduplicate_records(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    #Initialize the groups
     grouped: Dict[Tuple, List[Dict[str, Any]]] = defaultdict(list)
-    # Group the documents by id and name like "id": 29286 + "name": "DFMEA: Sewer Safety Chip"
+
     for r in data:
         key = (r.get("id"), r.get("name"))
         grouped[key].append(r)
+
     deduplicated = []
-    # Go through each group to get the latest one with existed folder path
+
     for (_, _), records in grouped.items():
-        # Count the duplicate number to measure
         occurrence_count = len(records)
-        # Get the valid items with existing folder path (isCopy = False)
+
         valid = [x for x in records if x.get("isCopy") is False]
         if not valid:
             continue
-        #Get the latest one (releaseNo max)
+
         chosen = max(
             valid,
             key=lambda x: (
                 x.get("releaseNo", 0),
-                # If releaseNo is the same, get the lagest listId
                 x.get("listId", 0)
             )
         )
-        #Rewrite into the deduplicated list with occurrenceCount
+
         deduplicated.append({
             **chosen,
             "occurrenceCount": occurrence_count
         })
+
     return deduplicated
 
 # ===============================
@@ -121,7 +135,10 @@ def split_process_and_sd(data: List[Dict[str, Any]]):
 # ===============================
 def main():
     in_path = Path(INPUT_PATH)
-    data = load_json_smart(in_path)
+    raw_data = load_json_smart(in_path)
+
+    # 这里兼容 value 结构
+    data = extract_record_list(raw_data)
 
     if not isinstance(data, list):
         raise ValueError("Input JSON must be a list of dicts")
@@ -132,6 +149,7 @@ def main():
 
         deduplicated = deduplicate_records(data)
 
+        # 直接保存数组，不再包 value
         with out_path.open("w", encoding="utf-8") as f:
             json.dump(deduplicated, f, ensure_ascii=False, indent=2)
 

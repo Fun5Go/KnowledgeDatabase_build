@@ -11,7 +11,7 @@ import re
 
 BASE_DIR = Path(__file__).resolve().parent
 KB_PATH = Path(
-        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_discipline\failure_kb"
+        r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_expand\failure_kb"
     )
 
 
@@ -538,11 +538,11 @@ if __name__ == "__main__":
 
     # print_high_similarity_pairs(persist_dir=KB_PATH, field_type = "cause", similarity_threshold=0.85,max_print=70)
 
-    merge_semantic_nodes_to_groups(
-    persist_dir=KB_PATH,
-    field_type="cause",
-    similarity_threshold=0.7,
-    )
+    # merge_semantic_nodes_to_groups(
+    # persist_dir=KB_PATH,
+    # field_type="element",
+    # similarity_threshold=0.7,
+    # )
     # retriever = GroupBM25Retriever(
     #     Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\cause_groups.json")
     # )
@@ -554,12 +554,12 @@ if __name__ == "__main__":
 
     # for r in results:
     #     print(r)
-#     GROUP_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\element_groups.json")
-#     refine_and_regroup(
-#     persist_dir=KB_PATH,
-#     group_json_path=GROUP_PATH,
-#     field_type="element",
-#     embed_threshold=0.6,
-#     lexical_threshold=0.0,
-#     regroup_threshold=0.7,
-# )
+    GROUP_PATH = Path(r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\element_groups.json")
+    refine_and_regroup(
+    persist_dir=KB_PATH,
+    group_json_path=GROUP_PATH,
+    field_type="element",
+    embed_threshold=0.7,
+    lexical_threshold=0.5,
+    regroup_threshold=0.7,
+)
