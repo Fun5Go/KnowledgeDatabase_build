@@ -267,12 +267,31 @@ def retrieve_candidates(
 # =========================================================
 def expand_candidates_from_retrieved_nodes(session, field: str, retrieved_items):
     """
-    从召回 node 出发，优先扩展到 Failure 实例层，
-    再从同一个 Failure 取 Element / Function / Mode / Cause / Effect，
-    避免共享 Function 节点导致跨 Element 串联。
+    把每个字段召回结果扩展成完整 failure candidate:
+        candidate = Element + Function + Mode + all Causes + all Effects
 
-    返回 candidate:
-        candidate = one failure instance context
+    输入 retrieved_items:
+        [(node, score, query_text), ...]
+
+    返回:
+        [
+            {
+                "candidate_id": ...,
+                "element_sid": ...,
+                "element_text": ...,
+                "function_sid": ...,
+                "function_text": ...,
+                "mode_sid": ...,
+                "mode_text": ...,
+                "causes": [...],
+                "effects": [...],
+                "trigger_field": field,
+                "trigger_score": ...,
+                "trigger_query": ...,
+                "trigger_node_sid": ...,
+                "trigger_node_text": ...
+            }
+        ]
     """
 
     if not retrieved_items:
@@ -282,95 +301,75 @@ def expand_candidates_from_retrieved_nodes(session, field: str, retrieved_items)
 
     field_to_cypher = {
         "element": """
-            MATCH (f:Failure)-[:HAS_ELEMENT]->(e:Element {semantic_id:$sid})
-            OPTIONAL MATCH (f)-[:HAS_FUNCTION]->(fn:Function)
-            OPTIONAL MATCH (f)-[:HAS_MODE]->(m:Mode)
-            OPTIONAL MATCH (f)-[:HAS_CAUSE]->(c:Cause)
-            OPTIONAL MATCH (f)-[:HAS_EFFECT]->(ef:Effect)
+            MATCH (e:Element {semantic_id:$sid})-[:HAS_FUNCTION]->(f:Function)-[:HAS_MODE]->(m:Mode)
+            OPTIONAL MATCH (c:Cause)-[:CAUSES]->(m)
+            OPTIONAL MATCH (m)-[:LEADS_TO]->(ef:Effect)
             RETURN
-                f.failure_id AS failure_id,
                 e.semantic_id AS element_sid,
                 e.text AS element_text,
-                head(collect(DISTINCT fn.semantic_id)) AS function_sid,
-                head(collect(DISTINCT fn.text)) AS function_text,
-                head(collect(DISTINCT m.semantic_id)) AS mode_sid,
-                head(collect(DISTINCT m.text)) AS mode_text,
-                collect(DISTINCT c) AS cause_nodes,
-                collect(DISTINCT ef) AS effect_nodes
-        """,
-
-        "function": """
-            MATCH (f:Failure)-[:HAS_FUNCTION]->(fn:Function {semantic_id:$sid})
-            OPTIONAL MATCH (f)-[:HAS_ELEMENT]->(e:Element)
-            OPTIONAL MATCH (f)-[:HAS_MODE]->(m:Mode)
-            OPTIONAL MATCH (f)-[:HAS_CAUSE]->(c:Cause)
-            OPTIONAL MATCH (f)-[:HAS_EFFECT]->(ef:Effect)
-            RETURN
-                f.failure_id AS failure_id,
-                head(collect(DISTINCT e.semantic_id)) AS element_sid,
-                head(collect(DISTINCT e.text)) AS element_text,
-                fn.semantic_id AS function_sid,
-                fn.text AS function_text,
-                head(collect(DISTINCT m.semantic_id)) AS mode_sid,
-                head(collect(DISTINCT m.text)) AS mode_text,
-                collect(DISTINCT c) AS cause_nodes,
-                collect(DISTINCT ef) AS effect_nodes
-        """,
-
-        "mode": """
-            MATCH (f:Failure)-[:HAS_MODE]->(m:Mode {semantic_id:$sid})
-            OPTIONAL MATCH (f)-[:HAS_ELEMENT]->(e:Element)
-            OPTIONAL MATCH (f)-[:HAS_FUNCTION]->(fn:Function)
-            OPTIONAL MATCH (f)-[:HAS_CAUSE]->(c:Cause)
-            OPTIONAL MATCH (f)-[:HAS_EFFECT]->(ef:Effect)
-            RETURN
-                f.failure_id AS failure_id,
-                head(collect(DISTINCT e.semantic_id)) AS element_sid,
-                head(collect(DISTINCT e.text)) AS element_text,
-                head(collect(DISTINCT fn.semantic_id)) AS function_sid,
-                head(collect(DISTINCT fn.text)) AS function_text,
+                f.semantic_id AS function_sid,
+                f.text AS function_text,
                 m.semantic_id AS mode_sid,
                 m.text AS mode_text,
                 collect(DISTINCT c) AS cause_nodes,
                 collect(DISTINCT ef) AS effect_nodes
         """,
-
-        "cause": """
-            MATCH (f:Failure)-[:HAS_CAUSE]->(c0:Cause {semantic_id:$sid})
-            OPTIONAL MATCH (f)-[:HAS_ELEMENT]->(e:Element)
-            OPTIONAL MATCH (f)-[:HAS_FUNCTION]->(fn:Function)
-            OPTIONAL MATCH (f)-[:HAS_MODE]->(m:Mode)
-            OPTIONAL MATCH (f)-[:HAS_CAUSE]->(c:Cause)
-            OPTIONAL MATCH (f)-[:HAS_EFFECT]->(ef:Effect)
+        "function": """
+            MATCH (e:Element)-[:HAS_FUNCTION]->(f:Function {semantic_id:$sid})-[:HAS_MODE]->(m:Mode)
+            OPTIONAL MATCH (c:Cause)-[:CAUSES]->(m)
+            OPTIONAL MATCH (m)-[:LEADS_TO]->(ef:Effect)
             RETURN
-                f.failure_id AS failure_id,
-                head(collect(DISTINCT e.semantic_id)) AS element_sid,
-                head(collect(DISTINCT e.text)) AS element_text,
-                head(collect(DISTINCT fn.semantic_id)) AS function_sid,
-                head(collect(DISTINCT fn.text)) AS function_text,
-                head(collect(DISTINCT m.semantic_id)) AS mode_sid,
-                head(collect(DISTINCT m.text)) AS mode_text,
+                e.semantic_id AS element_sid,
+                e.text AS element_text,
+                f.semantic_id AS function_sid,
+                f.text AS function_text,
+                m.semantic_id AS mode_sid,
+                m.text AS mode_text,
                 collect(DISTINCT c) AS cause_nodes,
                 collect(DISTINCT ef) AS effect_nodes
         """,
-
-        "effect": """
-            MATCH (f:Failure)-[:HAS_EFFECT]->(ef0:Effect {semantic_id:$sid})
-            OPTIONAL MATCH (f)-[:HAS_ELEMENT]->(e:Element)
-            OPTIONAL MATCH (f)-[:HAS_FUNCTION]->(fn:Function)
-            OPTIONAL MATCH (f)-[:HAS_MODE]->(m:Mode)
-            OPTIONAL MATCH (f)-[:HAS_CAUSE]->(c:Cause)
-            OPTIONAL MATCH (f)-[:HAS_EFFECT]->(ef:Effect)
+        "mode": """
+            MATCH (e:Element)-[:HAS_FUNCTION]->(f:Function)-[:HAS_MODE]->(m:Mode {semantic_id:$sid})
+            OPTIONAL MATCH (c:Cause)-[:CAUSES]->(m)
+            OPTIONAL MATCH (m)-[:LEADS_TO]->(ef:Effect)
             RETURN
-                f.failure_id AS failure_id,
-                head(collect(DISTINCT e.semantic_id)) AS element_sid,
-                head(collect(DISTINCT e.text)) AS element_text,
-                head(collect(DISTINCT fn.semantic_id)) AS function_sid,
-                head(collect(DISTINCT fn.text)) AS function_text,
-                head(collect(DISTINCT m.semantic_id)) AS mode_sid,
-                head(collect(DISTINCT m.text)) AS mode_text,
+                e.semantic_id AS element_sid,
+                e.text AS element_text,
+                f.semantic_id AS function_sid,
+                f.text AS function_text,
+                m.semantic_id AS mode_sid,
+                m.text AS mode_text,
                 collect(DISTINCT c) AS cause_nodes,
                 collect(DISTINCT ef) AS effect_nodes
+        """,
+        "cause": """
+            MATCH (c:Cause {semantic_id:$sid})-[:CAUSES]->(m:Mode)
+            MATCH (e:Element)-[:HAS_FUNCTION]->(f:Function)-[:HAS_MODE]->(m)
+            OPTIONAL MATCH (allc:Cause)-[:CAUSES]->(m)
+            OPTIONAL MATCH (m)-[:LEADS_TO]->(ef:Effect)
+            RETURN
+                e.semantic_id AS element_sid,
+                e.text AS element_text,
+                f.semantic_id AS function_sid,
+                f.text AS function_text,
+                m.semantic_id AS mode_sid,
+                m.text AS mode_text,
+                collect(DISTINCT allc) AS cause_nodes,
+                collect(DISTINCT ef) AS effect_nodes
+        """,
+        "effect": """
+            MATCH (e:Element)-[:HAS_FUNCTION]->(f:Function)-[:HAS_MODE]->(m:Mode)-[:LEADS_TO]->(ef0:Effect {semantic_id:$sid})
+            OPTIONAL MATCH (c:Cause)-[:CAUSES]->(m)
+            OPTIONAL MATCH (m)-[:LEADS_TO]->(allef:Effect)
+            RETURN
+                e.semantic_id AS element_sid,
+                e.text AS element_text,
+                f.semantic_id AS function_sid,
+                f.text AS function_text,
+                m.semantic_id AS mode_sid,
+                m.text AS mode_text,
+                collect(DISTINCT c) AS cause_nodes,
+                collect(DISTINCT allef) AS effect_nodes
         """
     }
 
@@ -385,17 +384,13 @@ def expand_candidates_from_retrieved_nodes(session, field: str, retrieved_items)
         rows = session.run(cypher, sid=sid)
 
         for r in rows:
-            if not r["failure_id"]:
-                continue
-
             cause_nodes = [x for x in r["cause_nodes"] if x]
             effect_nodes = [x for x in r["effect_nodes"] if x]
 
-            candidate_id = r["failure_id"]
+            candidate_id = f"{r['element_sid']}|{r['function_sid']}|{r['mode_sid']}"
 
             candidates.append({
                 "candidate_id": candidate_id,
-                "failure_id": r["failure_id"],
 
                 "element_sid": r["element_sid"],
                 "element_text": r["element_text"],
@@ -789,7 +784,7 @@ if __name__ == "__main__":
         print(f"Causes  : {len(query['causes'])}")
         print(f"Effects : {len(query['effects'])}")
 
-        results = semantic_failure_search(query, top_k=20,retrieval_k_each=100, retrieval_pool_k= 300, min_score= 0.82)
+        results = semantic_failure_search(query, top_k=20,retrieval_k_each=100, retrieval_pool_k= 300, min_score= 0.80)
         print_results(results)
 
     finally:
