@@ -305,9 +305,9 @@ if __name__ == "__main__":
 
     print("\n=== Semantic Search Mode ===")
     semantic_search(
-        "Effect",
-        "effect_embedding",
-        "Motor overheat",
+        "Cause",
+        "cause_embedding",
+        "Control parameters incorrect",
         # discipline=["mechanics", "unknown"],
         top_k=20
     )
