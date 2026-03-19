@@ -9,7 +9,7 @@ import re
 from langchain_core.documents import Document
 import pdfplumber
 
-REQ_PATTERN = r"(REQ_\d+|DRQ_\d+|LIM_\d+|CHO_\d+)"
+REQ_PATTERN = r"(REQ_\d+|DRQ_\d+|LIM_\d+|CHO_\d+|LIM_\d)"
 #### ---------------------------------------------
 #### 1. Load documents
 #### ---------------------------------------------
@@ -121,11 +121,11 @@ def prepare_chunks(file_path):
     if file_path.endswith(".pdf"):
         table_chunks = extract_tables_from_pdf(file_path)
 
-    all_chunks = req_chunks + table_chunks
+    # all_chunks = req_chunks + table_chunks
 
-    print(f"[INFO] Total chunks: {len(all_chunks)}")
+    print(f"[INFO] Total chunks: {len(req_chunks)}")
 
-    return all_chunks
+    return req_chunks
 
 #### ---------------------------------------------
 #### 3. Create embeddings model

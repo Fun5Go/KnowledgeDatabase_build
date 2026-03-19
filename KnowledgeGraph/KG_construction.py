@@ -429,7 +429,11 @@ class FMEAVectorKGBuilder:
         return group_id
 
     # ----------------------------------------
-    # RELATIONS: ORIGINAL KG (保持不变)
+    # RELATIONS: ORIGINAL KG
+    # 新结构:
+    # Element -> Function -> Mode -> Effect
+    # Cause  -> Mode
+    # 即: (c:Cause)-[:CAUSES]->(m:Mode)
     # ----------------------------------------
 
     def create_edges(
@@ -463,17 +467,18 @@ class FMEAVectorKGBuilder:
                 mode=mode_id,
             )
 
-        if mode_id and cause_id:
+        # Cause -> causes -> Mode
+        if cause_id and mode_id:
             session.run(
                 """
-                MATCH (m:Mode {semantic_id:$mode})
                 MATCH (c:Cause {semantic_id:$cause})
-                MERGE (m)-[r:CAUSED_BY]->(c)
+                MATCH (m:Mode {semantic_id:$mode})
+                MERGE (c)-[r:CAUSES]->(m)
                 ON CREATE SET r.weight = 1
                 ON MATCH SET r.weight = r.weight + 1
                 """,
-                mode=mode_id,
                 cause=cause_id,
+                mode=mode_id,
             )
 
         if mode_id and effect_id:
@@ -644,7 +649,7 @@ class FMEAVectorKGBuilder:
                 if pnid is None:
                     skipped["product"] += 1
 
-                # failure entity structure 
+                # 原始语义层
                 self.create_edges(
                     session=session,
                     element_id=element_id,
@@ -766,7 +771,7 @@ class FMEAVectorKGBuilder:
                     group_id=group_id
                 )
 
-        # =========================================================
+    # =========================================================
     # Common helper
     # =========================================================
     def _compute_avg_embedding(self, session, label: str, member_ids: List[str]):
@@ -787,6 +792,10 @@ class FMEAVectorKGBuilder:
 
     # =========================================================
     # Cause Group Merge
+    # 新结构下:
+    # SubCause -[:CAUSES]-> Mode
+    # 迁移成:
+    # GroupCause -[:CAUSES]-> Mode
     # =========================================================
     def merge_cause_group_v3(self, group_item: Dict[str, Any]):
         member_ids = group_item.get("member_node_ids", [])
@@ -845,10 +854,10 @@ class FMEAVectorKGBuilder:
                 MATCH (sc:SubCause)-[:BELONGS_TO]->(cg)
                 WHERE sc.semantic_id IN $member_ids
 
-                // ---- Mode -> SubCause 迁移到 Mode -> Group ----
-                OPTIONAL MATCH (m:Mode)-[r1:CAUSED_BY]->(sc)
+                // ---- SubCause -> Mode 迁移到 GroupCause -> Mode ----
+                OPTIONAL MATCH (sc)-[r1:CAUSES]->(m:Mode)
                 FOREACH (_ IN CASE WHEN r1 IS NOT NULL THEN [1] ELSE [] END |
-                    MERGE (m)-[r2:CAUSED_BY]->(cg)
+                    MERGE (cg)-[r2:CAUSES]->(m)
                     ON CREATE SET r2.weight = coalesce(r1.weight, 1)
                     ON MATCH SET r2.weight = coalesce(r2.weight, 0) + coalesce(r1.weight, 1)
                     DELETE r1
@@ -856,7 +865,7 @@ class FMEAVectorKGBuilder:
 
                 WITH cg, sc
 
-                // ---- Failure -> SubCause 迁移到 Failure -> Group ----
+                // ---- Failure -> SubCause 迁移到 Failure -> GroupCause ----
                 OPTIONAL MATCH (f:Failure)-[r3:HAS_CAUSE]->(sc)
                 FOREACH (_ IN CASE WHEN r3 IS NOT NULL THEN [1] ELSE [] END |
                     MERGE (f)-[:HAS_CAUSE]->(cg)
@@ -879,6 +888,8 @@ class FMEAVectorKGBuilder:
 
     # =========================================================
     # Effect Group Merge
+    # Effect 方向不变:
+    # Mode -[:LEADS_TO]-> Effect
     # =========================================================
     def merge_effect_group_v3(self, group_item: Dict[str, Any]):
         member_ids = group_item.get("member_node_ids", [])
@@ -971,6 +982,7 @@ class FMEAVectorKGBuilder:
 
     # =========================================================
     # Mode Group Merge
+    # Cause -[:CAUSES]-> GroupMode
     # =========================================================
     def merge_mode_group_v3(self, group_item: Dict[str, Any]):
         member_ids = group_item.get("member_node_ids", [])
@@ -1042,12 +1054,12 @@ class FMEAVectorKGBuilder:
                 WITH gm, sm
 
                 // -------------------------
-                // GroupMode -> Cause
+                // Cause -> SubMode → Cause -> GroupMode
                 // -------------------------
-                OPTIONAL MATCH (sm)-[r2:CAUSED_BY]->(c)
+                OPTIONAL MATCH (c:Cause)-[r2:CAUSES]->(sm)
                 WITH gm, sm, c, r2, coalesce(r2.weight, 1) AS w
                 FOREACH (_ IN CASE WHEN r2 IS NOT NULL THEN [1] ELSE [] END |
-                    MERGE (gm)-[r:CAUSED_BY]->(c)
+                    MERGE (c)-[r:CAUSES]->(gm)
                     ON CREATE SET r.weight = w
                     ON MATCH SET r.weight = coalesce(r.weight, 0) + w
                     DELETE r2
@@ -1165,31 +1177,31 @@ def main():
     )
 
     try:
-    #     print("Creating constraints...")
-    #     builder.create_constraints()
+        print("Creating constraints...")
+        builder.create_constraints()
 
-    #     print("Creating vector indexes...")
-    #     builder.create_vector_indexes()
+        print("Creating vector indexes...")
+        builder.create_vector_indexes()
 
-    #     print("Building main graph...")
-    #     builder.build_graph(JSON_FILE)
+        print("Building main graph...")
+        builder.build_graph(JSON_FILE)
 
-    #     print("Building cause sentence groups...")
-    #     builder.build_cause_sentence_groups(SENTENCE_JSON)
+        print("Building cause sentence groups...")
+        builder.build_cause_sentence_groups(SENTENCE_JSON)
 
-    #     print("Building 8D failure sentence groups...")
-    #     builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
+        print("Building 8D failure sentence groups...")
+        builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
 
-    #     print("Vector KG build complete.")
+        print("Vector KG build complete.")
 
-        print("Merge mode groups:")
-        builder.merge_all_groups(MODE_GROUP)
+        # print("Merge mode groups:")
+        # builder.merge_all_groups(MODE_GROUP)
 
-        print("\nMerge cause groups:")
-        builder.merge_all_groups(CAUSE_GROUP)
+        # print("\nMerge cause groups:")
+        # builder.merge_all_groups(CAUSE_GROUP)
 
-        print("\nMerge effect groups:")
-        builder.merge_all_groups(EFFECT_GROUP)
+        # print("\nMerge effect groups:")
+        # builder.merge_all_groups(EFFECT_GROUP)
 
     finally:
         builder.close()
