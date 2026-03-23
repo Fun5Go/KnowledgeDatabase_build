@@ -15,6 +15,7 @@ def load_nodes(node_file):
 
     node_ids = df["node_id"].tolist()
     node_types = df["node_type"].tolist()
+    node_texts = df["text"].tolist()   # 这里加 text 列
 
     embeddings = []
     for emb_str in df["embedding"]:
@@ -26,8 +27,9 @@ def load_nodes(node_file):
     node2id = {nid: i for i, nid in enumerate(node_ids)}
     id2node = {i: nid for nid, i in node2id.items()}
     id2type = {node2id[nid]: t for nid, t in zip(node_ids, node_types)}
+    id2text = {node2id[nid]: txt for nid, txt in zip(node_ids, node_texts)}
 
-    return node2id, id2node, id2type, x
+    return node2id, id2node, id2type, id2text, x
 
 
 def load_triples(triple_file, node2id):
@@ -155,6 +157,25 @@ def predict_tail(model, x, edge_index, edge_type,
 
     return [(candidate_ids[i], values[j].item()) for j, i in enumerate(indices)]
 
+#=========================
+# Print Function 
+#=========================
+def print_predictions(results, direction_name, id2node, id2type, id2text=None):
+    print(f"\n=== {direction_name} ===")
+
+    if not results:
+        print("No prediction results.")
+        return
+
+    for rank, (nid, score) in enumerate(results, 1):
+        print(f"[{rank}]")
+        print(f"  node_id   : {id2node[nid]}")
+        print(f"  node_type : {id2type[nid]}")
+        if id2text is not None:
+            print(f"  text      : {id2text[nid]}")
+        print(f"  score     : {score:.4f}")
+        print("-" * 50)
+
 
 # =========================
 # 7. TASK FUNCTIONS
@@ -162,7 +183,11 @@ def predict_tail(model, x, edge_index, edge_type,
 
 def infer_cause_to_mode(model, x, edge_index, edge_type,
                         node2id, id2node, id2type, rel2id,
-                        cause_node_id, top_k=10):
+                        cause_node_id, top_k=10, do_print=True, id2text=None):
+
+    if cause_node_id not in node2id:
+        print(f"Cause node not found: {cause_node_id}")
+        return []
 
     head_id = node2id[cause_node_id]
     relation_id = rel2id["CAUSES"]
@@ -174,16 +199,22 @@ def infer_cause_to_mode(model, x, edge_index, edge_type,
         head_id, relation_id, candidates, top_k
     )
 
-    output = []
-    for nid, score in results:
-        output.append((id2node[nid], score))
+    if do_print:
+        print(f"\nInput cause node_id : {cause_node_id}")
+        if id2text is not None:
+            print(f"Input cause text    : {id2text.get(head_id, 'N/A')}")
+        print_predictions(results, "Cause → Mode", id2node, id2type, id2text)
 
-    return output
+    return results
 
 
 def infer_mode_to_effect(model, x, edge_index, edge_type,
                          node2id, id2node, id2type, rel2id,
-                         mode_node_id, top_k=10):
+                         mode_node_id, top_k=10, do_print=True, id2text=None):
+
+    if mode_node_id not in node2id:
+        print(f"Mode node not found: {mode_node_id}")
+        return []
 
     head_id = node2id[mode_node_id]
     relation_id = rel2id["LEADS_TO"]
@@ -195,9 +226,15 @@ def infer_mode_to_effect(model, x, edge_index, edge_type,
         head_id, relation_id, candidates, top_k
     )
 
-    print("\n=== Mode → Effect ===")
-    for nid, score in results:
-        print(f"{id2node[nid]} | {score:.4f}")
+    if do_print:
+        print(f"\nInput mode node_id : {mode_node_id}")
+        if id2text is not None:
+            print(f"Input mode text    : {id2text.get(head_id, 'N/A')}")
+        print_predictions(results, "Mode → Effect", id2node, id2type, id2text)
+
+    return results
+
+
 
 
 # =========================
@@ -211,7 +248,7 @@ def main():
     model_path = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_model.pt"
 
     # load data
-    node2id, id2node, id2type, x = load_nodes(node_file)
+    node2id, id2node, id2type, id2text, x = load_nodes(node_file)
     triples_raw, rel_list_base = load_triples(triple_file, node2id)
 
     # relations
@@ -234,22 +271,21 @@ def main():
     # =====================
 
     # 改成你的真实 node_id
-    cause_node = "cause:3e9711da8dc3"
-    mode_node = "your_mode_node_id"
+    cause_node = "cause:07c9a458b907"
+    mode_node = "mode:"
 
     if cause_node in node2id:
-        result = infer_cause_to_mode(
+        infer_cause_to_mode(
             model, x, edge_index, edge_type,
             node2id, id2node, id2type, rel2id,
-            cause_node, top_k=10
+            cause_node, top_k=20, do_print=True, id2text=id2text
         )
-        print(result)
 
     if mode_node in node2id:
         infer_mode_to_effect(
             model, x, edge_index, edge_type,
             node2id, id2node, id2type, rel2id,
-            mode_node, top_k=10
+            mode_node, top_k=40,do_print=True, id2text=id2text
         )
 
 

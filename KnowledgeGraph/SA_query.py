@@ -775,8 +775,58 @@ if __name__ == "__main__":
         ]
     }
 
+    structure_input_motorcontrol = {
+    "product_domain": "motor_drives",
+    "nodes": [
+        {
+            "element_id": "E1",
+            "failure_element": "Motor control",
+            "modes": [
+                "Component break-down",
+                "Unbalanced motor currents",
+                "Incorrect interpretation zero-crossing",
+                "Soft start too long",
+                "No detection",
+                "Welded relay",
+                "Relay cannot close",
+                "False turn-on / turn-off"
+            ],
+            "causes": {
+            "mechanics": [
+                "Cooling insufficient",
+                "Compressor vibrations"
+            ],
+            "hardware": [
+                "(Starting) Motor current too high for chosen components",
+                "Overvoltage due to motor disconnect",
+                "Under Voltage due to incorrect triggering",
+                "Live switching of relays"
+            ],
+            "software": [
+                "Priority zero-crossing interrupt too low",
+                "Open loop control"
+            ],
+            "other": [
+                "No (correctly designed) snubber design",
+                "Too high dT junction as a result of power cycling of component"
+            ]
+            },
+            "effects": [
+                "Motor cannot start",
+                "Overcurrent towards motor",
+                "Motor starts without soft start",
+                #Extra
+                # "(Final) Pressure deviates from setpoints",
+                # "Overpressure",
+                # "No pressure build-up",
+                # "No user control",
+            ]
+        }
+    ]
+}
+
     try:
-        query = build_query_from_structure_input(structure_input_powertrain)
+        query = build_query_from_structure_input(structure_input_motorcontrol)
 
         print("Query Summary")
         print("-" * 80)

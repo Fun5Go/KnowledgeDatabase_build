@@ -1239,8 +1239,8 @@ if  __name__ == "__main__":
 }
 
 
-    results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_motorcontrol,save_query_json=True,
-                                                                  min_similarity=0.3,top_k_per_field=15,hybrid=False, rerank = True)
+    results_graph = generate_query_unique_chains(persist_dir=KB_PATH,structure_input=structure_input_powertrain,save_query_json=True,
+                                                                  min_similarity=0.4,top_k_per_field=3,hybrid=False, rerank = True)
     # print_query_chain_results(
     #     results_graph,
     #     top_query_combos=30,

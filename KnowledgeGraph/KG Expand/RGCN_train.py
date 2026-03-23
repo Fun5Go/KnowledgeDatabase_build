@@ -404,7 +404,7 @@ def main():
     #     model, x, edge_index, edge_type,
     #     head_id=cause_id,
     #     relation_id=relation_id,
-    #     candidate_tail_ids=candidate_modes,
+    #     vc=candidate_modes,
     #     top_k=10
     # )
     
