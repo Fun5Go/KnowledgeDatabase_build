@@ -1194,14 +1194,14 @@ def main():
 
         print("Vector KG build complete.")
 
-        print("Merge mode groups:")
-        builder.merge_all_groups(MODE_GROUP)
+        # print("Merge mode groups:")
+        # builder.merge_all_groups(MODE_GROUP)
 
-        print("\nMerge cause groups:")
-        builder.merge_all_groups(CAUSE_GROUP)
+        # print("\nMerge cause groups:")
+        # builder.merge_all_groups(CAUSE_GROUP)
 
-        print("\nMerge effect groups:")
-        builder.merge_all_groups(EFFECT_GROUP)
+        # print("\nMerge effect groups:")
+        # builder.merge_all_groups(EFFECT_GROUP)
 
     finally:
         builder.close()
