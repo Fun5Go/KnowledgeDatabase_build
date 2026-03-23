@@ -76,6 +76,57 @@ structure_input_powertrain = {
 }
 
 
+structure_input_motorcontrol = {
+    "product_domain": "motor_drives",
+    "nodes": [
+        {
+            "element_id": "E1",
+            "failure_element": "Motor control",
+            "modes": [
+                "Component break-down",
+                "Unbalanced motor currents",
+                "Incorrect interpretation zero-crossing",
+                "Soft start too long",
+                "No detection",
+                "Welded relay",
+                "Relay cannot close",
+                "False turn-on / turn-off"
+            ],
+            "causes": {
+            "mechanics": [
+                "Cooling insufficient",
+                "Compressor vibrations"
+            ],
+            "hardware": [
+                "(Starting) Motor current too high for chosen components",
+                "Overvoltage due to motor disconnect",
+                "Under Voltage due to incorrect triggering",
+                "Live switching of relays"
+            ],
+            "software": [
+                "Priority zero-crossing interrupt too low",
+                "Open loop control"
+            ],
+            "other": [
+                "No (correctly designed) snubber design",
+                "Too high dT junction as a result of power cycling of component"
+            ]
+            },
+            "effects": [
+                "Motor cannot start",
+                "Overcurrent towards motor",
+                "Motor starts without soft start",
+                #Extra
+                # "(Final) Pressure deviates from setpoints",
+                # "Overpressure",
+                # "No pressure build-up",
+                # "No user control",
+            ]
+        }
+    ]
+}
+
+
 # =========================================================
 # 1. CONFIG
 # =========================================================
@@ -85,16 +136,16 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
-NODE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KnowledgeGraph\KG Expand\nodes.tsv"
-TRIPLE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KnowledgeGraph\KG Expand\triples.tsv"
+NODE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
+TRIPLE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
 MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_model.pt"
 
 HIDDEN_DIM = 128
 OUT_DIM = 128
 
 TOP_K_MAP = 3
-MIN_SIM = 0.85
-POOL_K = 100
+MIN_SIM = 0.80
+POOL_K = 50
 
 TOP_K_PRED = 3
 PRED_SCORE_THRESHOLD = 0.0
@@ -597,67 +648,67 @@ def run_structure_mapping_and_inference(
     print(f"\nMapped mode candidate count   : {len(mapped_mode_ids)}")
     print(f"Mapped effect candidate count : {len(mapped_effect_ids)}")
 
-    # Step 2A: cause -> mode
-    print(f"\n{'#' * 80}")
-    print("RUNNING CAUSE -> MODE INFERENCE")
-    print(f"{'#' * 80}")
+    # # Step 2A: cause -> mode
+    # print(f"\n{'#' * 80}")
+    # print("RUNNING CAUSE -> MODE INFERENCE")
+    # print(f"{'#' * 80}")
 
-    for cause_item in mapped["causes"]:
-        query_text = cause_item["query_text"]
+    # for cause_item in mapped["causes"]:
+    #     query_text = cause_item["query_text"]
 
-        if not cause_item["mapped_nodes"]:
-            print(f"\nSkip cause query (no mapping): {query_text}")
-            continue
+    #     if not cause_item["mapped_nodes"]:
+    #         print(f"\nSkip cause query (no mapping): {query_text}")
+    #         continue
 
-        for mapped_cause in cause_item["mapped_nodes"]:
-            cause_id = mapped_cause["kg_id"]
+    #     for mapped_cause in cause_item["mapped_nodes"]:
+    #         cause_id = mapped_cause["kg_id"]
 
-            results = infer_cause_to_mode(
-                model, x, edge_index, edge_type,
-                node2id, id2node, id2type, rel2id,
-                cause_node_id=cause_id,
-                candidate_mode_node_ids=mapped_mode_ids,
-                top_k=TOP_K_PRED
-            )
+    #         results = infer_cause_to_mode(
+    #             model, x, edge_index, edge_type,
+    #             node2id, id2node, id2type, rel2id,
+    #             cause_node_id=cause_id,
+    #             candidate_mode_node_ids=mapped_mode_ids,
+    #             top_k=TOP_K_PRED
+    #         )
 
-            print_cause_to_mode_predictions(
-                query_text=query_text,
-                mapped_cause=mapped_cause,
-                results=results,
-                kg_text_lookup=kg_text_lookup,
-                kg_mode_to_query_texts=kg_mode_to_query_texts
-            )
+    #         print_cause_to_mode_predictions(
+    #             query_text=query_text,
+    #             mapped_cause=mapped_cause,
+    #             results=results,
+    #             kg_text_lookup=kg_text_lookup,
+    #             kg_mode_to_query_texts=kg_mode_to_query_texts
+    #         )
 
-    # Step 2B: mode -> effect
-    print(f"\n{'#' * 80}")
-    print("RUNNING MODE -> EFFECT INFERENCE")
-    print(f"{'#' * 80}")
+    # # Step 2B: mode -> effect
+    # print(f"\n{'#' * 80}")
+    # print("RUNNING MODE -> EFFECT INFERENCE")
+    # print(f"{'#' * 80}")
 
-    for mode_item in mapped["modes"]:
-        query_text = mode_item["query_text"]
+    # for mode_item in mapped["modes"]:
+    #     query_text = mode_item["query_text"]
 
-        if not mode_item["mapped_nodes"]:
-            print(f"\nSkip mode query (no mapping): {query_text}")
-            continue
+    #     if not mode_item["mapped_nodes"]:
+    #         print(f"\nSkip mode query (no mapping): {query_text}")
+    #         continue
 
-        for mapped_mode in mode_item["mapped_nodes"]:
-            mode_id = mapped_mode["kg_id"]
+    #     for mapped_mode in mode_item["mapped_nodes"]:
+    #         mode_id = mapped_mode["kg_id"]
 
-            results = infer_mode_to_effect(
-                model, x, edge_index, edge_type,
-                node2id, id2node, id2type, rel2id,
-                mode_node_id=mode_id,
-                candidate_effect_node_ids=mapped_effect_ids,
-                top_k=TOP_K_PRED
-            )
+    #         results = infer_mode_to_effect(
+    #             model, x, edge_index, edge_type,
+    #             node2id, id2node, id2type, rel2id,
+    #             mode_node_id=mode_id,
+    #             candidate_effect_node_ids=mapped_effect_ids,
+    #             top_k=TOP_K_PRED
+    #         )
 
-            print_mode_to_effect_predictions(
-                query_text=query_text,
-                mapped_mode=mapped_mode,
-                results=results,
-                kg_text_lookup=kg_text_lookup,
-                kg_effect_to_query_texts=kg_effect_to_query_texts
-            )
+    #         print_mode_to_effect_predictions(
+    #             query_text=query_text,
+    #             mapped_mode=mapped_mode,
+    #             results=results,
+    #             kg_text_lookup=kg_text_lookup,
+    #             kg_effect_to_query_texts=kg_effect_to_query_texts
+    #         )
 
 
 # =========================================================
@@ -692,7 +743,7 @@ def main():
         with kg_client.session() as session:
             run_structure_mapping_and_inference(
                 session=session,
-                structure_input=structure_input_powertrain,
+                structure_input=structure_input_motorcontrol,
                 model=model,
                 x=x,
                 edge_index=edge_index,

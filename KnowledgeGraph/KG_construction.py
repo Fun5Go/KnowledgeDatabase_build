@@ -1177,22 +1177,22 @@ def main():
     )
 
     try:
-        # print("Creating constraints...")
-        # builder.create_constraints()
+        print("Creating constraints...")
+        builder.create_constraints()
 
-        # print("Creating vector indexes...")
-        # builder.create_vector_indexes()
+        print("Creating vector indexes...")
+        builder.create_vector_indexes()
 
-        # print("Building main graph...")
-        # builder.build_graph(JSON_FILE)
+        print("Building main graph...")
+        builder.build_graph(JSON_FILE)
 
-        # print("Building cause sentence groups...")
-        # builder.build_cause_sentence_groups(SENTENCE_JSON)
+        print("Building cause sentence groups...")
+        builder.build_cause_sentence_groups(SENTENCE_JSON)
 
-        # print("Building 8D failure sentence groups...")
-        # builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
+        print("Building 8D failure sentence groups...")
+        builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
 
-        # print("Vector KG build complete.")
+        print("Vector KG build complete.")
 
         print("Merge mode groups:")
         builder.merge_all_groups(MODE_GROUP)

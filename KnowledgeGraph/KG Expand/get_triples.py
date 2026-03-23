@@ -17,6 +17,7 @@ NODES_FILE = "nodes.tsv"
 def export_kg():
     driver = GraphDatabase.driver(
         NEO4J_URI,
+
         auth=(NEO4J_USER, NEO4J_PASSWORD)
     )
 
@@ -25,8 +26,8 @@ def export_kg():
         "HAS_MODE",
         "CAUSES",
         "LEADS_TO",
-        "CAUSES_EFFECT",
-        "BELONGS_TO"
+        # "CAUSES_EFFECT",
+        # "BELONGS_TO"
     ]
 
     relation_filter = ",".join([f"'{r}'" for r in RELATIONS])

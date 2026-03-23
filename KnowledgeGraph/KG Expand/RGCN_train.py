@@ -332,8 +332,8 @@ def predict_head(
 # =========================
 
 def main():
-    node_file = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KnowledgeGraph\KG Expand\nodes.tsv"
-    triple_file = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KnowledgeGraph\KG Expand\triples.tsv"
+    node_file = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
+    triple_file = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
 
     # 1) load nodes and triples
     node2id, id2type, x = load_nodes(node_file)
@@ -343,10 +343,10 @@ def main():
     base_rel2type = {
         "CAUSES": ("Cause", "Mode"),
         "LEADS_TO": ("Mode", "Effect"),
-        "CAUSES_EFFECT": ("Cause", "Effect"),
+        # "CAUSES_EFFECT": ("Cause", "Effect"),
         "HAS_FUNCTION": ("Element", "Function"),
         "HAS_MODE": ("Function", "Mode"),
-        "BELONGS_TO": ("Mode", "Mode"),
+        # "BELONGS_TO": ("Mode", "Mode"),
     }
 
     # 3) validate schema against data
@@ -382,7 +382,7 @@ def main():
         id2type=id2type,
         rel2type=rel2type,
         id2rel=id2rel,
-        epochs=50,
+        epochs=100,
         lr=0.005
     )
 
