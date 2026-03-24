@@ -203,7 +203,6 @@ class Model(nn.Module):
         x = self.input_proj(x)
         x = F.relu(x)
         z = self.rgcn(x, edge_index, edge_type)
-        z = F.normalize(z, p=2, dim=1)
         return z
 
     def score(self, z, triples):
@@ -729,8 +728,8 @@ def main():
     # -------------------------
     train_raw, valid_raw, test_raw = split_triples_by_relation(
         triples_raw,
-        train_ratio=0.8,
-        valid_ratio=0.1,
+        train_ratio=0.9,
+        valid_ratio=0.05,
         seed=SEED
     )
 
@@ -763,9 +762,9 @@ def main():
     model = Model(
         in_dim=x.shape[1],
         hidden_dim=256,
-        emb_dim=128,
+        emb_dim=256,
         num_relations=len(rel2id),
-        dropout=0.2,
+        dropout=0.0,
         num_bases=4
     ).to(DEVICE)
 
@@ -836,7 +835,7 @@ def main():
     for rel, metrics in test_rel_metrics.items():
         print(rel, metrics)
 
-    print_candidate_stats(train_triples, id2type, rel2type, id2rel)
+    print_candidate_stats(test_triples, id2type, rel2type, id2rel)
 
 
 if __name__ == "__main__":

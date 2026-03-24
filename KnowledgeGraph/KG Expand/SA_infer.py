@@ -119,6 +119,7 @@ structure_input_motorcontrol = {
                 "Motor cannot start",
                 "Overcurrent towards motor",
                 "Motor starts without soft start",
+                "Short-circuit",
                 #Extra
                 # "(Final) Pressure deviates from setpoints",
                 # "Overpressure",
@@ -148,14 +149,14 @@ MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_bes
 HIDDEN_DIM = 256
 OUT_DIM = 128
 
-TOP_K_MAP = 5
+TOP_K_MAP = 10
 MIN_SIM = 0.85
-POOL_K = 50
+POOL_K = 100
 
 TOP_K_PRED = 2
 PRED_SCORE_THRESHOLD = 0.0
 
-SOFTMAP_TEMPERATURE = 0.15
+SOFTMAP_TEMPERATURE = 0.1
 
 
 # =========================================================
@@ -427,7 +428,7 @@ class Model(nn.Module):
         x = self.input_proj(x)
         x = F.relu(x)
         z = self.rgcn(x, edge_index, edge_type)
-        z = F.normalize(z, p=2, dim=1)
+        # z = F.normalize(z, p=2, dim=1)
         return z
 
     def score(self, z, triples):
@@ -985,9 +986,9 @@ def main():
         path=MODEL_PATH,
         in_dim=x.shape[1],
         hidden_dim=256,
-        emb_dim=128,
+        emb_dim=256,
         num_relations=8,
-        dropout=0.2,
+        dropout=0.0,
         num_bases=4,
         device=DEVICE
     )
