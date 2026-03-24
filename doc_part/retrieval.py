@@ -75,7 +75,7 @@ def rerank_results(query, docs, cross_encoder, top_n=5):
 if __name__ == "__main__":
     # main()
     persist_dir = "./DATA/chroma_langchain_db"
-    collection_name = "example_collection"
+    collection_name = "fs_requirements"
     embeddings = create_embeddings()
     vector_store = load_vector_store(
         embeddings,
@@ -84,14 +84,12 @@ if __name__ == "__main__":
     )
     cross_encoder = create_cross_encoder()
 
-    query = "Motor design (temperature spec, actuation length/duty cycle)"
-
+    query =   "Component break-down due to (Starting) Motor current too high for chosen components leading to Motor cannot start."
     # Step 1: vector search
     initial_results = query_vector_store(
         vector_store,
         query,
-        top_n=20,
-        doc_type="FS"
+        top_n=100
     )
 
     # Step 2: rerank
@@ -99,7 +97,7 @@ if __name__ == "__main__":
         query,
         initial_results,
         cross_encoder,
-        top_n=10
+        top_n=5
     )
 
     print("\n==== FINAL RESULTS ====\n")

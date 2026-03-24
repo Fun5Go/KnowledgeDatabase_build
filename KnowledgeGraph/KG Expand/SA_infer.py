@@ -19,66 +19,67 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # =========================================================
 
 structure_input_powertrain = {
-        "product_domain": "motor_drives",
-        "nodes": [
-            {
-                "element_id": "E1",
-                "failure_element": "Power train",
-                "modes": [
-                    "No voltage applied",
-                    "Incorrect torque applied",
-                    "Not enough torque",
-                    "Motor breaks/overheats (e.g. resulting in demagnetisation)",
-                    "Unstable regulation",
-                    "High loss in torque transfer",
-                    "Gear train breaks/wears out",
-                    "Tranmission ratio drifts",
-                    "creates too much noise"
+    "product_domain": "motor_drives",
+    "nodes": [
+        {
+            "element_id": "E1",
+            "failure_element": "Power train",
+            "modes": [
+                "No voltage applied",
+                "Incorrect torque applied",
+                "Not enough torque",
+                "Motor breaks/overheats (e.g. resulting in demagnetisation)",
+                "Unstable regulation",
+                "High loss in torque transfer",
+                "Gear train breaks/wears out",
+                "Tranmission ratio drifts",
+                "creates too much noise"
+            ],
+            "causes": {
+                "mechanics": [
+                    "Gears loose on motor shaft (slips)",
+                    "External force on spline",
+                    "Motor can not provide enough torque",
+                    "Too much friction in gear train",
+                    "Gears material/design choice",
+                    "Manufacturing tolerances of gears",
+                    "Lubrication choice (e.g. degradation)",
+                    "Motor design (temperature spec, actuation length/duty cycle)"
                 ],
-                "causes": {
-                    "mechanics": [
-                        "Gears loose on motor shaft (slips)",
-                        "External force on spline",
-                        "Motor can not provide enough torque",
-                        "Too much friction in gear train",
-                        "Gears material/design choice",
-                        "Manufacturing tolerances of gears",
-                        "Lubrication choice (e.g. degradation)",
-                        "Motor design (temperature spec, actuation length/duty cycle)"
-                    ],
-                    "hardware": [
-                        "Encoder circuit crosstalk",
-                        "HW cannot supply enough power",
-                        "ADC measurements incorrect (incl. bandwidth)",
-                        "Wrong motor driver dimension (current rating etc.)",
-                        "Overcurrent detection incorrect (threshold etc.)",
-                        "Incorrect control loop (bandwidth)",
-                        "Motor not shorted while device is not powered"
-                    ],
-                    "software": [
-                        "Control parameters incorrect",
-                        "Thermal protection fails (e.g. I2T)"
-                    ]
-                },
-                "effects": [
-                    "Does not shift gear",
-                    "Incorrect gear shift",
-                    "Incorrect cadence (offset)",
-                    "Unstable cadence setting",
-                    "Incorrect cadence (fixed gear ratio)",
-                    "Incorrect ratio (offset)",
-                    "Unstable ratio setting",
-                    "Does not enter limp home mode",
-                    "Sets wrong gear ratio",
-                    "Gear ratio drifts when battery is empty",
-                    "Firmware update not possible/fails",
-                    "Device bricked",
-                    "Update takes too much time (>5 minutes)",
-                    "Too much noise"
+                "hardware": [
+                    "Encoder circuit crosstalk",
+                    "HW cannot supply enough power",
+                    "ADC measurements incorrect (incl. bandwidth)",
+                    "Wrong motor driver dimension (current rating etc.)",
+                    "Overcurrent detection incorrect (threshold etc.)",
+                    "Incorrect control loop (bandwidth)",
+                    "Motor not shorted while device is not powered"
+                ],
+                "software": [
+                    "Control parameters incorrect",
+                    "Thermal protection fails (e.g. I2T)"
                 ]
-            }
-        ]
-    }
+            },
+            "effects": [
+                "Does not shift gear",
+                "Incorrect gear shift",
+                "Incorrect cadence (offset)",
+                "Unstable cadence setting",
+                "Incorrect cadence (fixed gear ratio)",
+                "Incorrect ratio (offset)",
+                "Unstable ratio setting",
+                "Does not enter limp home mode",
+                "Sets wrong gear ratio",
+                "Gear ratio drifts when battery is empty",
+                "Firmware update not possible/fails",
+                "Device bricked",
+                "Update takes too much time (>5 minutes)",
+                "Too much noise"
+            ]
+        }
+    ]
+}
+
 structure_input_motorcontrol = {
     "product_domain": "motor_drives",
     "nodes": [
@@ -96,45 +97,39 @@ structure_input_motorcontrol = {
                 "False turn-on / turn-off"
             ],
             "causes": {
-            "mechanics": [
-                "Cooling insufficient",
-                "Compressor vibrations"
-            ],
-            "hardware": [
-                "(Starting) Motor current too high for chosen components",
-                "Overvoltage due to motor disconnect",
-                "Under Voltage due to incorrect triggering",
-                "Live switching of relays"
-            ],
-            "software": [
-                "Priority zero-crossing interrupt too low",
-                "Open loop control"
-            ],
-            "other": [
-                "No (correctly designed) snubber design",
-                "Too high dT junction as a result of power cycling of component"
-            ]
+                "mechanics": [
+                    "Cooling insufficient",
+                    "Compressor vibrations"
+                ],
+                "hardware": [
+                    "(Starting) Motor current too high for chosen components",
+                    "Overvoltage due to motor disconnect",
+                    "Under Voltage due to incorrect triggering",
+                    "Live switching of relays"
+                ],
+                "software": [
+                    "Priority zero-crossing interrupt too low",
+                    "Open loop control"
+                ],
+                "other": [
+                    "No (correctly designed) snubber design",
+                    "Too high dT junction as a result of power cycling of component"
+                ]
             },
             "effects": [
                 "Motor cannot start",
                 "Overcurrent towards motor",
                 "Motor starts without soft start",
                 "Short-circuit",
-                #Extra
-                # "(Final) Pressure deviates from setpoints",
-                # "Overpressure",
-                # "No pressure build-up",
-                # "No user control",
             ]
         }
     ]
 }
 
-
-
 # =========================================================
 # 1. CONFIG
 # =========================================================
+
 load_dotenv()
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -147,17 +142,18 @@ TRIPLE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples
 MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_best_model.pt"
 
 HIDDEN_DIM = 256
-OUT_DIM = 128
+EMD_DIM = 256
 
-TOP_K_MAP = 10
+TOP_K_MAP = 3
 MIN_SIM = 0.85
 POOL_K = 100
 
-TOP_K_PRED = 2
+TOP_K_PRED = 3
 PRED_SCORE_THRESHOLD = 0.0
 
-SOFTMAP_TEMPERATURE = 0.1
-
+WEIGHTING_METHOD = "linear"   # ["linear", "square", "uniform"]
+APPLY_SIGMOID_TO_PAIR_SCORE = True
+SHOW_TOP_PAIR_DETAILS = 5
 
 # =========================================================
 # 2. HELPERS
@@ -212,40 +208,19 @@ def extract_structure_queries(structure_input: Dict[str, Any]):
     return all_causes, all_modes, all_effects
 
 
-def collect_mapped_ids(mapping_list: List[Dict[str, Any]]) -> List[str]:
-    ids = []
-    for item in mapping_list:
-        for m in item["mapped_nodes"]:
-            ids.append(m["kg_id"])
-    return list(dict.fromkeys(ids))
-
-
-def build_kg_text_lookup(mapped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
+def build_kg_text_lookup(mapped: Dict[str, List[Dict[str, Any]]], id2text: Dict[int, str], node2id: Dict[str, int]) -> Dict[str, str]:
     lookup = {}
+
     for group in ["causes", "modes", "effects"]:
         for item in mapped[group]:
             for m in item["mapped_nodes"]:
                 lookup[m["kg_id"]] = m["kg_text"]
+
+    for kg_id, nid in node2id.items():
+        if kg_id not in lookup:
+            lookup[kg_id] = id2text.get(nid, kg_id)
+
     return lookup
-
-
-def build_kg_to_query_texts(mapping_list):
-    lookup = {}
-    for item in mapping_list:
-        query_text = item["query_text"]
-        for m in item["mapped_nodes"]:
-            kg_id = m["kg_id"]
-            if kg_id not in lookup:
-                lookup[kg_id] = []
-            if query_text not in lookup[kg_id]:
-                lookup[kg_id].append(query_text)
-    return lookup
-
-
-def format_query_texts(query_texts):
-    if not query_texts:
-        return "N/A"
-    return " | ".join(query_texts)
 
 
 # =========================================================
@@ -428,7 +403,6 @@ class Model(nn.Module):
         x = self.input_proj(x)
         x = F.relu(x)
         z = self.rgcn(x, edge_index, edge_type)
-        # z = F.normalize(z, p=2, dim=1)
         return z
 
     def score(self, z, triples):
@@ -599,173 +573,253 @@ def map_structure_input_to_kg(session, structure_input: Dict[str, Any]):
 
 
 # =========================================================
-# 9. SOFT QUERY REPRESENTATION + PREDICTION
+# 9. WEIGHTED QUERY REPRESENTATION + PREDICTION
 # =========================================================
 
 @torch.no_grad()
 def encode_graph_once(model, x, edge_index, edge_type):
+    model.eval()
+    x = x.to(DEVICE)
+    edge_index = edge_index.to(DEVICE)
+    edge_type = edge_type.to(DEVICE)
     return model.encode(x, edge_index, edge_type)
 
 
 @torch.no_grad()
-def build_soft_query_embedding(
+def build_weighted_node_list(
     mapped_nodes: List[Dict[str, Any]],
     node2id: Dict[str, int],
-    z: torch.Tensor,
-    temperature: float = 0.10
+    weighting: str = "linear",
+    min_sim: float = 0.0
 ):
     valid_items = []
 
     for m in mapped_nodes:
         kg_id = m["kg_id"]
         sim = float(m["score"])
-        if kg_id in node2id:
+        if kg_id in node2id and sim >= min_sim:
             valid_items.append((kg_id, sim))
 
     if not valid_items:
-        return None, []
+        return []
 
-    kg_ids = [kg_id for kg_id, _ in valid_items]
     sims = torch.tensor([sim for _, sim in valid_items], dtype=torch.float)
 
-    weights = torch.softmax(sims / temperature, dim=0)
+    if weighting == "linear":
+        raw_weights = sims.clone()
+    elif weighting == "square":
+        raw_weights = sims ** 2
+    elif weighting == "uniform":
+        raw_weights = torch.ones_like(sims)
+    else:
+        raise ValueError(f"Unsupported weighting method: {weighting}")
 
-    emb_list = []
-    used_nodes = []
+    weight_sum = raw_weights.sum().item()
+    if weight_sum <= 0:
+        raw_weights = torch.ones_like(raw_weights)
+        weight_sum = raw_weights.sum().item()
 
-    for i, kg_id in enumerate(kg_ids):
-        nid = node2id[kg_id]
-        emb_list.append(z[nid] * weights[i])
-        used_nodes.append({
+    norm_weights = raw_weights / weight_sum
+
+    weighted_nodes = []
+    for i, (kg_id, sim) in enumerate(valid_items):
+        weighted_nodes.append({
             "kg_id": kg_id,
-            "raw_sim": float(sims[i].item()),
-            "weight": float(weights[i].item())
+            "node_id": node2id[kg_id],
+            "raw_sim": float(sim),
+            "weight": float(norm_weights[i].item())
         })
 
-    query_repr = torch.stack(emb_list, dim=0).sum(dim=0)
-    return query_repr, used_nodes
+    return weighted_nodes
+
 
 @torch.no_grad()
-def score_soft_pair(model, head_repr, relation_id, tail_repr):
-    if head_repr is None or tail_repr is None:
-        return None
-    r = model.decoder.rel[relation_id]
-    score = torch.sigmoid((head_repr * r * tail_repr).sum()).item()
+def complex_score_from_embeddings(head_emb, rel_emb, tail_emb):
+    """
+    Standard ComplEx score for one triple.
+    head_emb, rel_emb, tail_emb: shape [2 * emb_dim]
+    """
+    h_re, h_im = torch.chunk(head_emb, 2, dim=-1)
+    r_re, r_im = torch.chunk(rel_emb, 2, dim=-1)
+    t_re, t_im = torch.chunk(tail_emb, 2, dim=-1)
+
+    score = (
+        h_re * r_re * t_re
+        + h_im * r_re * t_im
+        + h_re * r_im * t_im
+        - h_im * r_im * t_re
+    ).sum()
+
     return score
 
 
 @torch.no_grad()
-def score_query_to_candidates(
+def score_weighted_node_sets(
     model,
-    query_repr: torch.Tensor,
-    relation_id: int,
-    candidate_ids: List[int],
     z: torch.Tensor,
-    top_k: int = 10
+    relation_id: int,
+    head_nodes: List[Dict[str, Any]],
+    tail_nodes: List[Dict[str, Any]],
+    apply_sigmoid: bool = True
 ):
-    if query_repr is None or not candidate_ids:
-        return []
+    """
+    Final score = sum_i sum_j w_hi * w_tj * pair_score(h_i, r, t_j)
+    """
+    if not head_nodes or not tail_nodes:
+        return None, []
 
-    r = model.decoder.rel[relation_id]
-    tails = z[candidate_ids]
+    rel_emb = model.decoder.rel[relation_id]
 
-    scores = (query_repr.unsqueeze(0) * r.unsqueeze(0) * tails).sum(dim=1)
-    scores = torch.sigmoid(scores)
+    pair_details = []
+    final_score = 0.0
 
-    values, indices = torch.topk(scores, k=min(top_k, len(candidate_ids)))
-    return [(candidate_ids[i], values[j].item()) for j, i in enumerate(indices)]
+    for h in head_nodes:
+        h_id = h["node_id"]
+        h_w = h["weight"]
+        h_emb = z[h_id]
+
+        for t in tail_nodes:
+            t_id = t["node_id"]
+            t_w = t["weight"]
+            t_emb = z[t_id]
+
+            raw_score = complex_score_from_embeddings(h_emb, rel_emb, t_emb)
+            pair_score = torch.sigmoid(raw_score).item() if apply_sigmoid else raw_score.item()
+
+            contrib = h_w * t_w * pair_score
+            final_score += contrib
+
+            pair_details.append({
+                "head_kg_id": h["kg_id"],
+                "tail_kg_id": t["kg_id"],
+                "head_weight": h_w,
+                "tail_weight": t_w,
+                "head_sim": h["raw_sim"],
+                "tail_sim": t["raw_sim"],
+                "pair_score": pair_score,
+                "contribution": contrib
+            })
+
+    pair_details = sorted(pair_details, key=lambda x: x["contribution"], reverse=True)
+    return final_score, pair_details
 
 
 @torch.no_grad()
-def infer_query_cause_to_query_modes_soft(
+def infer_query_cause_to_query_modes_weighted(
     model, z, node2id, rel2id,
     mapped_cause_nodes,
     mapped_mode_items,
-    temperature=0.10,
-    top_k=5
+    top_k=5,
+    weighting="linear"
 ):
     if "CAUSES" not in rel2id:
         raise KeyError("Relation 'CAUSES' not found in rel2id.")
 
-    cause_repr, cause_used = build_soft_query_embedding(
+    cause_weighted_nodes = build_weighted_node_list(
         mapped_nodes=mapped_cause_nodes,
         node2id=node2id,
-        z=z,
-        temperature=temperature
+        weighting=weighting
     )
 
-    if cause_repr is None:
-        return [], cause_used
+    if not cause_weighted_nodes:
+        return [], cause_weighted_nodes
 
     relation_id = rel2id["CAUSES"]
     results = []
 
     for mode_item in mapped_mode_items:
         mode_query_text = mode_item["query_text"]
-        mode_repr, mode_used = build_soft_query_embedding(
+
+        mode_weighted_nodes = build_weighted_node_list(
             mapped_nodes=mode_item["mapped_nodes"],
             node2id=node2id,
-            z=z,
-            temperature=temperature
+            weighting=weighting
         )
-        if mode_repr is None:
+
+        if not mode_weighted_nodes:
             continue
 
-        score = score_soft_pair(model, cause_repr, relation_id, mode_repr)
-        results.append({
-            "mode_query_text": mode_query_text,
-            "score": score,
-            "mode_used_nodes": mode_used
-        })
+        score, pair_details = score_weighted_node_sets(
+            model=model,
+            z=z,
+            relation_id=relation_id,
+            head_nodes=cause_weighted_nodes,
+            tail_nodes=mode_weighted_nodes,
+            apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
+        )
+
+        if score is None:
+            continue
+
+        if score >= PRED_SCORE_THRESHOLD:
+            results.append({
+                "mode_query_text": mode_query_text,
+                "score": score,
+                "mode_used_nodes": mode_weighted_nodes,
+                "pair_details": pair_details
+            })
 
     results = sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
-    return results, cause_used
+    return results, cause_weighted_nodes
 
 
 @torch.no_grad()
-def infer_query_mode_to_query_effects_soft(
+def infer_query_mode_to_query_effects_weighted(
     model, z, node2id, rel2id,
     mapped_mode_nodes,
     mapped_effect_items,
-    temperature=0.10,
-    top_k=5
+    top_k=5,
+    weighting="linear"
 ):
     if "LEADS_TO" not in rel2id:
         raise KeyError("Relation 'LEADS_TO' not found in rel2id.")
 
-    mode_repr, mode_used = build_soft_query_embedding(
+    mode_weighted_nodes = build_weighted_node_list(
         mapped_nodes=mapped_mode_nodes,
         node2id=node2id,
-        z=z,
-        temperature=temperature
+        weighting=weighting
     )
 
-    if mode_repr is None:
-        return [], mode_used
+    if not mode_weighted_nodes:
+        return [], mode_weighted_nodes
 
     relation_id = rel2id["LEADS_TO"]
     results = []
 
     for effect_item in mapped_effect_items:
         effect_query_text = effect_item["query_text"]
-        effect_repr, effect_used = build_soft_query_embedding(
+
+        effect_weighted_nodes = build_weighted_node_list(
             mapped_nodes=effect_item["mapped_nodes"],
             node2id=node2id,
-            z=z,
-            temperature=temperature
+            weighting=weighting
         )
-        if effect_repr is None:
+
+        if not effect_weighted_nodes:
             continue
 
-        score = score_soft_pair(model, mode_repr, relation_id, effect_repr)
-        results.append({
-            "effect_query_text": effect_query_text,
-            "score": score,
-            "effect_used_nodes": effect_used
-        })
+        score, pair_details = score_weighted_node_sets(
+            model=model,
+            z=z,
+            relation_id=relation_id,
+            head_nodes=mode_weighted_nodes,
+            tail_nodes=effect_weighted_nodes,
+            apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
+        )
+
+        if score is None:
+            continue
+
+        if score >= PRED_SCORE_THRESHOLD:
+            results.append({
+                "effect_query_text": effect_query_text,
+                "score": score,
+                "effect_used_nodes": effect_weighted_nodes,
+                "pair_details": pair_details
+            })
 
     results = sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
-    return results, mode_used
+    return results, mode_weighted_nodes
 
 
 # =========================================================
@@ -790,28 +844,27 @@ def print_mapping_results(title: str, mapping_list: List[Dict[str, Any]]):
             print(f"    Sim     : {m['score']:.4f}")
 
 
-def print_soft_cause_to_mode_predictions(
+def print_weighted_cause_to_mode_predictions(
     query_text,
     used_heads,
     results,
-    kg_text_lookup,
-    kg_mode_to_query_texts
+    kg_text_lookup
 ):
     print(f"\n{'-' * 80}")
-    print("Soft Query Cause -> Soft Query Mode Prediction")
+    print("Weighted Query Cause -> Query Mode Prediction")
     print(f"{'-' * 80}")
     print(f"Query Cause Text : {query_text}")
 
-    print("\nSoft mapped cause nodes:")
+    print("\nWeighted mapped cause nodes:")
     if not used_heads:
         print("  None")
-    else:
-        for rank, item in enumerate(used_heads, 1):
-            kg_id = item["kg_id"]
-            print(f"  [{rank}] {kg_id}")
-            print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
-            print(f"      Sim     : {item['raw_sim']:.4f}")
-            print(f"      Weight  : {item['weight']:.4f}")
+    # else:
+    #     for rank, item in enumerate(used_heads, 1):
+    #         kg_id = item["kg_id"]
+    #         print(f"  [{rank}] {kg_id}")
+    #         print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
+    #         print(f"      Sim     : {item['raw_sim']:.4f}")
+    #         print(f"      Weight  : {item['weight']:.4f}")
 
     if not results:
         print("\nNo predicted mode queries.")
@@ -821,41 +874,42 @@ def print_soft_cause_to_mode_predictions(
     for rank, item in enumerate(results, 1):
         print(f"\n[{rank}]")
         print(f"  Mode Query Text    : {item['mode_query_text']}")
-        print(f"  Pred Score         : {item['score']:.8f}")
+        print(f"  Final Pred Score   : {item['score']:.8f}")
 
-        mode_used_nodes = item.get("mode_used_nodes", [])
-        # if mode_used_nodes:
-        #     print("  Soft mapped mode nodes:")
-        #     for m in mode_used_nodes:
-        #         kg_id = m["kg_id"]
-        #         print(f"    - {kg_id}")
-        #         print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
-        #         print(f"      Sim     : {m['raw_sim']:.4f}")
-        #         print(f"      Weight  : {m['weight']:.4f}")
+        top_pairs = item.get("pair_details", [])[:SHOW_TOP_PAIR_DETAILS]
+        # if top_pairs:
+        #     print("  Top pair contributions:")
+        #     for p in top_pairs:
+        #         print(f"    - {p['head_kg_id']} -> {p['tail_kg_id']}")
+        #         print(f"      head_sim      : {p['head_sim']:.4f}")
+        #         print(f"      tail_sim      : {p['tail_sim']:.4f}")
+        #         print(f"      head_weight   : {p['head_weight']:.4f}")
+        #         print(f"      tail_weight   : {p['tail_weight']:.4f}")
+        #         print(f"      pair_score    : {p['pair_score']:.8f}")
+        #         print(f"      contribution  : {p['contribution']:.8f}")
 
 
-def print_soft_mode_to_effect_predictions(
+def print_weighted_mode_to_effect_predictions(
     query_text,
     used_heads,
     results,
-    kg_text_lookup,
-    kg_effect_to_query_texts
+    kg_text_lookup
 ):
     print(f"\n{'-' * 80}")
-    print("Soft Query Mode -> Soft Query Effect Prediction")
+    print("Weighted Query Mode -> Query Effect Prediction")
     print(f"{'-' * 80}")
     print(f"Query Mode Text  : {query_text}")
 
-    print("\nSoft mapped mode nodes:")
+    print("\nWeighted mapped mode nodes:")
     if not used_heads:
         print("  None")
-    else:
-        for rank, item in enumerate(used_heads, 1):
-            kg_id = item["kg_id"]
-            print(f"  [{rank}] {kg_id}")
-            print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
-            print(f"      Sim     : {item['raw_sim']:.4f}")
-            print(f"      Weight  : {item['weight']:.4f}")
+    # else:
+    #     for rank, item in enumerate(used_heads, 1):
+    #         kg_id = item["kg_id"]
+    #         print(f"  [{rank}] {kg_id}")
+    #         print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
+    #         print(f"      Sim     : {item['raw_sim']:.4f}")
+    #         print(f"      Weight  : {item['weight']:.4f}")
 
     if not results:
         print("\nNo predicted effect queries.")
@@ -864,18 +918,20 @@ def print_soft_mode_to_effect_predictions(
     print("\nPredicted effect queries:")
     for rank, item in enumerate(results, 1):
         print(f"\n[{rank}]")
-        print(f"  Effect Query Text  : {item['effect_query_text']}")
-        print(f"  Pred Score         : {item['score']:.8f}")
+        print(f"  Effect Query Text : {item['effect_query_text']}")
+        print(f"  Final Pred Score  : {item['score']:.8f}")
 
-        effect_used_nodes = item.get("effect_used_nodes", [])
-        # if effect_used_nodes:
-        #     print("  Soft mapped effect nodes:")
-        #     for e in effect_used_nodes:
-        #         kg_id = e["kg_id"]
-        #         print(f"    - {kg_id}")
-        #         print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
-        #         print(f"      Sim     : {e['raw_sim']:.4f}")
-        #         print(f"      Weight  : {e['weight']:.4f}")
+        top_pairs = item.get("pair_details", [])[:SHOW_TOP_PAIR_DETAILS]
+        # if top_pairs:
+        #     print("  Top pair contributions:")
+        #     for p in top_pairs:
+        #         print(f"    - {p['head_kg_id']} -> {p['tail_kg_id']}")
+        #         print(f"      head_sim      : {p['head_sim']:.4f}")
+        #         print(f"      tail_sim      : {p['tail_sim']:.4f}")
+        #         print(f"      head_weight   : {p['head_weight']:.4f}")
+        #         print(f"      tail_weight   : {p['tail_weight']:.4f}")
+        #         print(f"      pair_score    : {p['pair_score']:.8f}")
+        #         print(f"      contribution  : {p['contribution']:.8f}")
 
 
 # =========================================================
@@ -886,7 +942,7 @@ def run_structure_mapping_and_inference(
     session,
     structure_input,
     model, x, edge_index, edge_type,
-    node2id, id2node, id2type, rel2id
+    node2id, id2node, id2type, id2text, rel2id
 ):
     mapped = map_structure_input_to_kg(session, structure_input)
 
@@ -894,22 +950,19 @@ def run_structure_mapping_and_inference(
     print_mapping_results("MODE MAPPING", mapped["modes"])
     print_mapping_results("EFFECT MAPPING", mapped["effects"])
 
-    kg_text_lookup = build_kg_text_lookup(mapped)
-    kg_mode_to_query_texts = build_kg_to_query_texts(mapped["modes"])
-    kg_effect_to_query_texts = build_kg_to_query_texts(mapped["effects"])
+    kg_text_lookup = build_kg_text_lookup(mapped, id2text=id2text, node2id=node2id)
 
     print(f"\nMapped cause query count  : {len(mapped['causes'])}")
     print(f"Mapped mode query count   : {len(mapped['modes'])}")
     print(f"Mapped effect query count : {len(mapped['effects'])}")
 
-    # encode graph once
     z = encode_graph_once(model, x, edge_index, edge_type)
 
     # =====================================================
     # 1) QUERY-LEVEL: Cause query -> Mode queries
     # =====================================================
     print(f"\n{'#' * 80}")
-    print("RUNNING SOFT QUERY CAUSE -> SOFT QUERY MODE INFERENCE")
+    print("RUNNING WEIGHTED QUERY CAUSE -> QUERY MODE INFERENCE")
     print(f"{'#' * 80}")
 
     for cause_item in mapped["causes"]:
@@ -919,7 +972,7 @@ def run_structure_mapping_and_inference(
             print(f"\nSkip cause query (no mapping): {query_text}")
             continue
 
-        results, used_heads = infer_query_cause_to_query_modes_soft(
+        results, used_heads = infer_query_cause_to_query_modes_weighted(
             model=model,
             z=z,
             node2id=node2id,
@@ -927,22 +980,21 @@ def run_structure_mapping_and_inference(
             mapped_cause_nodes=cause_item["mapped_nodes"],
             mapped_mode_items=mapped["modes"],
             top_k=TOP_K_PRED,
-            temperature=SOFTMAP_TEMPERATURE
+            weighting=WEIGHTING_METHOD
         )
 
-        print_soft_cause_to_mode_predictions(
+        print_weighted_cause_to_mode_predictions(
             query_text=query_text,
             used_heads=used_heads,
             results=results,
-            kg_text_lookup=kg_text_lookup,
-            kg_mode_to_query_texts=kg_mode_to_query_texts
+            kg_text_lookup=kg_text_lookup
         )
 
     # =====================================================
     # 2) QUERY-LEVEL: Mode query -> Effect queries
     # =====================================================
     print(f"\n{'#' * 80}")
-    print("RUNNING SOFT QUERY MODE -> SOFT QUERY EFFECT INFERENCE")
+    print("RUNNING WEIGHTED QUERY MODE -> QUERY EFFECT INFERENCE")
     print(f"{'#' * 80}")
 
     for mode_item in mapped["modes"]:
@@ -952,7 +1004,7 @@ def run_structure_mapping_and_inference(
             print(f"\nSkip mode query (no mapping): {query_text}")
             continue
 
-        results, used_heads = infer_query_mode_to_query_effects_soft(
+        results, used_heads = infer_query_mode_to_query_effects_weighted(
             model=model,
             z=z,
             node2id=node2id,
@@ -960,17 +1012,16 @@ def run_structure_mapping_and_inference(
             mapped_mode_nodes=mode_item["mapped_nodes"],
             mapped_effect_items=mapped["effects"],
             top_k=TOP_K_PRED,
-            # pred_score_threshold=PRED_SCORE_THRESHOLD,
-            temperature=SOFTMAP_TEMPERATURE
+            weighting=WEIGHTING_METHOD
         )
 
-        print_soft_mode_to_effect_predictions(
+        print_weighted_mode_to_effect_predictions(
             query_text=query_text,
             used_heads=used_heads,
             results=results,
-            kg_text_lookup=kg_text_lookup,
-            kg_effect_to_query_texts=kg_effect_to_query_texts
+            kg_text_lookup=kg_text_lookup
         )
+
 
 # =========================================================
 # 12. MAIN
@@ -982,16 +1033,21 @@ def main():
     rel2id, id2rel = build_relations(rel_list_base)
     edge_index, edge_type = build_graph(triples_raw, rel2id)
 
+    x = x.to(DEVICE)
+    edge_index = edge_index.to(DEVICE)
+    edge_type = edge_type.to(DEVICE)
+
     model = load_model(
         path=MODEL_PATH,
         in_dim=x.shape[1],
-        hidden_dim=256,
-        emb_dim=256,
-        num_relations=8,
-        dropout=0.0,
+        hidden_dim=HIDDEN_DIM,
+        emb_dim=EMD_DIM,
+        num_relations=len(rel2id),
+        dropout=0.1,
         num_bases=4,
         device=DEVICE
     )
+
     kg_client = Neo4jKGClient(
         uri=NEO4J_URI,
         user=NEO4J_USER,
@@ -1011,6 +1067,7 @@ def main():
                 node2id=node2id,
                 id2node=id2node,
                 id2type=id2type,
+                id2text=id2text,
                 rel2id=rel2id
             )
     finally:

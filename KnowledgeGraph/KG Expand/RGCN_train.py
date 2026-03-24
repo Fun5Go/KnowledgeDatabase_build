@@ -750,7 +750,7 @@ def main():
     # -------------------------
     # 5) Build graph ONLY from train triples
     # -------------------------
-    edge_index, edge_type = build_graph(train_raw, rel2id)
+    edge_index, edge_type = build_graph(triples_raw, rel2id)
 
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
@@ -764,7 +764,7 @@ def main():
         hidden_dim=256,
         emb_dim=256,
         num_relations=len(rel2id),
-        dropout=0.0,
+        dropout=0.1,
         num_bases=4
     ).to(DEVICE)
 
