@@ -6,6 +6,8 @@ import hashlib
 from typing import List, Dict, Any, Tuple
 from dotenv import load_dotenv
 import torch
+import json
+from langsmith import traceable
 
 # =========================================================
 # 1. CONFIG
@@ -37,7 +39,116 @@ APPLY_SIGMOID_TO_PAIR_SCORE = True
 SHOW_TOP_PAIR_DETAILS = 5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# ================================
+# Helpers 
+# ================================
+def build_minimal_result_for_llm(results):
+    """
+    Rebuild final inference result for LLM prompt.
+    Only keep:
+      - query cause/mode text
+      - predicted mode/effect query text
+      - rank
+    Remove all other fields such as score, pair_details, mapped info, etc.
 
+    Input:
+        results = {
+            "mapped": ...,
+            "cause_to_mode": [...],
+            "mode_to_effect": [...]
+        }
+
+    Output:
+        {
+            "cause_to_mode": [
+                {
+                    "query_cause_text": "...",
+                    "predicted_modes": [
+                        {"rank": 1, "mode_query_text": "..."},
+                        ...
+                    ]
+                },
+                ...
+            ],
+            "mode_to_effect": [
+                {
+                    "query_mode_text": "...",
+                    "predicted_effects": [
+                        {"rank": 1, "effect_query_text": "..."},
+                        ...
+                    ]
+                },
+                ...
+            ]
+        }
+    """
+    simplified = {
+        "cause_to_mode": [],
+        "mode_to_effect": []
+    }
+
+    # Simplify cause -> mode
+    for cause_item in results.get("cause_to_mode", []):
+        simplified_cause_item = {
+            "query_cause_text": cause_item.get("query_cause_text", ""),
+            "predicted_modes": []
+        }
+
+        for mode_item in cause_item.get("predicted_modes", []):
+            simplified_cause_item["predicted_modes"].append({
+                "rank": mode_item.get("rank"),
+                "mode_query_text": mode_item.get("mode_query_text", "")
+            })
+
+        simplified["cause_to_mode"].append(simplified_cause_item)
+
+    # Simplify mode -> effect
+    for mode_item in results.get("mode_to_effect", []):
+        simplified_mode_item = {
+            "query_mode_text": mode_item.get("query_mode_text", ""),
+            "predicted_effects": []
+        }
+
+        for effect_item in mode_item.get("predicted_effects", []):
+            simplified_mode_item["predicted_effects"].append({
+                "rank": effect_item.get("rank"),
+                "effect_query_text": effect_item.get("effect_query_text", "")
+            })
+
+        simplified["mode_to_effect"].append(simplified_mode_item)
+
+    return simplified
+
+def pretty_print_selection_result(result: dict):
+    print("\n" + "=" * 80)
+    print("FMEA SELECTION RESULT")
+    print("=" * 80)
+
+    print("\n[1] Cause -> Mode selection")
+    for item in result.get("cause_to_mode_selection", []):
+        print(f"\nCause: {item.get('cause', '')}")
+        for mode in item.get("selected_modes", []):
+            print(f"  - Mode: {mode.get('mode_text', '')}")
+            print(f"    Selected  : {mode.get('selected', True)}")
+            print(f"    Reason    : {mode.get('reason', '')}")
+            print(f"    Confidence: {mode.get('confidence', '')}")
+        print(f"  Summary: {item.get('global_reasoning', '')}")
+
+    print("\n[2] Mode -> Effect selection")
+    for mode_text, item in result.get("mode_to_effect_selection", {}).items():
+        print(f"\nMode: {mode_text}")
+        for eff in item.get("selected_effects", []):
+            print(f"  - Effect: {eff.get('effect_text', '')}")
+            print(f"    Selected  : {eff.get('selected', True)}")
+            print(f"    Reason    : {eff.get('reason', '')}")
+            print(f"    Confidence: {eff.get('confidence', '')}")
+        print(f"  Summary: {item.get('global_reasoning', '')}")
+
+    print("\n[3] Final chains")
+    for i, chain in enumerate(result.get("final_chains", []), 1):
+        print(f"  [{i}] {chain['chain_text']}")
+
+    print("=" * 80)
 
 
 # ================================
@@ -74,6 +185,7 @@ def MAPandPRED(structure_input):
     try:
         with kg_client.session() as session:
             results = run_structure_mapping_and_inference(
+                is_print=False,
                 session=session,
                 structure_input=structure_input,
                 model=model,
@@ -84,13 +196,37 @@ def MAPandPRED(structure_input):
                 id2node=id2node,
                 id2type=id2type,
                 id2text=id2text,
-                rel2id=rel2id
+                rel2id=rel2id,
             )
     finally:
         kg_client.close()
     return results
 
+@traceable(
+    run_type="chain",
+    name="fmea_experiment-candidatesincrease",
+    tags=["fmea", "exp", "prompt_v1"]
+)
+def run_fmea_experiment(agent, simplified_result):
+    return agent.select_all(
+        simplified_result=simplified_result,
+        top_n_modes=4,
+        max_effects_per_mode=3,
+    )
+
     
 if __name__ == "__main__":
+
     results = MAPandPRED(structure_input_motorcontrol)
-    # print(results)
+    simplified_results = build_minimal_result_for_llm(results)
+    # print(json.dumps(simplified_results, indent=2, ensure_ascii=False))
+
+
+    agent = FMEASelectionAgent(
+    backend=os.getenv("LLM_BACKEND", "openai"),
+    model=os.getenv("LLM_MODEL", "azure/gpt-4.1"),
+    )
+
+    result = run_fmea_experiment(agent,simplified_results)
+    pretty_print_selection_result(result)
+    print(json.dumps(result, indent=2, ensure_ascii=False))

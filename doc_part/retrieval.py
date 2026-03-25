@@ -497,7 +497,7 @@ if __name__ == "__main__":
     )
     cross_encoder = create_cross_encoder()
 
-    query = "Soft start too long"
+    query = "software/ algorithm control"
 
     retrieval_mode = "hybrid"   # dense / bm25 / hybrid
     use_rerank = True

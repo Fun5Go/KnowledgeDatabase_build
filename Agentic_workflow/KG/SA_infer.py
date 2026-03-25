@@ -1,7 +1,7 @@
 import os
 import ast
 import hashlib
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 import pandas as pd
 import torch
@@ -121,6 +121,10 @@ structure_input_motorcontrol = {
                 "Overcurrent towards motor",
                 "Motor starts without soft start",
                 "Short-circuit",
+                "(Final) Pressure deviates from setpoints",
+                "Overpressure",
+                "No pressure build-up",
+                "No user control",
             ]
         }
     ]
@@ -148,7 +152,7 @@ TOP_K_MAP = 5
 MIN_SIM = 0.80
 POOL_K = 100
 
-TOP_K_PRED = 2
+TOP_K_PRED = 4
 PRED_SCORE_THRESHOLD = 0.0
 
 WEIGHTING_METHOD = "square"   # ["linear", "square", "uniform"]
@@ -185,6 +189,30 @@ def flatten_causes(causes):
 
     return []
 
+def extract_cause_queries_with_disciplines(structure_input: Dict[str, Any]) -> List[Dict[str, str]]:
+    cause_items = []
+
+    for node in structure_input.get("nodes", []):
+        causes = node.get("causes", {})
+        if not isinstance(causes, dict):
+            continue
+
+        for discipline, items in causes.items():
+            d = safe_text(discipline) or "unknown"
+
+            if not isinstance(items, list):
+                continue
+
+            for cause_text in items:
+                txt = safe_text(cause_text)
+                if txt:
+                    cause_items.append({
+                        "query_text": txt,
+                        "discipline": d
+                    })
+
+    return cause_items
+
 
 def deduplicate_mapped_nodes(mapped_nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     best = {}
@@ -196,14 +224,13 @@ def deduplicate_mapped_nodes(mapped_nodes: List[Dict[str, Any]]) -> List[Dict[st
 
 
 def extract_structure_queries(structure_input: Dict[str, Any]):
-    all_causes = []
+    all_causes = extract_cause_queries_with_disciplines(structure_input)
     all_modes = []
     all_effects = []
 
     for node in structure_input.get("nodes", []):
         all_modes.extend([safe_text(x) for x in node.get("modes", []) if safe_text(x)])
         all_effects.extend([safe_text(x) for x in node.get("effects", []) if safe_text(x)])
-        all_causes.extend(flatten_causes(node.get("causes", {})))
 
     return all_causes, all_modes, all_effects
 
@@ -536,32 +563,60 @@ def map_query_texts_to_nodes(
     label: str,
     index_name: str,
     prefix: str,
-    query_texts: List[str],
+    query_texts: List[Any],
     top_k_each: int = 3,
     pool_k: int = 100,
     min_score: float = 0.80,
-    keep_group_or_single_only: bool = True
+    keep_group_or_single_only: bool = True,
+    use_discipline_filter: bool = False,
 ) -> List[Dict[str, Any]]:
     results = []
 
-    for text in query_texts:
+    for item in query_texts:
+        if isinstance(item, dict):
+            text = safe_text(item.get("query_text"))
+            discipline = safe_text(item.get("discipline")) or "unknown"
+        else:
+            text = safe_text(item)
+            discipline = None
+
         emb = embed(f"{prefix}: {text}")
         if emb is None:
-            results.append({
+            out = {
                 "query_text": text,
                 "mapped_nodes": []
-            })
+            }
+            if discipline is not None:
+                out["allowed_disciplines"] = [discipline, "unknown"]
+            results.append(out)
             continue
 
         if isinstance(emb, torch.Tensor):
             emb = emb.detach().cpu().tolist()
 
+        where_clauses = []
+
         if keep_group_or_single_only:
-            filter_clause = f"""
-            WHERE
-                coalesce(node.is_group, false) = true
-                OR NOT (node)-[:BELONGS_TO]->(:{label})
-            """
+            where_clauses.append(f"""
+                (
+                    coalesce(node.is_group, false) = true
+                    OR NOT (node)-[:BELONGS_TO]->(:{label})
+                )
+            """)
+
+        params = {
+            "embedding": emb,
+            "k": top_k_each,
+        }
+
+        if use_discipline_filter and discipline is not None:
+            where_clauses.append("""
+                coalesce(node.discipline, "unknown") IN $allowed_disciplines
+            """)
+            params["allowed_disciplines"] = [discipline, "unknown"]
+
+        if where_clauses:
+            filter_clause = "WHERE " + "\n AND ".join(where_clauses)
         else:
             filter_clause = ""
 
@@ -578,12 +633,13 @@ def map_query_texts_to_nodes(
         RETURN
             node.semantic_id AS kg_id,
             coalesce(node.canonical_text, node.text, node.name, node.semantic_id) AS kg_text,
+            coalesce(node.discipline, "unknown") AS discipline,
             refined_score
         ORDER BY refined_score DESC
         LIMIT $k
         """
 
-        query_result = session.run(cypher, embedding=emb, k=top_k_each)
+        query_result = session.run(cypher, **params)
 
         mapped_nodes = []
         for r in query_result:
@@ -592,15 +648,20 @@ def map_query_texts_to_nodes(
                 mapped_nodes.append({
                     "kg_id": r["kg_id"],
                     "kg_text": r["kg_text"],
+                    "discipline": r["discipline"],
                     "score": score
                 })
 
         mapped_nodes = deduplicate_mapped_nodes(mapped_nodes)
 
-        results.append({
+        out = {
             "query_text": text,
             "mapped_nodes": mapped_nodes
-        })
+        }
+        if discipline is not None:
+            out["allowed_disciplines"] = [discipline, "unknown"]
+
+        results.append(out)
 
     return results
 
@@ -616,7 +677,8 @@ def map_structure_input_to_kg(session, structure_input: Dict[str, Any]):
         query_texts=causes,
         top_k_each=TOP_K_MAP,
         pool_k=POOL_K,
-        min_score=MIN_SIM
+        min_score=MIN_SIM,
+        use_discipline_filter=True,
     )
 
     mode_maps = map_query_texts_to_nodes(
@@ -909,6 +971,10 @@ def print_mapping_results(title: str, mapping_list: List[Dict[str, Any]]):
 
     for item in mapping_list:
         print(f"\nQuery Text: {item['query_text']}")
+
+        if "allowed_disciplines" in item and item["allowed_disciplines"]:
+            print(f"Discipline : {', '.join(item['allowed_disciplines'])}")
+
         if not item["mapped_nodes"]:
             print("  No mapped KG nodes.")
             continue
@@ -1015,6 +1081,7 @@ def print_weighted_mode_to_effect_predictions(
 # =========================================================
 
 def run_structure_mapping_and_inference(
+    is_print: True,
     session,
     structure_input,
     model, x, edge_index, edge_type,
@@ -1062,13 +1129,13 @@ def run_structure_mapping_and_inference(
             top_k=TOP_K_PRED,
             weighting=WEIGHTING_METHOD
         )
-
-        print_weighted_cause_to_mode_predictions(
-            query_text=query_cause,
-            used_heads=used_heads,
-            results=pred_mode,
-            kg_text_lookup=kg_text_lookup
-        )
+        if is_print:
+            print_weighted_cause_to_mode_predictions(
+                query_text=query_cause,
+                used_heads=used_heads,
+                results=pred_mode,
+                kg_text_lookup=kg_text_lookup
+            )
         cause_to_mode_outputs.append(
             build_weighted_cause_to_mode_predictions(
                 query_text=query_cause,
@@ -1102,13 +1169,13 @@ def run_structure_mapping_and_inference(
             top_k=TOP_K_PRED,
             weighting=WEIGHTING_METHOD
         )
-
-        print_weighted_mode_to_effect_predictions(
-            query_text=query_mode,
-            used_heads=used_heads,
-            results=pred_effect,
-            kg_text_lookup=kg_text_lookup
-        )
+        if is_print:
+            print_weighted_mode_to_effect_predictions(
+                query_text=query_mode,
+                used_heads=used_heads,
+                results=pred_effect,
+                kg_text_lookup=kg_text_lookup
+            )
 
         mode_to_effect_outputs.append(
             build_weighted_mode_to_effect_predictions(
@@ -1161,6 +1228,7 @@ def main():
     try:
         with kg_client.session() as session:
             run_structure_mapping_and_inference(
+                is_print=False,
                 session=session,
                 structure_input=structure_input_motorcontrol,
                 model=model,
