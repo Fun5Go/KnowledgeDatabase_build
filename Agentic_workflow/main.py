@@ -1,5 +1,5 @@
 from .LLMs.select_agent import FMEASelectionAgent
-from .KG.SA_infer import load_nodes, load_triples, build_relations, build_graph,load_model,Neo4jKGClient, run_structure_mapping_and_inference, structure_input_motorcontrol
+from .KG.SA_infer import load_nodes, load_triples, build_relations, build_graph,load_model,Neo4jKGClient, run_structure_mapping_and_inference, structure_input_motorcontrol, structure_input_powertrain
 import os
 import ast
 import hashlib
@@ -217,7 +217,7 @@ def run_fmea_experiment(agent, simplified_result):
     
 if __name__ == "__main__":
 
-    results = MAPandPRED(structure_input_motorcontrol)
+    results = MAPandPRED(structure_input_powertrain)
     simplified_results = build_minimal_result_for_llm(results)
     # print(json.dumps(simplified_results, indent=2, ensure_ascii=False))
 

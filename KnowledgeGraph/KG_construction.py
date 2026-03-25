@@ -215,7 +215,7 @@ class FMEAVectorKGBuilder:
         if not text:
             return None
 
-        embedding = embed(f"Component: {text}")
+        embedding = embed(f"{text}")
 
         session.run(
             """
@@ -240,7 +240,7 @@ class FMEAVectorKGBuilder:
             return None
 
         function_id = f"function:{stable_id(text)}"
-        embedding = embed(f"Function: {text}")
+        embedding = embed(f"{text}")
 
         session.run(
             """
@@ -268,7 +268,7 @@ class FMEAVectorKGBuilder:
         if not text:
             return None
 
-        embedding = embed(f"Failure mode: {text}")
+        embedding = embed(f"{text}")
 
         session.run(
             """
@@ -296,7 +296,7 @@ class FMEAVectorKGBuilder:
         if not text:
             return None
 
-        embedding = embed(f"Failure cause: {text}")
+        embedding = embed(f"{text}")
 
         session.run(
             """
@@ -326,7 +326,7 @@ class FMEAVectorKGBuilder:
         if not text:
             return None
 
-        embedding = embed(f"Failure effect: {text}")
+        embedding = embed(f"{text}")
 
         session.run(
             """

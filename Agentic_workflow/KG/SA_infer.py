@@ -120,11 +120,11 @@ structure_input_motorcontrol = {
                 "Motor cannot start",
                 "Overcurrent towards motor",
                 "Motor starts without soft start",
-                "Short-circuit",
-                "(Final) Pressure deviates from setpoints",
-                "Overpressure",
-                "No pressure build-up",
-                "No user control",
+                # "Short-circuit",
+                # "(Final) Pressure deviates from setpoints",
+                # "Overpressure",
+                # "No pressure build-up",
+                # "No user control",
             ]
         }
     ]
@@ -149,7 +149,7 @@ HIDDEN_DIM = 256
 EMD_DIM = 256
 
 TOP_K_MAP = 5
-MIN_SIM = 0.80
+MIN_SIM = 0.7
 POOL_K = 100
 
 TOP_K_PRED = 4
@@ -580,7 +580,7 @@ def map_query_texts_to_nodes(
             text = safe_text(item)
             discipline = None
 
-        emb = embed(f"{prefix}: {text}")
+        emb = embed(text)
         if emb is None:
             out = {
                 "query_text": text,
@@ -1228,9 +1228,9 @@ def main():
     try:
         with kg_client.session() as session:
             run_structure_mapping_and_inference(
-                is_print=False,
+                is_print=True,
                 session=session,
-                structure_input=structure_input_motorcontrol,
+                structure_input=structure_input_powertrain,
                 model=model,
                 x=x,
                 edge_index=edge_index,

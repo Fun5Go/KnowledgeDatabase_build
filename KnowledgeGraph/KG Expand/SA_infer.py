@@ -144,8 +144,8 @@ MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_bes
 HIDDEN_DIM = 256
 EMD_DIM = 256
 
-TOP_K_MAP = 3
-MIN_SIM = 0.85
+TOP_K_MAP = 5
+MIN_SIM = 0.75
 POOL_K = 100
 
 TOP_K_PRED = 3
@@ -469,7 +469,7 @@ def map_query_texts_to_nodes(
     results = []
 
     for text in query_texts:
-        emb = embed(f"{prefix}: {text}")
+        emb = embed(text)
         if emb is None:
             results.append({
                 "query_text": text,

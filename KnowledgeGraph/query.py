@@ -49,16 +49,16 @@ def structured_print(records):
 
 def semantic_search(label, index_name, query, discipline=None, top_k=5):
     if label == "Mode":
-        embedding = embed("Failure mode: " + query)
+        embedding = embed(query)
 
     elif label == "Function":
-        embedding = embed("Function: " + query)
+        embedding = embed(query)
 
     elif label == "Cause":
-        embedding = embed("Failure cause: " + query)
+        embedding = embed(query)
 
     elif label == "Effect":
-        embedding = embed("Failure effect: " + query)
+        embedding = embed(query)
 
     else:
         raise ValueError(f"Unsupported label: {label}")
@@ -307,7 +307,7 @@ if __name__ == "__main__":
     semantic_search(
         "Cause",
         "cause_embedding",
-        "Control parameters incorrect",
+        "(Starting) Motor current too high for chosen components",
         # discipline=["mechanics", "unknown"],
         top_k=20
     )

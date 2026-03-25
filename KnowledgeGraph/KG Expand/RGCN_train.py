@@ -1,5 +1,6 @@
-import ast
 import os
+import ast
+import json
 import random
 from collections import defaultdict
 
@@ -10,17 +11,25 @@ import torch.nn.functional as F
 from torch_geometric.nn import RGCNConv
 
 
+# =========================================================
+# 0. CONFIG
+# =========================================================
 SEED = 42
-random.seed(SEED)
-torch.manual_seed(SEED)
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
 
-# =========================
+NODES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
+TRIPLES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
+SAVE_PATH = "rgcn_weighted_best_model.pt"
+
+
+# =========================================================
 # 1. LOAD DATA
-# =========================
-
+# =========================================================
 def load_nodes(node_file):
     df = pd.read_csv(node_file, sep="\t")
 
@@ -50,7 +59,7 @@ def load_nodes(node_file):
 def load_triples(triple_file, node2id):
     df = pd.read_csv(triple_file, sep="\t")
 
-    required_cols = {"head", "relation", "tail"}
+    required_cols = {"head", "relation", "tail", "weight"}
     missing = required_cols - set(df.columns)
     if missing:
         raise ValueError(f"Missing columns in triple file: {missing}")
@@ -59,27 +68,29 @@ def load_triples(triple_file, node2id):
     relations = set()
 
     for _, row in df.iterrows():
-        h, r, t = row["head"], row["relation"], row["tail"]
+        h = row["head"]
+        r = row["relation"]
+        t = row["tail"]
+        w = float(row["weight"])
 
         if h not in node2id or t not in node2id:
             continue
 
-        triples.append((node2id[h], r, node2id[t]))
+        triples.append((node2id[h], r, node2id[t], w))
         relations.add(r)
 
     return triples, sorted(list(relations))
 
 
-# =========================
+# =========================================================
 # 2. DATA SPLIT
-# =========================
-
-def split_triples_by_relation(triples_raw, train_ratio=0.8, valid_ratio=0.1, seed=42):
+# =========================================================
+def split_triples_by_relation(triples_raw, train_ratio=0.9, valid_ratio=0.05, seed=42):
     random.seed(seed)
 
     rel_buckets = defaultdict(list)
     for triple in triples_raw:
-        rel_buckets[triple[1]].append(triple)
+        rel_buckets[triple[1]].append(triple)  # triple[1] = relation string
 
     train_triples, valid_triples, test_triples = [], [], []
 
@@ -100,42 +111,45 @@ def split_triples_by_relation(triples_raw, train_ratio=0.8, valid_ratio=0.1, see
     return train_triples, valid_triples, test_triples
 
 
-# =========================
+# =========================================================
 # 3. BUILD GRAPH
-# =========================
-
+# =========================================================
 def build_graph(triples_raw, rel2id):
     edge_index = []
     edge_type = []
+    edge_weight = []
 
-    for h, r, t in triples_raw:
+    for h, r, t, w in triples_raw:
         if r not in rel2id:
             continue
+
         r_rev = r + "_REV"
         if r_rev not in rel2id:
             continue
 
         edge_index.append([h, t])
         edge_type.append(rel2id[r])
+        edge_weight.append(float(w))
 
         edge_index.append([t, h])
         edge_type.append(rel2id[r_rev])
+        edge_weight.append(float(w))
 
     if not edge_index:
         raise ValueError("No valid edges were built. Check triples and relation mappings.")
 
     edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
     edge_type = torch.tensor(edge_type, dtype=torch.long)
+    edge_weight = torch.tensor(edge_weight, dtype=torch.float)
 
-    return edge_index, edge_type
+    return edge_index, edge_type, edge_weight
 
 
-# =========================
+# =========================================================
 # 4. MODEL
-# =========================
-
+# =========================================================
 class RGCN(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim, num_relations, dropout=0.3, num_bases=4):
+    def __init__(self, in_dim, hidden_dim, out_dim, num_relations, dropout=0.2, num_bases=4):
         super().__init__()
         self.conv1 = RGCNConv(in_dim, hidden_dim, num_relations, num_bases=num_bases)
         self.conv2 = RGCNConv(hidden_dim, out_dim, num_relations, num_bases=num_bases)
@@ -153,9 +167,8 @@ class RGCN(nn.Module):
 
 class ComplExDecoder(nn.Module):
     """
-    z shape: [num_nodes, 2 * emb_dim]
-    first half = real, second half = imag
-    relation embedding same
+    z: [num_nodes, 2 * emb_dim]
+    relation emb: [num_relations, 2 * emb_dim]
     """
     def __init__(self, num_relations, emb_dim):
         super().__init__()
@@ -183,7 +196,7 @@ class ComplExDecoder(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.3, num_bases=4):
+    def __init__(self, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.2, num_bases=4):
         super().__init__()
 
         self.input_proj = nn.Linear(in_dim, hidden_dim)
@@ -213,10 +226,9 @@ class Model(nn.Module):
         return self.score(z, triples)
 
 
-# =========================
+# =========================================================
 # 5. RELATION SCHEMA
-# =========================
-
+# =========================================================
 def build_full_rel2type(base_rel2type):
     rel2type_full = {}
     for r, (h_type, t_type) in base_rel2type.items():
@@ -233,10 +245,9 @@ def validate_relation_schema(rel_list_base, rel2type_base):
         )
 
 
-# =========================
+# =========================================================
 # 6. TYPE INDEX / TRUE TRIPLES
-# =========================
-
+# =========================================================
 def build_type_index(id2type):
     type_to_nodes = defaultdict(list)
     for nid, t in id2type.items():
@@ -257,10 +268,9 @@ def build_true_triple_dict(triples):
     return true_tails, true_heads, true_triple_set
 
 
-# =========================
+# =========================================================
 # 7. NEGATIVE SAMPLING
-# =========================
-
+# =========================================================
 def negative_sampling_filtered(
     triples,
     rel2type,
@@ -288,6 +298,7 @@ def negative_sampling_filtered(
                         neg.append([h_neg, r, t])
                         sampled = True
                         break
+
                 if not sampled:
                     candidates = type_to_nodes[tail_type]
                     for _ in range(max_tries):
@@ -296,6 +307,7 @@ def negative_sampling_filtered(
                             neg.append([h, r, t_neg])
                             sampled = True
                             break
+
             else:
                 candidates = type_to_nodes[tail_type]
                 sampled = False
@@ -305,6 +317,7 @@ def negative_sampling_filtered(
                         neg.append([h, r, t_neg])
                         sampled = True
                         break
+
                 if not sampled:
                     candidates = type_to_nodes[head_type]
                     for _ in range(max_tries):
@@ -320,10 +333,9 @@ def negative_sampling_filtered(
     return torch.tensor(neg, dtype=torch.long)
 
 
-# =========================
+# =========================================================
 # 8. METRICS
-# =========================
-
+# =========================================================
 @torch.no_grad()
 def evaluate_tail_prediction(
     model,
@@ -388,7 +400,7 @@ def evaluate_tail_prediction(
                 "Count": 0,
                 "Hits@1": 0.0,
                 "Hits@3": 0.0,
-                "Hits@10": 0.0
+                "Hits@10": 0.0,
             }
 
         rank_tensor = torch.tensor(rank_list, dtype=torch.float)
@@ -413,10 +425,9 @@ def macro_mrr_of_relations(relation_metrics, focus_relations):
     return sum(vals) / len(vals) if vals else 0.0
 
 
-# =========================
+# =========================================================
 # 9. SAVE / LOAD
-# =========================
-
+# =========================================================
 def save_checkpoint(model, optimizer, scheduler, epoch, best_score, path):
     ckpt = {
         "model_state_dict": model.state_dict(),
@@ -429,7 +440,7 @@ def save_checkpoint(model, optimizer, scheduler, epoch, best_score, path):
     print(f"Best model saved to {path}")
 
 
-def load_model(path, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.3, num_bases=4):
+def load_model(path, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.2, num_bases=4):
     model = Model(
         in_dim=in_dim,
         hidden_dim=hidden_dim,
@@ -450,29 +461,29 @@ def load_model(path, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.3, nu
     return model
 
 
-# =========================
+# =========================================================
 # 10. TRAIN
-# =========================
-
+# =========================================================
 def train(
     model,
     x,
     edge_index,
     edge_type,
     train_triples,
+    train_weights,
     valid_triples,
     train_true_triples,
     all_true_triples_for_eval,
     id2type,
     rel2type,
     id2rel,
-    epochs=200,
+    epochs=300,
     lr=0.001,
-    weight_decay=1e-5,
+    weight_decay=1e-4,
     num_neg_per_pos=8,
-    patience=20,
-    save_path="rgcn_best_model.pt",
-    focus_relations=("CAUSES", "LEADS_TO", "HAS_MODE")
+    patience=15,
+    save_path="rgcn_weighted_best_model.pt",
+    focus_relations=("CAUSES", "LEADS_TO")
 ):
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -481,11 +492,27 @@ def train(
 
     type_to_nodes = build_type_index(id2type)
     train_true_set = set(train_true_triples)
+
     train_triples_tensor = torch.tensor(train_triples, dtype=torch.long, device=DEVICE)
+    train_edge_weight = torch.tensor(train_weights, dtype=torch.float, device=DEVICE)
+
+    # normalize around mean=1
+    train_edge_weight = train_edge_weight / train_edge_weight.mean().clamp_min(1e-8)
 
     best_score = -1.0
     best_state = None
     bad_epochs = 0
+
+    rel_weights = {
+        "CAUSES": 2.0,
+        "LEADS_TO": 1.5,
+        "HAS_MODE": 1.0,
+        "HAS_FUNCTION": 1.0,
+        "CAUSES_REV": 1.0,
+        "LEADS_TO_REV": 1.0,
+        "HAS_MODE_REV": 1.0,
+        "HAS_FUNCTION_REV": 1.0,
+    }
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -495,7 +522,7 @@ def train(
             rel2type=rel2type,
             id2rel=id2rel,
             type_to_nodes=type_to_nodes,
-            true_triple_set=train_true_set,   # 只用 train true triples，避免 leakage
+            true_triple_set=train_true_set,
             num_neg_per_pos=num_neg_per_pos
         ).to(DEVICE)
 
@@ -507,20 +534,8 @@ def train(
         pos_count = train_triples_tensor.size(0)
         neg_score = neg_score.view(pos_count, num_neg_per_pos)
 
-        # self-adversarial negative sampling
         adv_temp = 1.0
         neg_weight = F.softmax(neg_score.detach() * adv_temp, dim=1)
-
-        rel_weights = {
-            "CAUSES": 2.0,
-            "LEADS_TO": 1.5,
-            "HAS_MODE": 1.0,
-            "HAS_FUNCTION": 1.0,
-            "CAUSES_REV": 1.0,
-            "LEADS_TO_REV": 1.0,
-            "HAS_MODE_REV": 1.0,
-            "HAS_FUNCTION_REV": 1.0,
-        }
 
         train_rel_weight = torch.tensor(
             [rel_weights[id2rel[r]] for (_, r, _) in train_triples],
@@ -528,16 +543,15 @@ def train(
             device=DEVICE
         )
 
+        final_sample_weight = train_rel_weight * train_edge_weight
+
         pos_loss_each = -F.logsigmoid(pos_score)
         neg_loss_each = -(neg_weight * F.logsigmoid(-neg_score)).sum(dim=1)
 
-        pos_loss = (pos_loss_each * train_rel_weight).mean()
-        neg_loss = (neg_loss_each * train_rel_weight).mean()
+        pos_loss = (pos_loss_each * final_sample_weight).mean()
+        neg_loss = (neg_loss_each * final_sample_weight).mean()
 
-        reg_loss = (
-            model.decoder.rel.pow(2).mean()
-            + z.pow(2).mean()
-        )
+        reg_loss = model.decoder.rel.pow(2).mean() + z.pow(2).mean()
 
         loss = pos_loss + neg_loss + 1e-4 * reg_loss
 
@@ -559,10 +573,9 @@ def train(
             hits_ks=(1, 3, 10)
         )
 
-        # 用重点关系的 macro MRR 做 early stopping
         val_focus_score = (
             0.5 * valid_rel_metrics.get("CAUSES", {}).get("MRR", 0.0) +
-            0.5 * valid_rel_metrics.get("LEADS_TO", {}).get("MRR", 0.0) 
+            0.5 * valid_rel_metrics.get("LEADS_TO", {}).get("MRR", 0.0)
         )
         scheduler.step(val_focus_score)
 
@@ -597,10 +610,9 @@ def train(
     return model
 
 
-# =========================
+# =========================================================
 # 11. INFERENCE HELPERS
-# =========================
-
+# =========================================================
 @torch.no_grad()
 def predict_score(model, x, edge_index, edge_type, triple_tensor):
     model.eval()
@@ -671,6 +683,7 @@ def predict_head(
 
     return results
 
+
 def print_candidate_stats(eval_triples, id2type, rel2type, id2rel):
     type_to_nodes = build_type_index(id2type)
     rel_counts = defaultdict(list)
@@ -684,20 +697,17 @@ def print_candidate_stats(eval_triples, id2type, rel2type, id2rel):
     for rel, vals in rel_counts.items():
         avg_cands = sum(vals) / len(vals)
         print(f"{rel}: avg tail candidates = {avg_cands:.2f}, samples = {len(vals)}")
-# =========================
+
+
+# =========================================================
 # 12. MAIN
-# =========================
-
+# =========================================================
 def main():
-    node_file = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
-    triple_file = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
-    save_path = "rgcn_best_model.pt"
-
     # -------------------------
     # 1) Load data
     # -------------------------
-    node2id, id2node, id2type, x = load_nodes(node_file)
-    triples_raw, rel_list_base = load_triples(triple_file, node2id)
+    node2id, id2node, id2type, x = load_nodes(NODES_FILE)
+    triples_raw, rel_list_base = load_triples(TRIPLES_FILE, node2id)
 
     print(f"Loaded {len(node2id)} nodes")
     print(f"Loaded {len(triples_raw)} triples")
@@ -737,24 +747,33 @@ def main():
     print(f"Valid raw triples: {len(valid_raw)}")
     print(f"Test raw triples : {len(test_raw)}")
 
-    train_triples = [(h, rel2id[r], t) for (h, r, t) in train_raw]
-    valid_triples = [(h, rel2id[r], t) for (h, r, t) in valid_raw]
-    test_triples = [(h, rel2id[r], t) for (h, r, t) in test_raw]
+    # indexed triples for scoring/eval
+    train_triples = [(h, rel2id[r], t) for (h, r, t, w) in train_raw]
+    valid_triples = [(h, rel2id[r], t) for (h, r, t, w) in valid_raw]
+    test_triples = [(h, rel2id[r], t) for (h, r, t, w) in test_raw]
 
-    # filtered eval 可以看全量 true triples
+    # edge weights for training loss
+    train_weights = [float(w) for (h, r, t, w) in train_raw]
+
+    # filtered evaluation uses all true triples
     all_true_triples = train_triples + valid_triples + test_triples
 
-    # 训练负采样只看 train triples
+    # negative sampling only uses train truths
     train_true_triples = train_triples
 
     # -------------------------
     # 5) Build graph ONLY from train triples
     # -------------------------
-    edge_index, edge_type = build_graph(triples_raw, rel2id)
+    edge_index, edge_type, edge_weight = build_graph(triples_raw, rel2id)
 
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
     edge_type = edge_type.to(DEVICE)
+    edge_weight = edge_weight.to(DEVICE)
+
+    print(f"Graph edges (with reverse): {edge_index.shape[1]}")
+    print(f"Edge weight stats: min={edge_weight.min().item():.4f}, "
+          f"max={edge_weight.max().item():.4f}, mean={edge_weight.mean().item():.4f}")
 
     # -------------------------
     # 6) Build model
@@ -779,6 +798,7 @@ def main():
         edge_index=edge_index,
         edge_type=edge_type,
         train_triples=train_triples,
+        train_weights=train_weights,
         valid_triples=valid_triples,
         train_true_triples=train_true_triples,
         all_true_triples_for_eval=all_true_triples,
@@ -790,7 +810,7 @@ def main():
         weight_decay=1e-4,
         num_neg_per_pos=8,
         patience=15,
-        save_path=save_path,
+        save_path=SAVE_PATH,
         focus_relations=("CAUSES", "LEADS_TO")
     )
 
