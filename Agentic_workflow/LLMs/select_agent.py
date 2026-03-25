@@ -44,232 +44,331 @@ class FMEASelectionAgent:
             for item in simplified_result.get("mode_to_effect", [])
         }
 
-    def _get_cause_candidates(
+    def _build_grouped_cause_to_mode_payload(
         self,
         simplified_result: dict,
-        query_cause_text: str,
         top_n_modes: int = 4,
     ) -> List[dict]:
+        grouped = []
         for item in simplified_result.get("cause_to_mode", []):
-            if item.get("query_cause_text") == query_cause_text:
-                return item.get("predicted_modes", [])[:top_n_modes]
-        return []
+            cause = item.get("query_cause_text", "")
+            predicted_modes = item.get("predicted_modes", [])[:top_n_modes]
 
-    def _build_cause_to_mode_prompt(
+            grouped.append({
+                "cause": cause,
+                "mode_candidates": [
+                    {
+                        "mode_text": m.get("mode_query_text", ""),
+                        "mode_rank": m.get("rank")
+                    }
+                    for m in predicted_modes
+                ]
+            })
+        return grouped
+
+    def _build_grouped_mode_to_effect_payload(
         self,
-        query_cause_text: str,
-        mode_candidates: List[dict],
-    ) -> str:
-        payload = [
-            {
-                "mode_text": item.get("mode_query_text", ""),
-                "mode_rank": item.get("rank")
-            }
-            for item in mode_candidates
-        ]
+        simplified_result: dict,
+        selected_modes: List[str],
+        max_effects_per_mode: int = 3,
+    ) -> List[dict]:
+        lookup = self._build_mode_to_effect_lookup(simplified_result)
+        grouped = []
 
+        for mode_text in selected_modes:
+            effect_candidates = lookup.get(mode_text, [])[:max_effects_per_mode]
+            grouped.append({
+                "mode": mode_text,
+                "effect_candidates": [
+                    {
+                        "effect_text": e.get("effect_query_text", ""),
+                        "effect_rank": e.get("rank")
+                    }
+                    for e in effect_candidates
+                ]
+            })
+        return grouped
+
+    def _build_grouped_cause_to_mode_prompt(self, grouped_payload: List[dict]) -> str:
         schema = {
-            "cause": query_cause_text,
-            "selected_modes": [
+            "results": [
                 {
-                    "mode_text": "string",
-                    "selected": True,
-                    "reason": "why this mode is plausible for the cause",
-                    "confidence": 0.0
+                    "cause": "string",
+                    "selected_modes": [
+                        {
+                            "mode_text": "string",
+                            "selected": True,
+                            "reason": "why this mode is plausible for the cause",
+                            "confidence": 0.0
+                        }
+                    ],
+                    "global_reasoning": "short summary"
                 }
-            ],
-            "global_reasoning": "short summary"
+            ]
         }
 
         return f"""
 You are an FMEA reasoning agent.
 
 Task:
-1. Choose the most suitable failure mode or modes for the given cause.
+1. For EACH cause, choose the most suitable failure mode or modes from the provided candidates.
 2. Use engineering semantic logic first.
 3. Use rank only as supporting evidence:
    - rank 1 is stronger than rank 2
    - smaller rank means stronger retrieval preference
 4. Do not invent any mode outside the provided candidates.
-5. Normally select only 1 mode unless another is also clearly plausible.
+5. Normally select only 1 mode per cause unless another is also clearly plausible.
+6. Keep reasoning concise and practical.
 
-Cause:
-{query_cause_text}
-
-Mode candidates:
-{json.dumps(payload, indent=2, ensure_ascii=False)}
+Input:
+{json.dumps(grouped_payload, indent=2, ensure_ascii=False)}
 
 Return ONLY valid JSON matching this schema:
 {json.dumps(schema, indent=2, ensure_ascii=False)}
 """.strip()
 
-    def _build_mode_to_effect_prompt(
-        self,
-        query_mode_text: str,
-        effect_candidates: List[dict],
-    ) -> str:
-        payload = [
-            {
-                "effect_text": item.get("effect_query_text", ""),
-                "effect_rank": item.get("rank")
-            }
-            for item in effect_candidates
-        ]
-
+    def _build_grouped_mode_to_effect_prompt(self, grouped_payload: List[dict]) -> str:
         schema = {
-            "mode": query_mode_text,
-            "selected_effects": [
+            "results": [
                 {
-                    "effect_text": "string",
-                    "selected": True,
-                    "reason": "why this effect is plausible for the mode",
-                    "confidence": 0.0
+                    "mode": "string",
+                    "selected_effects": [
+                        {
+                            "effect_text": "string",
+                            "selected": True,
+                            "reason": "why this effect is plausible for the mode",
+                            "confidence": 0.0
+                        }
+                    ],
+                    "global_reasoning": "short summary"
                 }
-            ],
-            "global_reasoning": "short summary"
+            ]
         }
 
         return f"""
 You are an FMEA reasoning agent.
 
 Task:
-1. Choose the most suitable failure effect or effects for the given failure mode.
+1. For EACH failure mode, choose the most suitable failure effect or effects from the provided candidates.
 2. Use engineering semantic logic first.
 3. Use rank only as supporting evidence:
    - rank 1 is stronger than rank 2
    - smaller rank means stronger retrieval preference
 4. Do not invent any effect outside the provided candidates.
-5. Normally select only 1 effect unless another is also clearly plausible.
+5. Normally select only 1 effect per mode unless another is also clearly plausible.
+6. Keep reasoning concise and practical.
 
-Failure mode:
-{query_mode_text}
-
-Effect candidates:
-{json.dumps(payload, indent=2, ensure_ascii=False)}
+Input:
+{json.dumps(grouped_payload, indent=2, ensure_ascii=False)}
 
 Return ONLY valid JSON matching this schema:
 {json.dumps(schema, indent=2, ensure_ascii=False)}
 """.strip()
 
-    @traceable(
-        run_type="chain",
-        name="fmea_select_cause_to_mode",
-        tags=["fmea", "selection", "cause_to_mode"]
-    )
-    def select_cause_to_mode(
+    def _fallback_grouped_cause_to_mode(
         self,
-        simplified_result: dict,
-        query_cause_text: str,
-        top_n_modes: int = 4,
-    ) -> dict:
-        mode_candidates = self._get_cause_candidates(
-            simplified_result=simplified_result,
-            query_cause_text=query_cause_text,
-            top_n_modes=top_n_modes,
-        )
+        grouped_payload: List[dict]
+    ) -> List[dict]:
+        results = []
+        for item in grouped_payload:
+            cause = item.get("cause", "")
+            candidates = item.get("mode_candidates", [])
+            if not candidates:
+                results.append({
+                    "cause": cause,
+                    "selected_modes": [],
+                    "global_reasoning": "No mode candidates found."
+                })
+                continue
 
-        if not mode_candidates:
-            return {
-                "cause": query_cause_text,
-                "selected_modes": [],
-                "global_reasoning": "No mode candidates found."
-            }
-
-        prompt = self._build_cause_to_mode_prompt(query_cause_text, mode_candidates)
-
-        try:
-            response = self.llm.invoke(prompt)
-            content = response.content if hasattr(response, "content") else str(response)
-            parsed = extract_json(content)
-
-            valid_modes = {item.get("mode_query_text") for item in mode_candidates}
-            cleaned_modes = []
-            for item in parsed.get("selected_modes", []):
-                if item.get("mode_text") in valid_modes:
-                    cleaned_modes.append(item)
-
-            return {
-                "cause": query_cause_text,
-                "selected_modes": cleaned_modes,
-                "global_reasoning": parsed.get("global_reasoning", "")
-            }
-
-        except Exception as e:
-            print(f"[WARN] cause->mode selection failed, fallback used: {e}")
-            best = sorted(mode_candidates, key=lambda x: x.get("rank", 999))[0]
-            return {
-                "cause": query_cause_text,
+            best = sorted(candidates, key=lambda x: x.get("mode_rank", 999))[0]
+            results.append({
+                "cause": cause,
                 "selected_modes": [
                     {
-                        "mode_text": best["mode_query_text"],
+                        "mode_text": best["mode_text"],
                         "selected": True,
                         "reason": "Fallback selected best-ranked mode.",
-                        "confidence": 1.0 / max(best.get("rank", 999), 1),
+                        "confidence": 1.0 / max(best.get("mode_rank", 999), 1),
                     }
                 ],
                 "global_reasoning": "Fallback used best-ranked cause->mode candidate."
-            }
+            })
+        return results
+
+    def _fallback_grouped_mode_to_effect(
+        self,
+        grouped_payload: List[dict]
+    ) -> List[dict]:
+        results = []
+        for item in grouped_payload:
+            mode = item.get("mode", "")
+            candidates = item.get("effect_candidates", [])
+            if not candidates:
+                results.append({
+                    "mode": mode,
+                    "selected_effects": [],
+                    "global_reasoning": "No effect candidates found."
+                })
+                continue
+
+            best = sorted(candidates, key=lambda x: x.get("effect_rank", 999))[0]
+            results.append({
+                "mode": mode,
+                "selected_effects": [
+                    {
+                        "effect_text": best["effect_text"],
+                        "selected": True,
+                        "reason": "Fallback selected best-ranked effect.",
+                        "confidence": 1.0 / max(best.get("effect_rank", 999), 1),
+                    }
+                ],
+                "global_reasoning": "Fallback used best-ranked mode->effect candidate."
+            })
+        return results
+
+    def _clean_grouped_cause_to_mode_result(
+        self,
+        parsed: dict,
+        grouped_payload: List[dict]
+    ) -> List[dict]:
+        valid_lookup = {
+            item["cause"]: {m["mode_text"] for m in item.get("mode_candidates", [])}
+            for item in grouped_payload
+        }
+
+        cleaned_results = []
+        for item in parsed.get("results", []):
+            cause = item.get("cause", "")
+            valid_modes = valid_lookup.get(cause, set())
+
+            cleaned_modes = []
+            for mode in item.get("selected_modes", []):
+                if mode.get("mode_text") in valid_modes:
+                    cleaned_modes.append(mode)
+
+            cleaned_results.append({
+                "cause": cause,
+                "selected_modes": cleaned_modes,
+                "global_reasoning": item.get("global_reasoning", "")
+            })
+
+        # 补齐没返回的 cause
+        returned_causes = {r["cause"] for r in cleaned_results}
+        for payload_item in grouped_payload:
+            if payload_item["cause"] not in returned_causes:
+                cleaned_results.append({
+                    "cause": payload_item["cause"],
+                    "selected_modes": [],
+                    "global_reasoning": "Model did not return this cause."
+                })
+
+        return cleaned_results
+
+    def _clean_grouped_mode_to_effect_result(
+        self,
+        parsed: dict,
+        grouped_payload: List[dict]
+    ) -> List[dict]:
+        valid_lookup = {
+            item["mode"]: {e["effect_text"] for e in item.get("effect_candidates", [])}
+            for item in grouped_payload
+        }
+
+        cleaned_results = []
+        for item in parsed.get("results", []):
+            mode = item.get("mode", "")
+            valid_effects = valid_lookup.get(mode, set())
+
+            cleaned_effects = []
+            for eff in item.get("selected_effects", []):
+                if eff.get("effect_text") in valid_effects:
+                    cleaned_effects.append(eff)
+
+            cleaned_results.append({
+                "mode": mode,
+                "selected_effects": cleaned_effects,
+                "global_reasoning": item.get("global_reasoning", "")
+            })
+
+        # 补齐没返回的 mode
+        returned_modes = {r["mode"] for r in cleaned_results}
+        for payload_item in grouped_payload:
+            if payload_item["mode"] not in returned_modes:
+                cleaned_results.append({
+                    "mode": payload_item["mode"],
+                    "selected_effects": [],
+                    "global_reasoning": "Model did not return this mode."
+                })
+
+        return cleaned_results
 
     @traceable(
         run_type="chain",
-        name="fmea_select_mode_to_effect",
-        tags=["fmea", "selection", "mode_to_effect"]
+        name="fmea_select_cause_to_mode_grouped",
+        tags=["fmea", "selection", "cause_to_mode", "grouped"]
     )
-    def select_mode_to_effect(
+    def select_cause_to_mode_grouped(
         self,
         simplified_result: dict,
-        query_mode_text: str,
-        max_effects_per_mode: int = 2,
-    ) -> dict:
-        lookup = self._build_mode_to_effect_lookup(simplified_result)
-        effect_candidates = lookup.get(query_mode_text, [])[:max_effects_per_mode]
+        top_n_modes: int = 4,
+    ) -> List[dict]:
+        grouped_payload = self._build_grouped_cause_to_mode_payload(
+            simplified_result=simplified_result,
+            top_n_modes=top_n_modes,
+        )
 
-        if not effect_candidates:
-            return {
-                "mode": query_mode_text,
-                "selected_effects": [],
-                "global_reasoning": "No effect candidates found."
-            }
+        if not grouped_payload:
+            return []
 
-        prompt = self._build_mode_to_effect_prompt(query_mode_text, effect_candidates)
+        prompt = self._build_grouped_cause_to_mode_prompt(grouped_payload)
 
         try:
             response = self.llm.invoke(prompt)
             content = response.content if hasattr(response, "content") else str(response)
             parsed = extract_json(content)
-
-            valid_effects = {item.get("effect_query_text") for item in effect_candidates}
-            cleaned_effects = []
-            for item in parsed.get("selected_effects", []):
-                if item.get("effect_text") in valid_effects:
-                    cleaned_effects.append(item)
-
-            return {
-                "mode": query_mode_text,
-                "selected_effects": cleaned_effects,
-                "global_reasoning": parsed.get("global_reasoning", "")
-            }
+            return self._clean_grouped_cause_to_mode_result(parsed, grouped_payload)
 
         except Exception as e:
-            print(f"[WARN] mode->effect selection failed, fallback used: {e}")
-            best = sorted(effect_candidates, key=lambda x: x.get("rank", 999))[0]
-            return {
-                "mode": query_mode_text,
-                "selected_effects": [
-                    {
-                        "effect_text": best["effect_query_text"],
-                        "selected": True,
-                        "reason": "Fallback selected best-ranked effect.",
-                        "confidence": 1.0 / max(best.get("rank", 999), 1),
-                    }
-                ],
-                "global_reasoning": "Fallback used best-ranked mode->effect candidate."
-            }
+            print(f"[WARN] grouped cause->mode selection failed, fallback used: {e}")
+            return self._fallback_grouped_cause_to_mode(grouped_payload)
 
     @traceable(
         run_type="chain",
-        name="fmea_select_all",
-        tags=["fmea", "selection", "pipeline"]
+        name="fmea_select_mode_to_effect_grouped",
+        tags=["fmea", "selection", "mode_to_effect", "grouped"]
+    )
+    def select_mode_to_effect_grouped(
+        self,
+        simplified_result: dict,
+        selected_modes: List[str],
+        max_effects_per_mode: int = 3,
+    ) -> List[dict]:
+        grouped_payload = self._build_grouped_mode_to_effect_payload(
+            simplified_result=simplified_result,
+            selected_modes=selected_modes,
+            max_effects_per_mode=max_effects_per_mode,
+        )
+
+        if not grouped_payload:
+            return []
+
+        prompt = self._build_grouped_mode_to_effect_prompt(grouped_payload)
+
+        try:
+            response = self.llm.invoke(prompt)
+            content = response.content if hasattr(response, "content") else str(response)
+            parsed = extract_json(content)
+            return self._clean_grouped_mode_to_effect_result(parsed, grouped_payload)
+
+        except Exception as e:
+            print(f"[WARN] grouped mode->effect selection failed, fallback used: {e}")
+            return self._fallback_grouped_mode_to_effect(grouped_payload)
+
+    @traceable(
+        run_type="chain",
+        name="fmea_select_all_grouped",
+        tags=["fmea", "selection", "pipeline", "grouped"]
     )
     def select_all(
         self,
@@ -277,37 +376,35 @@ Return ONLY valid JSON matching this schema:
         top_n_modes: int = 2,
         max_effects_per_mode: int = 3,
     ) -> dict:
-        cause_mode_results = []
+        # Step 1: grouped cause -> mode
+        cause_mode_results = self.select_cause_to_mode_grouped(
+            simplified_result=simplified_result,
+            top_n_modes=top_n_modes,
+        )
+
         selected_mode_set = set()
-
-        # Step 1: cause -> mode
-        for cause_item in simplified_result.get("cause_to_mode", []):
-            query_cause_text = cause_item.get("query_cause_text", "")
-            result = self.select_cause_to_mode(
-                simplified_result=simplified_result,
-                query_cause_text=query_cause_text,
-                top_n_modes=top_n_modes,
-            )
-            cause_mode_results.append(result)
-
-            for mode_item in result.get("selected_modes", []):
+        for item in cause_mode_results:
+            for mode_item in item.get("selected_modes", []):
                 if mode_item.get("selected", True):
                     selected_mode_set.add(mode_item["mode_text"])
 
-        # Step 2: unique mode -> effect
-        mode_effect_results = {}
-        for mode_text in selected_mode_set:
-            result = self.select_mode_to_effect(
-                simplified_result=simplified_result,
-                query_mode_text=mode_text,
-                max_effects_per_mode=max_effects_per_mode,
-            )
-            mode_effect_results[mode_text] = result
+        # Step 2: grouped mode -> effect
+        mode_effect_list = self.select_mode_to_effect_grouped(
+            simplified_result=simplified_result,
+            selected_modes=sorted(selected_mode_set),
+            max_effects_per_mode=max_effects_per_mode,
+        )
+
+        mode_effect_results = {
+            item["mode"]: item
+            for item in mode_effect_list
+        }
 
         # Step 3: join
         chains = []
         for cm in cause_mode_results:
             cause = cm["cause"]
+
             for mode_item in cm.get("selected_modes", []):
                 if not mode_item.get("selected", True):
                     continue

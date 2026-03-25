@@ -86,16 +86,21 @@ structure_input_motorcontrol = {
         {
             "element_id": "E1",
             "failure_element": "Motor control",
-            "modes": [
-                "Component break-down",
-                "Unbalanced motor currents",
-                "Incorrect interpretation zero-crossing",
-                "Soft start too long",
-                "No detection",
-                "Welded relay",
-                "Relay cannot close",
-                "False turn-on / turn-off"
-            ],
+            "modes": {
+                "Soft starter":[  
+                    "Component break-down",
+                    "Unbalanced motor currents",],
+                "Zero-crossing detection":[
+                    "Incorrect interpretation zero-crossing",
+                    "Soft start too long",
+                    "No detection",
+                ],
+                "Relay switching":[
+                    "Welded relay",
+                    "Relay cannot close",
+                    "False turn-on / turn-off"
+                ],
+            },
             "causes": {
                 "mechanics": [
                     "Cooling insufficient",
@@ -120,7 +125,7 @@ structure_input_motorcontrol = {
                 "Motor cannot start",
                 "Overcurrent towards motor",
                 "Motor starts without soft start",
-                # "Short-circuit",
+                "Short-circuit",
                 # "(Final) Pressure deviates from setpoints",
                 # "Overpressure",
                 # "No pressure build-up",

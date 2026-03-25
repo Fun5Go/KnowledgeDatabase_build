@@ -204,7 +204,7 @@ def MAPandPRED(structure_input):
 
 @traceable(
     run_type="chain",
-    name="fmea_experiment-candidatesincrease",
+    name="fmea_experiment-integration",
     tags=["fmea", "exp", "prompt_v1"]
 )
 def run_fmea_experiment(agent, simplified_result):
@@ -217,7 +217,7 @@ def run_fmea_experiment(agent, simplified_result):
     
 if __name__ == "__main__":
 
-    results = MAPandPRED(structure_input_powertrain)
+    results = MAPandPRED(structure_input_motorcontrol)
     simplified_results = build_minimal_result_for_llm(results)
     # print(json.dumps(simplified_results, indent=2, ensure_ascii=False))
 

@@ -65,7 +65,7 @@ def load_vector_store(
         embedding_function=embeddings,
         persist_directory=persist_dir
     )
-    print(f"[INFO] Loaded vector store from: {persist_dir}")
+    # print(f"[INFO] Loaded vector store from: {persist_dir}")
     return vector_store
 
 
@@ -176,7 +176,7 @@ def load_all_documents_from_chroma(
         key = build_doc_key(page_content, metadata)
         key_to_doc_id[key] = doc_id
 
-    print(f"[INFO] Loaded {len(all_docs)} documents from Chroma for BM25/hybrid.")
+    # print(f"[INFO] Loaded {len(all_docs)} documents from Chroma for BM25/hybrid.")
     return all_docs, key_to_doc_id
 
 
@@ -497,7 +497,7 @@ if __name__ == "__main__":
     )
     cross_encoder = create_cross_encoder()
 
-    query = "software/ algorithm control"
+    query = "Motor starts without soft start"
 
     retrieval_mode = "hybrid"   # dense / bm25 / hybrid
     use_rerank = True

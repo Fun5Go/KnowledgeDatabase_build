@@ -764,6 +764,74 @@ def infer_query_cause_to_query_modes_weighted(
 
 
 @torch.no_grad()
+def infer_query_mode_to_query_causes_weighted(
+    model, z, node2id, rel2id,
+    mapped_mode_nodes,
+    mapped_cause_items,
+    top_k=5,
+    weighting="linear"
+):
+    """
+    Query mode -> query causes
+    实际打分的是:
+        score(candidate_cause, CAUSES, query_mode)
+    而不是:
+        score(query_mode, CAUSES_REV, candidate_cause)
+    """
+
+    if "CAUSES" not in rel2id:
+        raise KeyError("Relation 'CAUSES' not found in rel2id.")
+
+    # 当前输入的 query mode，作为 tail
+    mode_weighted_nodes = build_weighted_node_list(
+        mapped_nodes=mapped_mode_nodes,
+        node2id=node2id,
+        weighting=weighting
+    )
+
+    if not mode_weighted_nodes:
+        return [], mode_weighted_nodes
+
+    relation_id = rel2id["CAUSES"]
+    results = []
+
+    for cause_item in mapped_cause_items:
+        cause_query_text = cause_item["query_text"]
+
+        # 候选 query cause，作为 head
+        cause_weighted_nodes = build_weighted_node_list(
+            mapped_nodes=cause_item["mapped_nodes"],
+            node2id=node2id,
+            weighting=weighting
+        )
+
+        if not cause_weighted_nodes:
+            continue
+
+        score, pair_details = score_weighted_node_sets(
+            model=model,
+            z=z,
+            relation_id=relation_id,
+            head_nodes=cause_weighted_nodes,   # head = cause
+            tail_nodes=mode_weighted_nodes,    # tail = mode
+            apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
+        )
+
+        if score is None:
+            continue
+
+        if score >= PRED_SCORE_THRESHOLD:
+            results.append({
+                "cause_query_text": cause_query_text,
+                "score": score,
+                "cause_used_nodes": cause_weighted_nodes,
+                "pair_details": pair_details
+            })
+
+    results = sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
+    return results, mode_weighted_nodes
+
+@torch.no_grad()
 def infer_query_mode_to_query_effects_weighted(
     model, z, node2id, rel2id,
     mapped_mode_nodes,
@@ -888,6 +956,42 @@ def print_weighted_cause_to_mode_predictions(
         #         print(f"      pair_score    : {p['pair_score']:.8f}")
         #         print(f"      contribution  : {p['contribution']:.8f}")
 
+def print_weighted_mode_to_cause_predictions(
+    query_text,
+    used_tails,
+    results,
+    kg_text_lookup
+):
+    print(f"\n{'-' * 80}")
+    print("Weighted Query Mode -> Query Cause Prediction")
+    print(f"{'-' * 80}")
+    print(f"Query Mode Text  : {query_text}")
+
+    print("\nWeighted mapped mode nodes:")
+    if not used_tails:
+        print("  None")
+
+    if not results:
+        print("\nNo predicted cause queries.")
+        return
+
+    print("\nPredicted cause queries:")
+    for rank, item in enumerate(results, 1):
+        print(f"\n[{rank}]")
+        print(f"  Cause Query Text  : {item['cause_query_text']}")
+        print(f"  Final Pred Score  : {item['score']:.8f}")
+
+        top_pairs = item.get("pair_details", [])[:SHOW_TOP_PAIR_DETAILS]
+        # if top_pairs:
+        #     print("  Top pair contributions:")
+        #     for p in top_pairs:
+        #         print(f"    - {p['head_kg_id']} -> {p['tail_kg_id']}")
+        #         print(f"      head_sim      : {p['head_sim']:.4f}")
+        #         print(f"      tail_sim      : {p['tail_sim']:.4f}")
+        #         print(f"      head_weight   : {p['head_weight']:.4f}")
+        #         print(f"      tail_weight   : {p['tail_weight']:.4f}")
+        #         print(f"      pair_score    : {p['pair_score']:.8f}")
+        #         print(f"      contribution  : {p['contribution']:.8f}")
 
 def print_weighted_mode_to_effect_predictions(
     query_text,
@@ -989,6 +1093,38 @@ def run_structure_mapping_and_inference(
             results=results,
             kg_text_lookup=kg_text_lookup
         )
+
+    # # =====================================================
+    # # 1.5) QUERY-LEVEL: Mode query -> Cause queries
+    # # =====================================================
+    # print(f"\n{'#' * 80}")
+    # print("RUNNING WEIGHTED QUERY MODE -> QUERY CAUSE INFERENCE")
+    # print(f"{'#' * 80}")
+
+    # for mode_item in mapped["modes"]:
+    #     query_text = mode_item["query_text"]
+
+    #     if not mode_item["mapped_nodes"]:
+    #         print(f"\nSkip mode query (no mapping): {query_text}")
+    #         continue
+
+    #     results, used_tails = infer_query_mode_to_query_causes_weighted(
+    #         model=model,
+    #         z=z,
+    #         node2id=node2id,
+    #         rel2id=rel2id,
+    #         mapped_mode_nodes=mode_item["mapped_nodes"],
+    #         mapped_cause_items=mapped["causes"],
+    #         top_k=TOP_K_PRED,
+    #         weighting=WEIGHTING_METHOD
+    #     )
+
+    #     print_weighted_mode_to_cause_predictions(
+    #         query_text=query_text,
+    #         used_tails=used_tails,
+    #         results=results,
+    #         kg_text_lookup=kg_text_lookup
+    #     )
 
     # =====================================================
     # 2) QUERY-LEVEL: Mode query -> Effect queries

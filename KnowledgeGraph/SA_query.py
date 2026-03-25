@@ -834,7 +834,7 @@ if __name__ == "__main__":
         print(f"Causes  : {len(query['causes'])}")
         print(f"Effects : {len(query['effects'])}")
 
-        results = semantic_failure_search(query, top_k=20,retrieval_k_each=100, retrieval_pool_k= 300, min_score= 0.80)
+        results = semantic_failure_search(query, top_k=20,retrieval_k_each=100, retrieval_pool_k= 300, min_score= 0.8)
         print_results(results)
 
     finally:
