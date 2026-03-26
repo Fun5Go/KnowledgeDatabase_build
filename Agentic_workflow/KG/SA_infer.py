@@ -1,7 +1,7 @@
 import os
 import ast
 import hashlib
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Literal
 
 import pandas as pd
 import torch
@@ -11,6 +11,7 @@ from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from chromadb.utils import embedding_functions
 from torch_geometric.nn import RGCNConv
+from .hybrid_retrieval import map_structure_input_to_kg
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -139,6 +140,10 @@ structure_input_motorcontrol = {
 # 1. CONFIG
 # =========================================================
 
+RetrievalMethod = Literal["dense", "bm25", "hybrid"]
+ReviewMode = Literal["none", "human", "llm"]
+
+
 load_dotenv()
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -240,19 +245,6 @@ def extract_structure_queries(structure_input: Dict[str, Any]):
     return all_causes, all_modes, all_effects
 
 
-def build_kg_text_lookup(mapped: Dict[str, List[Dict[str, Any]]], id2text: Dict[int, str], node2id: Dict[str, int]) -> Dict[str, str]:
-    lookup = {}
-
-    for group in ["causes", "modes", "effects"]:
-        for item in mapped[group]:
-            for m in item["mapped_nodes"]:
-                lookup[m["kg_id"]] = m["kg_text"]
-
-    for kg_id, nid in node2id.items():
-        if kg_id not in lookup:
-            lookup[kg_id] = id2text.get(nid, kg_id)
-
-    return lookup
 
 # Build output for LLM prompt
 def build_weighted_cause_to_mode_predictions(
@@ -329,6 +321,39 @@ def build_weighted_mode_to_effect_predictions(
             output["predicted_effects"].append(effect_item)
 
     return output
+
+def build_kg_text_lookup(mapped, id2text=None, node2id=None):
+    lookup = {
+        "causes": [],
+        "modes": [],
+        "effects": []
+    }
+
+    for item in mapped.get("causes", []):
+        for node in item.get("selected_nodes", []):
+            lookup["causes"].append({
+                "query_text": item["query_text"],
+                "kg_id": node["kg_id"],
+                "kg_text": node["kg_text"],
+            })
+
+    for item in mapped.get("modes", []):
+        for node in item.get("selected_nodes", []):
+            lookup["modes"].append({
+                "query_text": item["query_text"],
+                "kg_id": node["kg_id"],
+                "kg_text": node["kg_text"],
+            })
+
+    for item in mapped.get("effects", []):
+        for node in item.get("selected_nodes", []):
+            lookup["effects"].append({
+                "query_text": item["query_text"],
+                "kg_id": node["kg_id"],
+                "kg_text": node["kg_text"],
+            })
+
+    return lookup
 
 
 # =========================================================
@@ -671,48 +696,48 @@ def map_query_texts_to_nodes(
     return results
 
 
-def map_structure_input_to_kg(session, structure_input: Dict[str, Any]):
-    causes, modes, effects = extract_structure_queries(structure_input)
+# def map_structure_input_to_kg(session, structure_input: Dict[str, Any]):
+#     causes, modes, effects = extract_structure_queries(structure_input)
 
-    cause_maps = map_query_texts_to_nodes(
-        session=session,
-        label="Cause",
-        index_name="cause_embedding",
-        prefix="Failure cause",
-        query_texts=causes,
-        top_k_each=TOP_K_MAP,
-        pool_k=POOL_K,
-        min_score=MIN_SIM,
-        use_discipline_filter=True,
-    )
+#     cause_maps = map_query_texts_to_nodes(
+#         session=session,
+#         label="Cause",
+#         index_name="cause_embedding",
+#         prefix="Failure cause",
+#         query_texts=causes,
+#         top_k_each=TOP_K_MAP,
+#         pool_k=POOL_K,
+#         min_score=MIN_SIM,
+#         use_discipline_filter=True,
+#     )
 
-    mode_maps = map_query_texts_to_nodes(
-        session=session,
-        label="Mode",
-        index_name="mode_embedding",
-        prefix="Failure mode",
-        query_texts=modes,
-        top_k_each=TOP_K_MAP,
-        pool_k=POOL_K,
-        min_score=MIN_SIM
-    )
+#     mode_maps = map_query_texts_to_nodes(
+#         session=session,
+#         label="Mode",
+#         index_name="mode_embedding",
+#         prefix="Failure mode",
+#         query_texts=modes,
+#         top_k_each=TOP_K_MAP,
+#         pool_k=POOL_K,
+#         min_score=MIN_SIM
+#     )
 
-    effect_maps = map_query_texts_to_nodes(
-        session=session,
-        label="Effect",
-        index_name="effect_embedding",
-        prefix="Failure effect",
-        query_texts=effects,
-        top_k_each=TOP_K_MAP,
-        pool_k=POOL_K,
-        min_score=MIN_SIM
-    )
+#     effect_maps = map_query_texts_to_nodes(
+#         session=session,
+#         label="Effect",
+#         index_name="effect_embedding",
+#         prefix="Failure effect",
+#         query_texts=effects,
+#         top_k_each=TOP_K_MAP,
+#         pool_k=POOL_K,
+#         min_score=MIN_SIM
+#     )
 
-    return {
-        "causes": cause_maps,
-        "modes": mode_maps,
-        "effects": effect_maps
-    }
+#     return {
+#         "causes": cause_maps,
+#         "modes": mode_maps,
+#         "effects": effect_maps
+#     }
 
 
 # =========================================================
@@ -1086,18 +1111,31 @@ def print_weighted_mode_to_effect_predictions(
 # =========================================================
 
 def run_structure_mapping_and_inference(
-    is_print: True,
+    is_print: bool,
     session,
     structure_input,
     model, x, edge_index, edge_type,
-    node2id, id2node, id2type, id2text, rel2id
+    node2id, id2node, id2type, id2text, rel2id,
+    retrieval_method: RetrievalMethod = "dense",
+    review_mode: ReviewMode = "none",
+    review_agent=None,
+    print_candidates: bool = True,
 ):
-    mapped = map_structure_input_to_kg(session, structure_input)
+    mapped = map_structure_input_to_kg(
+        session=session,
+        structure_input=structure_input,
+        retrieval_method=retrieval_method,   # "dense" / "bm25" / "hybrid"
+        review_mode=review_mode,             # "none" / "human" / "llm"
+        review_agent=review_agent,
+        print_candidates=print_candidates,
+    )
 
-    print_mapping_results("CAUSE MAPPING", mapped["causes"])
-    print_mapping_results("MODE MAPPING", mapped["modes"])
-    print_mapping_results("EFFECT MAPPING", mapped["effects"])
+    if is_print:
+        print_mapping_results("CAUSE MAPPING", mapped["causes"])
+        print_mapping_results("MODE MAPPING", mapped["modes"])
+        print_mapping_results("EFFECT MAPPING", mapped["effects"])
 
+    # build lookup; if your build_kg_text_lookup already supports selected_nodes, keep as-is
     kg_text_lookup = build_kg_text_lookup(mapped, id2text=id2text, node2id=node2id)
 
     print(f"\nMapped cause query count  : {len(mapped['causes'])}")
@@ -1110,6 +1148,28 @@ def run_structure_mapping_and_inference(
     cause_to_mode_outputs = []
     mode_to_effect_outputs = []
 
+    # -----------------------------------------------------
+    # Decide which nodes are used for inference
+    # review_mode == "none"  -> use mapped_nodes
+    # review_mode != "none"  -> use selected_nodes
+    # -----------------------------------------------------
+    def _get_nodes_for_infer(item: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if review_mode == "none":
+            return item.get("mapped_nodes", [])
+        return item.get("selected_nodes", [])
+
+    def _clone_mapped_items_with_infer_nodes(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        out = []
+        for item in items:
+            new_item = dict(item)
+            new_item["infer_nodes"] = _get_nodes_for_infer(item)
+            out.append(new_item)
+        return out
+
+    cause_items_for_infer = _clone_mapped_items_with_infer_nodes(mapped["causes"])
+    mode_items_for_infer = _clone_mapped_items_with_infer_nodes(mapped["modes"])
+    effect_items_for_infer = _clone_mapped_items_with_infer_nodes(mapped["effects"])
+
     # =====================================================
     # 1) QUERY-LEVEL: Cause query -> Mode queries
     # =====================================================
@@ -1117,23 +1177,32 @@ def run_structure_mapping_and_inference(
     print("RUNNING WEIGHTED QUERY CAUSE -> QUERY MODE INFERENCE")
     print(f"{'#' * 80}")
 
-    for cause_item in mapped["causes"]:
+    for cause_item in cause_items_for_infer:
         query_cause = cause_item["query_text"]
+        cause_nodes_for_infer = cause_item.get("infer_nodes", [])
 
-        if not cause_item["mapped_nodes"]:
-            print(f"\nSkip cause query (no mapping): {query_cause}")
+        if not cause_nodes_for_infer:
+            print(f"\nSkip cause query (no inference nodes): {query_cause}")
             continue
+
+        # For target mode items, also switch between mapped_nodes / selected_nodes
+        mode_items_for_this_infer = []
+        for m in mode_items_for_infer:
+            m2 = dict(m)
+            m2["mapped_nodes"] = m.get("infer_nodes", [])
+            mode_items_for_this_infer.append(m2)
 
         pred_mode, used_heads = infer_query_cause_to_query_modes_weighted(
             model=model,
             z=z,
             node2id=node2id,
             rel2id=rel2id,
-            mapped_cause_nodes=cause_item["mapped_nodes"],
-            mapped_mode_items=mapped["modes"],
+            mapped_cause_nodes=cause_nodes_for_infer,
+            mapped_mode_items=mode_items_for_this_infer,
             top_k=TOP_K_PRED,
             weighting=WEIGHTING_METHOD
         )
+
         if is_print:
             print_weighted_cause_to_mode_predictions(
                 query_text=query_cause,
@@ -1141,6 +1210,7 @@ def run_structure_mapping_and_inference(
                 results=pred_mode,
                 kg_text_lookup=kg_text_lookup
             )
+
         cause_to_mode_outputs.append(
             build_weighted_cause_to_mode_predictions(
                 query_text=query_cause,
@@ -1157,23 +1227,31 @@ def run_structure_mapping_and_inference(
     print("RUNNING WEIGHTED QUERY MODE -> QUERY EFFECT INFERENCE")
     print(f"{'#' * 80}")
 
-    for mode_item in mapped["modes"]:
+    for mode_item in mode_items_for_infer:
         query_mode = mode_item["query_text"]
+        mode_nodes_for_infer = mode_item.get("infer_nodes", [])
 
-        if not mode_item["mapped_nodes"]:
-            print(f"\nSkip mode query (no mapping): {query_mode}")
+        if not mode_nodes_for_infer:
+            print(f"\nSkip mode query (no inference nodes): {query_mode}")
             continue
+
+        effect_items_for_this_infer = []
+        for e in effect_items_for_infer:
+            e2 = dict(e)
+            e2["mapped_nodes"] = e.get("infer_nodes", [])
+            effect_items_for_this_infer.append(e2)
 
         pred_effect, used_heads = infer_query_mode_to_query_effects_weighted(
             model=model,
             z=z,
             node2id=node2id,
             rel2id=rel2id,
-            mapped_mode_nodes=mode_item["mapped_nodes"],
-            mapped_effect_items=mapped["effects"],
+            mapped_mode_nodes=mode_nodes_for_infer,
+            mapped_effect_items=effect_items_for_this_infer,
             top_k=TOP_K_PRED,
             weighting=WEIGHTING_METHOD
         )
+
         if is_print:
             print_weighted_mode_to_effect_predictions(
                 query_text=query_mode,
@@ -1190,7 +1268,7 @@ def run_structure_mapping_and_inference(
                 kg_text_lookup=kg_text_lookup
             )
         )
-    
+
     return {
         "mapped": mapped,
         "cause_to_mode": cause_to_mode_outputs,

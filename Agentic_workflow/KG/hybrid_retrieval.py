@@ -132,19 +132,19 @@ structure_input_motorcontrol = {
 # 1. CONFIG
 # =========================================================
 
-TOP_K_MAP = 10
-POOL_K = 100
-
+FINAL_TOP_K  = 5
+POOL_K = 200
+FUSION_TOP_K = 100  
 # Dense threshold is meaningful for cosine similarity
-MIN_SCORE_DENSE = 0.75
+MIN_SCORE_DENSE = 0.7
 
 # BM25/fulltext scores are not directly comparable across queries
-MIN_SCORE_BM25 = 1.0
+MIN_SCORE_BM25 = 2.5
 
 # Hybrid score is normalized/fused, so do not use 0.7 here by default
-MIN_SCORE_HYBRID = 0.0
+MIN_SCORE_HYBRID = 0.3
 
-HYBRID_ALPHA = 0.7
+HYBRID_ALPHA = 0.65
 
 RetrievalMethod = Literal["dense", "bm25", "hybrid"]
 ReviewMode = Literal["none", "human", "llm"]
@@ -219,6 +219,113 @@ def escape_lucene_query(text: str) -> str:
     if not text:
         return ""
     return re.sub(LUCENE_SPECIAL_CHARS, r'\\\1', text)
+
+
+def fetch_candidate_context(
+    session,
+    semantic_id: str,
+    node_label: str,
+    max_neighbors_each: int = 5,
+) -> Dict[str, List[Dict[str, str]]]:
+    if node_label == "Cause":
+        cypher = """
+        MATCH (c:Cause {semantic_id: $semantic_id})
+        OPTIONAL MATCH (c)-[:CAUSES]->(m:Mode)
+        WITH c, collect(DISTINCT {
+            kg_id: m.semantic_id,
+            kg_text: coalesce(m.text, m.name, m.semantic_id)
+        })[..$limit] AS modes
+        OPTIONAL MATCH (c)-[:CAUSES]->(:Mode)-[:LEADS_TO]->(e:Effect)
+        RETURN
+            [] AS connected_causes,
+            modes AS connected_modes,
+            collect(DISTINCT {
+                kg_id: e.semantic_id,
+                kg_text: coalesce(e.text, e.name, e.semantic_id)
+            })[..$limit] AS connected_effects
+        """
+
+    elif node_label == "Mode":
+        cypher = """
+        MATCH (m:Mode {semantic_id: $semantic_id})
+        OPTIONAL MATCH (c:Cause)-[:CAUSES]->(m)
+        WITH m, collect(DISTINCT {
+            kg_id: c.semantic_id,
+            kg_text: coalesce(c.text, c.name, c.semantic_id)
+        })[..$limit] AS causes
+        OPTIONAL MATCH (m)-[:LEADS_TO]->(e:Effect)
+        RETURN
+            causes AS connected_causes,
+            [] AS connected_modes,
+            collect(DISTINCT {
+                kg_id: e.semantic_id,
+                kg_text: coalesce(e.text, e.name, e.semantic_id)
+            })[..$limit] AS connected_effects
+        """
+
+    elif node_label == "Effect":
+        cypher = """
+        MATCH (e:Effect {semantic_id: $semantic_id})
+        OPTIONAL MATCH (m:Mode)-[:LEADS_TO]->(e)
+        WITH e, collect(DISTINCT {
+            kg_id: m.semantic_id,
+            kg_text: coalesce(m.text, m.name, m.semantic_id)
+        })[..$limit] AS modes
+        OPTIONAL MATCH (c:Cause)-[:CAUSES]->(:Mode)-[:LEADS_TO]->(e)
+        RETURN
+            collect(DISTINCT {
+                kg_id: c.semantic_id,
+                kg_text: coalesce(c.text, c.name, c.semantic_id)
+            })[..$limit] AS connected_causes,
+            modes AS connected_modes,
+            [] AS connected_effects
+        """
+
+    else:
+        return {
+            "connected_causes": [],
+            "connected_modes": [],
+            "connected_effects": []
+        }
+
+    result = session.run(
+        cypher,
+        semantic_id=semantic_id,
+        limit=max_neighbors_each
+    ).single()
+
+    if result is None:
+        return {
+            "connected_causes": [],
+            "connected_modes": [],
+            "connected_effects": []
+        }
+
+    return {
+        "connected_causes": result["connected_causes"] or [],
+        "connected_modes": result["connected_modes"] or [],
+        "connected_effects": result["connected_effects"] or [],
+    }
+
+def enrich_candidates_with_context(
+    session,
+    candidates: List[Dict[str, Any]],
+    node_label: str,
+    max_neighbors_each: int = 5,
+) -> List[Dict[str, Any]]:
+    enriched = []
+
+    for c in candidates:
+        item = dict(c)
+        item["context"] = fetch_candidate_context(
+            session=session,
+            semantic_id=c["kg_id"],
+            node_label=node_label,
+            max_neighbors_each=max_neighbors_each,
+        )
+        enriched.append(item)
+
+    return enriched
 # =========================================================
 # 4. QUERY EXTRACTION
 # =========================================================
@@ -524,26 +631,26 @@ def retrieve_candidates(
     fulltext_index_name: Optional[str],
     query_text: str,
     method: RetrievalMethod = "dense",
-    top_k: int = 10,
+    final_k: int = 10,
+    fusion_k: int = 50,
     pool_k: int = 100,
     dense_min_score: float = MIN_SCORE_DENSE,
     bm25_min_score: float = MIN_SCORE_BM25,
     hybrid_min_score: float = MIN_SCORE_HYBRID,
-    keep_group_or_single_only: bool = True,
     use_discipline_filter: bool = False,
     discipline: Optional[str] = None,
     hybrid_alpha: float = HYBRID_ALPHA,
 ) -> List[Dict[str, Any]]:
+
     if method == "dense":
         return retrieve_dense_candidates(
             session=session,
             label=label,
             index_name=index_name,
             query_text=query_text,
-            top_k=top_k,
+            top_k=final_k,
             pool_k=pool_k,
             min_score=dense_min_score,
-            keep_group_or_single_only=keep_group_or_single_only,
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
         )
@@ -557,9 +664,8 @@ def retrieve_candidates(
             label=label,
             fulltext_index_name=fulltext_index_name,
             query_text=query_text,
-            top_k=top_k,
+            top_k=final_k,
             min_score=bm25_min_score,
-            keep_group_or_single_only=keep_group_or_single_only,
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
         )
@@ -568,15 +674,15 @@ def retrieve_candidates(
         if not fulltext_index_name:
             raise ValueError("fulltext_index_name is required for hybrid retrieval")
 
+        # 先各自保留更大的候选池用于融合
         dense_candidates = retrieve_dense_candidates(
             session=session,
             label=label,
             index_name=index_name,
             query_text=query_text,
-            top_k=top_k,
+            top_k=fusion_k,
             pool_k=pool_k,
             min_score=0.0,
-            keep_group_or_single_only=keep_group_or_single_only,
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
         )
@@ -586,9 +692,8 @@ def retrieve_candidates(
             label=label,
             fulltext_index_name=fulltext_index_name,
             query_text=query_text,
-            top_k=top_k,
+            top_k=fusion_k,
             min_score=0.0,
-            keep_group_or_single_only=keep_group_or_single_only,
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
         )
@@ -597,7 +702,7 @@ def retrieve_candidates(
             dense_candidates=dense_candidates,
             bm25_candidates=bm25_candidates,
             alpha=hybrid_alpha,
-            top_k=top_k,
+            top_k=final_k,   # 注意：这里才截断成最终输出数量
         )
 
         if hybrid_min_score > 0:
@@ -619,7 +724,7 @@ def print_similar_candidates(
     title: str = "CANDIDATES"
 ):
     print(f"\n{'=' * 80}")
-    print(title)
+    print(f"{title}")
     print(f"Query Text: {query_text}")
     if allowed_disciplines is not None:
         print(f"Allowed Disciplines: {allowed_disciplines}")
@@ -640,34 +745,80 @@ def print_similar_candidates(
             print(f"    BM25       : {float(c.get('bm25_score', 0.0)):.4f}")
         print(f"    Source     : {c.get('source', 'unknown')}")
 
+        ctx = c.get("context", {})
+        causes = ctx.get("connected_causes", [])
+        modes = ctx.get("connected_modes", [])
+        effects = ctx.get("connected_effects", [])
 
-def human_select_candidate(
+        if causes:
+            print("    Connected Causes:")
+            for x in causes:
+                print(f"      - {x.get('kg_text')} ({x.get('kg_id')})")
+
+        if modes:
+            print("    Connected Modes:")
+            for x in modes:
+                print(f"      - {x.get('kg_text')} ({x.get('kg_id')})")
+
+        if effects:
+            print("    Connected Effects:")
+            for x in effects:
+                print(f"      - {x.get('kg_text')} ({x.get('kg_id')})")
+
+
+def human_select_candidates(
     query_text: str,
     candidates: List[Dict[str, Any]],
-    allow_skip: bool = True
-) -> Optional[Dict[str, Any]]:
+    allow_skip: bool = True,
+    allow_all: bool = True,
+) -> List[Dict[str, Any]]:
     print_similar_candidates(query_text, candidates, title="HUMAN REVIEW")
 
     if not candidates:
-        return None
+        return []
 
     while True:
-        prompt = f"Select candidate index for '{query_text}'"
+        prompt = f"Select candidate indices for '{query_text}' (e.g. 1,2,4"
+        if allow_all:
+            prompt += ", or 'all'"
         if allow_skip:
-            prompt += " (Enter to skip)"
-        prompt += ": "
+            prompt += ", Enter to skip"
+        prompt += "): "
 
         raw = input(prompt).strip()
 
         if raw == "" and allow_skip:
-            return None
+            return []
 
-        if raw.isdigit():
-            idx = int(raw)
-            if 1 <= idx <= len(candidates):
-                return candidates[idx - 1]
+        if allow_all and raw.lower() == "all":
+            return candidates
 
-        print("Invalid input. Try again.")
+        try:
+            parts = [x.strip() for x in raw.split(",") if x.strip()]
+            if not parts:
+                raise ValueError
+
+            indices = []
+            for p in parts:
+                if not p.isdigit():
+                    raise ValueError
+                idx = int(p)
+                if not (1 <= idx <= len(candidates)):
+                    raise ValueError
+                indices.append(idx)
+
+            # 去重但保持输入顺序
+            seen = set()
+            selected = []
+            for idx in indices:
+                if idx not in seen:
+                    seen.add(idx)
+                    selected.append(candidates[idx - 1])
+
+            return selected
+
+        except ValueError:
+            print("Invalid input. Use e.g. 1,2,4 or all.")
 
 
 def llm_select_candidate(
@@ -724,7 +875,7 @@ def review_and_select_candidate(
         return candidates[0]
 
     if review_mode == "human":
-        return human_select_candidate(query_text, candidates)
+        return human_select_candidates(query_text, candidates)
 
     if review_mode == "llm":
         if agent is None:
@@ -749,9 +900,9 @@ def map_query_texts_to_nodes(
     index_name: str,
     fulltext_index_name: Optional[str],
     query_texts: List[Any],
-    top_k_each: int = 3,
+    top_k_each: int = 5,
+    fusion_k_each: int = 50,
     pool_k: int = 100,
-    keep_group_or_single_only: bool = True,
     use_discipline_filter: bool = False,
     retrieval_method: RetrievalMethod = "dense",
     review_mode: ReviewMode = "none",
@@ -776,15 +927,21 @@ def map_query_texts_to_nodes(
             fulltext_index_name=fulltext_index_name,
             query_text=text,
             method=retrieval_method,
-            top_k=top_k_each,
+            final_k=top_k_each,
+            fusion_k=fusion_k_each,
             pool_k=pool_k,
             dense_min_score=MIN_SCORE_DENSE,
             bm25_min_score=MIN_SCORE_BM25,
             hybrid_min_score=MIN_SCORE_HYBRID,
-            keep_group_or_single_only=keep_group_or_single_only,
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
             hybrid_alpha=hybrid_alpha,
+        )
+        candidates = enrich_candidates_with_context(
+            session=session,
+            candidates=candidates,
+            node_label=label,
+            max_neighbors_each=5,
         )
 
         allowed_disciplines = [discipline, "unknown"] if discipline is not None else None
@@ -835,7 +992,7 @@ def map_structure_input_to_kg(
         index_name="cause_embedding",
         fulltext_index_name="cause_fulltext",
         query_texts=causes,
-        top_k_each=TOP_K_MAP,
+        top_k_each=FINAL_TOP_K,
         pool_k=POOL_K,
         use_discipline_filter=True,
         retrieval_method=retrieval_method,
@@ -850,7 +1007,7 @@ def map_structure_input_to_kg(
         index_name="mode_embedding",
         fulltext_index_name="mode_fulltext",
         query_texts=modes,
-        top_k_each=TOP_K_MAP,
+        top_k_each=FINAL_TOP_K,
         pool_k=POOL_K,
         retrieval_method=retrieval_method,
         review_mode=review_mode,
@@ -864,7 +1021,7 @@ def map_structure_input_to_kg(
         index_name="effect_embedding",
         fulltext_index_name="effect_fulltext",
         query_texts=effects,
-        top_k_each=TOP_K_MAP,
+        top_k_each=FINAL_TOP_K,
         pool_k=POOL_K,
         retrieval_method=retrieval_method,
         review_mode=review_mode,
@@ -933,7 +1090,7 @@ if __name__ == "__main__":
                 session=session,
                 structure_input=structure_input_motorcontrol,
                 retrieval_method="hybrid",   # "dense" / "bm25" / "hybrid"
-                review_mode="none",          # "none" / "human" / "llm"
+                review_mode="human",          # "none" / "human" / "llm"
                 review_agent=None,
                 print_candidates=True,
             )

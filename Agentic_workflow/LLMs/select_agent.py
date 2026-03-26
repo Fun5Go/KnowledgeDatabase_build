@@ -117,7 +117,7 @@ Task:
    - rank 1 is stronger than rank 2
    - smaller rank means stronger retrieval preference
 4. Do not invent any mode outside the provided candidates.
-5. Normally select only 1 mode per cause unless another is also clearly plausible.
+5. Normally select 1-2 mode per cause unless another is also clearly plausible.
 6. Keep reasoning concise and practical.
 
 Input:
