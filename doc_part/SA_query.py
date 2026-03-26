@@ -29,6 +29,75 @@ def tokenize(text: str) -> List[str]:
     return [t for t in tokens if t not in stopwords]
 
 
+# =========================================================
+# Failure signal patterns
+# =========================================================
+FAILURE_SIGNAL_PATTERNS = {
+    "strong": [
+        r"\bdue to\b",
+        r"\bbecause of\b",
+        r"\bleads? to\b",
+        r"\bresult(s|ing)? in\b",
+        r"\bcaused by\b",
+        r"\bcauses?\b",
+        r"\bcausing\b",
+        r"\bresults? from\b",
+        r"\bfails? due to\b",
+        r"\bfailure of\b",
+        r"\bas a result of\b",
+        r"\bif\b",
+        r"\bfailure\b",
+    ],
+    "medium": [
+        r"\binduces?\b",
+        r"\btriggers?\b",
+        r"\bcreates?\b",
+        r"\bproduces?\b",
+        r"\bgives rise to\b",
+        r"\bresponsible for\b",
+        r"\boriginates? from\b",
+        r"\bstems? from\b",
+    ],
+    "weak": [
+        r"\btherefore\b",
+        r"\bthus\b",
+        r"\bhence\b",
+        r"\bconsequently\b",
+        r"\bso that\b",
+    ]
+}
+
+
+def failure_signal_bonus(chunk_text: str) -> Dict[str, Any]:
+    text = normalize_text(chunk_text)
+
+    matched_signals = []
+    bonus = 0.0
+
+    weights = {
+        "strong": 0.18,
+        "medium": 0.10,
+        "weak": 0.05,
+    }
+
+    for level, patterns in FAILURE_SIGNAL_PATTERNS.items():
+        for p in patterns:
+            if re.search(p, text):
+                matched_signals.append({
+                    "level": level,
+                    "pattern": p
+                })
+                bonus += weights[level]
+
+    # cap to avoid overpowering lexical evidence
+    bonus = min(bonus, 0.35)
+
+    return {
+        "bonus": round(bonus, 4),
+        "matched_signals": matched_signals
+    }
+
+
 def flatten_structure(structure_input: Dict[str, Any]) -> List[Dict[str, str]]:
     queries = []
 
@@ -75,19 +144,25 @@ def lexical_match_score(query_text: str, chunk_text: str) -> Dict[str, Any]:
     c_tokens = set(tokenize(chunk_text))
 
     matched_terms = [t for t in q_tokens if t in c_tokens]
-    lexical_score = len(set(matched_terms)) / max(len(set(q_tokens)), 1)
+    base_lexical_score = len(set(matched_terms)) / max(len(set(q_tokens)), 1)
 
     phrase_bonus = 0.0
     if q_norm in c_norm:
         phrase_bonus += 0.3
 
-    final_score = lexical_score + phrase_bonus
+    signal_info = failure_signal_bonus(chunk_text)
+
+    # 注意：这里只用于 per-query 检索，不把 signal bonus 算进去
+    final_score = base_lexical_score + phrase_bonus
 
     return {
-        "score": final_score,
-        "matched_terms": matched_terms
+        "score": round(final_score, 4),   # 不含 signal bonus
+        "base_lexical_score": round(base_lexical_score, 4),
+        "phrase_bonus": round(phrase_bonus, 4),
+        "signal_bonus": round(signal_info["bonus"], 4),   # 只记录，不参与当前分数
+        "matched_terms": matched_terms,
+        "matched_signals": signal_info["matched_signals"]
     }
-
 
 def get_chunk_text(doc: Any) -> str:
     """
@@ -159,7 +234,7 @@ def search_top_chunks_per_query(
             use_rerank=use_rerank,
             doc_type=doc_type,
             candidate_k=candidate_k,
-            final_k=final_k,
+            final_k=candidate_k,
             hybrid_alpha=hybrid_alpha,
             cross_encoder=cross_encoder
         )
@@ -184,12 +259,19 @@ def search_top_chunks_per_query(
                 "chunk_mode": metadata.get("chunk_mode"),
                 "doc_type": metadata.get("type") or metadata.get("doc_type"),
                 "retrieval_score": metadata.get("score"),
-                "lexical_score": round(lex_info["score"], 4),
+
+                # per-query score: 不含 signal bonus
+                "lexical_score": lex_info["score"],
+                "base_lexical_score": lex_info["base_lexical_score"],
+                "phrase_bonus": lex_info["phrase_bonus"],
+
+                # chunk-level feature: 只记录
+                "signal_bonus": lex_info["signal_bonus"],
                 "matched_terms": lex_info["matched_terms"],
+                "matched_signals": lex_info["matched_signals"],
                 "content": chunk_text
             }
 
-            # 同一 query 下同一 chunk 只保留 lexical_score 更高的一条
             if chunk_id not in best_chunks:
                 best_chunks[chunk_id] = item
             else:
@@ -198,7 +280,11 @@ def search_top_chunks_per_query(
 
         top_chunks = sorted(
             best_chunks.values(),
-            key=lambda x: x["lexical_score"],
+            key=lambda x: (
+                x["lexical_score"],
+                x["base_lexical_score"],
+                x["phrase_bonus"]
+            ),
             reverse=True
         )[:final_k]
 
@@ -213,20 +299,22 @@ def search_top_chunks_per_query(
 
 def aggregate_chunks_from_query_results(
     query_results: List[Dict[str, Any]],
-    query_type_weights: Dict[str, float] = None
+    query_type_weights: Dict[str, float] = None,
+    chunk_signal_weight: float = 1.0
 ) -> List[Dict[str, Any]]:
     """
     把所有 query 的 top chunks 反向聚合：
     一个 chunk 被多少 query 命中？
     被哪些 text 命中？
+    signal bonus 作为 chunk-level bonus，只在聚合时加一次
     """
     if query_type_weights is None:
         query_type_weights = {
-            "failure_element": 1.2,
-            "mode_group": 1.2,
+            "failure_element": 1.0,
+            "mode_group": 1.0,
             "mode": 1.0,
-            "effect": 1.1,
-            "cause": 0.9,
+            "effect": 1.0,
+            "cause": 1.0,
         }
 
     chunk_map = defaultdict(lambda: {
@@ -241,6 +329,8 @@ def aggregate_chunks_from_query_results(
         "hit_count": 0,
         "weighted_hit_count": 0.0,
         "max_lexical_score": 0.0,
+        "chunk_signal_bonus": 0.0,
+        "final_aggregate_score": 0.0,
     })
 
     for qr in query_results:
@@ -259,12 +349,18 @@ def aggregate_chunks_from_query_results(
             entry["chunk_mode"] = ch.get("chunk_mode")
             entry["doc_type"] = ch.get("doc_type")
             entry["content"] = ch.get("content")
+
             entry["matched_queries"].append({
                 "query_text": qtext,
                 "query_type": qtype,
                 "matched_terms": ch.get("matched_terms", []),
-                "lexical_score": ch.get("lexical_score", 0.0)
+                "matched_signals": ch.get("matched_signals", []),
+                "base_lexical_score": ch.get("base_lexical_score", 0.0),
+                "phrase_bonus": ch.get("phrase_bonus", 0.0),
+                "signal_bonus": ch.get("signal_bonus", 0.0),   # 只是记录
+                "lexical_score": ch.get("lexical_score", 0.0)  # 不含 signal bonus
             })
+
             entry["hit_count"] += 1
             entry["weighted_hit_count"] += qweight
             entry["max_lexical_score"] = max(
@@ -272,9 +368,26 @@ def aggregate_chunks_from_query_results(
                 ch.get("lexical_score", 0.0)
             )
 
+            # chunk-level bonus: 同一个 chunk 只保留一次
+            entry["chunk_signal_bonus"] = max(
+                entry["chunk_signal_bonus"],
+                ch.get("signal_bonus", 0.0)
+            )
+
     aggregated = list(chunk_map.values())
+
+    for entry in aggregated:
+        entry["final_aggregate_score"] = round(
+            entry["weighted_hit_count"] + chunk_signal_weight * entry["chunk_signal_bonus"],
+            4
+        )
+
     aggregated.sort(
-        key=lambda x: (x["weighted_hit_count"], x["hit_count"], x["max_lexical_score"]),
+        key=lambda x: (
+            x["final_aggregate_score"],
+            x["hit_count"],
+            x["max_lexical_score"]
+        ),
         reverse=True
     )
     return aggregated
@@ -296,14 +409,19 @@ def print_query_results(query_results: List[Dict[str, Any]], max_content_len: in
 
         for i, ch in enumerate(qr["top_chunks"], 1):
             content_preview = ch["content"][:max_content_len].replace("\n", " ")
-            print(f"[{i}] Chunk ID       : {ch['chunk_id']}")
-            print(f"    Source        : {ch.get('source')}")
-            print(f"    Pages         : {ch.get('pages')}")
-            print(f"    RequirementID : {ch.get('requirement_ids')}")
-            print(f"    Chunk Mode    : {ch.get('chunk_mode')}")
-            print(f"    Lexical Score : {ch.get('lexical_score')}")
-            print(f"    Matched Terms : {ch.get('matched_terms')}")
-            print(f"    Content       : {content_preview}")
+            print(f"[{i}] Chunk ID         : {ch['chunk_id']}")
+            print(f"    Source          : {ch.get('source')}")
+            print(f"    Pages           : {ch.get('pages')}")
+            print(f"    Requirement ID  : {ch.get('requirement_ids')}")
+            print(f"    Chunk Mode      : {ch.get('chunk_mode')}")
+            print(f"    Retrieval Score : {ch.get('retrieval_score')}")
+            print(f"    Lexical Score   : {ch.get('lexical_score')}")
+            print(f"    Base Lex Score  : {ch.get('base_lexical_score')}")
+            print(f"    Phrase Bonus    : {ch.get('phrase_bonus')}")
+            print(f"    Signal Bonus    : {ch.get('signal_bonus')}")
+            print(f"    Matched Terms   : {ch.get('matched_terms')}")
+            print(f"    Matched Signals : {ch.get('matched_signals')}")
+            print(f"    Content         : {content_preview}")
             print()
 
 
@@ -314,22 +432,29 @@ def print_aggregated_chunks(aggregated_chunks: List[Dict[str, Any]], top_n: int 
 
     for i, ch in enumerate(aggregated_chunks[:top_n], 1):
         content_preview = ch["content"][:max_content_len].replace("\n", " ")
-        print(f"\n[{i}] Chunk ID            : {ch['chunk_id']}")
-        print(f"    Source              : {ch.get('source')}")
-        print(f"    Pages               : {ch.get('pages')}")
-        print(f"    Requirement IDs     : {ch.get('requirement_ids')}")
-        print(f"    Hit Count           : {ch.get('hit_count')}")
-        print(f"    Weighted Hit Count  : {round(ch.get('weighted_hit_count', 0.0), 4)}")
-        print(f"    Max Lexical Score   : {ch.get('max_lexical_score')}")
+        print(f"\n[{i}] Chunk ID              : {ch['chunk_id']}")
+        print(f"    Source                : {ch.get('source')}")
+        print(f"    Pages                 : {ch.get('pages')}")
+        print(f"    Requirement IDs       : {ch.get('requirement_ids')}")
+        print(f"    Hit Count             : {ch.get('hit_count')}")
+        print(f"    Weighted Hit Count    : {round(ch.get('weighted_hit_count', 0.0), 4)}")
+        print(f"    Chunk Signal Bonus    : {ch.get('chunk_signal_bonus')}")
+        print(f"    Final Aggregate Score : {ch.get('final_aggregate_score')}")
+        print(f"    Max Lexical Score     : {ch.get('max_lexical_score')}")
 
         print("    Matched Queries:")
         for mq in ch["matched_queries"]:
             print(
                 f"      - [{mq['query_type']}] {mq['query_text']} "
-                f"(matched_terms={mq['matched_terms']}, lexical_score={mq['lexical_score']})"
+                f"(matched_terms={mq['matched_terms']}, "
+                f"matched_signals={mq.get('matched_signals', [])}, "
+                f"base={mq.get('base_lexical_score', 0.0)}, "
+                f"phrase_bonus={mq.get('phrase_bonus', 0.0)}, "
+                f"signal_bonus={mq.get('signal_bonus', 0.0)}, "
+                f"lexical_score={mq['lexical_score']})"
             )
 
-        print(f"    Content             : {content_preview}")
+        print(f"    Content               : {content_preview}")
 
 
 if __name__ == "__main__":
@@ -414,15 +539,18 @@ if __name__ == "__main__":
         candidate_k=candidate_k,
         final_k=final_k,
         hybrid_alpha=hybrid_alpha,
-        min_lexical_score=0.0,   # 想过滤弱匹配可以调成 0.15 / 0.2
+        min_lexical_score=0.3,   # 调试时可设 0.0；正式建议 0.1 ~ 0.2
     )
 
     # 3) aggregate chunks across all query hits
-    aggregated_chunks = aggregate_chunks_from_query_results(query_results)
+    aggregated_chunks = aggregate_chunks_from_query_results(
+    query_results,
+    chunk_signal_weight=5
+)
 
     # 4) print results
     print_query_results(query_results)
-    print_aggregated_chunks(aggregated_chunks, top_n=10)
+    print_aggregated_chunks(aggregated_chunks, top_n=20)
 
     # 5) optional: save json
     output = {

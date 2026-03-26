@@ -193,7 +193,7 @@ def MAPandPRED(structure_input):
     try:
         with kg_client.session() as session:
             results = run_structure_mapping_and_inference(
-                is_print=True,
+                is_print=False,
                 session=session,
                 structure_input=structure_input,
                 model=model,
@@ -213,20 +213,20 @@ def MAPandPRED(structure_input):
 @traceable(
     run_type="chain",
     name="fmea_experiment-integration",
-    tags=["fmea", "exp1", "prompt_v1"]
+    tags=["fmea", "exp-powertrain", "prompt_v1"]
 )
 def run_fmea_experiment(agent, simplified_result):
     return agent.select_all(
         simplified_result=simplified_result,
-        top_n_modes=8,
+        top_n_modes=4,
         max_effects_per_mode=4,
     )
 
     
 if __name__ == "__main__":
 
-    results = MAPandPRED(structure_input_motorcontrol)
-    simplified_results = build_minimal_result_for_llm(results,structure_input_motorcontrol)
+    results = MAPandPRED(structure_input_powertrain)
+    simplified_results = build_minimal_result_for_llm(results,structure_input_powertrain)
     # print(json.dumps(simplified_results, indent=2, ensure_ascii=False))
 
 

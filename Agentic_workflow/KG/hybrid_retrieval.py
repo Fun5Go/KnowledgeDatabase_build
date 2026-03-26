@@ -19,17 +19,25 @@ structure_input_powertrain = {
         {
             "element_id": "E1",
             "failure_element": "Power train",
-            "modes": [
-                "No voltage applied",
-                "Incorrect torque applied",
-                "Not enough torque",
-                "Motor breaks/overheats (e.g. resulting in demagnetisation)",
-                "Unstable regulation",
-                "High loss in torque transfer",
-                "Gear train breaks/wears out",
-                "Tranmission ratio drifts",
-                "creates too much noise"
-            ],
+            "modes": {
+                "Drive motor":[
+                    "No voltage applied",
+                    "Incorrect torque applied",
+                    "Not enough torque",
+                    "Motor breaks/overheats (e.g. resulting in demagnetisation)",
+                    "Unstable regulation",
+                ],
+                "Gear train":[
+                    "High loss in torque transfer",
+                    "Gear train breaks/wears out",
+                ],
+                "Hold transmission ratio":[
+                    "Tranmission ratio drifts",
+                ],
+                "Mechanical Noise":[
+                    "creates too much noise"
+                ],
+            },
             "causes": {
                 "mechanics": [
                     "Gears loose on motor shaft (slips)",
@@ -132,7 +140,7 @@ structure_input_motorcontrol = {
 # 1. CONFIG
 # =========================================================
 
-FINAL_TOP_K  = 5
+FINAL_TOP_K  = 10
 POOL_K = 200
 FUSION_TOP_K = 100  
 # Dense threshold is meaningful for cosine similarity
