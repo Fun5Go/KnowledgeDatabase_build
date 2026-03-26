@@ -398,7 +398,7 @@ if __name__ == "__main__":
     doc_type = "FS"
     candidate_k = 50
     final_k = 5
-    hybrid_alpha = 0.5
+    hybrid_alpha = 0.4
 
     # 1) flatten structure -> query list
     queries = flatten_structure(structure_input_motorcontrol)

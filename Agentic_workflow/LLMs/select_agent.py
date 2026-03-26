@@ -34,7 +34,7 @@ class FMEASelectionAgent:
         self.llm = get_llm_backend(
             backend=backend,
             model=model,
-            temperature=0.2,
+            temperature=0.0,
             json_mode=True,
         )
 
@@ -55,10 +55,13 @@ class FMEASelectionAgent:
             predicted_modes = item.get("predicted_modes", [])[:top_n_modes]
 
             grouped.append({
+                "element_text": item.get("element_text", ""),
+                "cause_discipline": item.get("cause_discipline", ""),
                 "cause": cause,
                 "mode_candidates": [
                     {
                         "mode_text": m.get("mode_query_text", ""),
+                        "function_text": m.get("function_text", ""),
                         "mode_rank": m.get("rank")
                     }
                     for m in predicted_modes
@@ -75,9 +78,19 @@ class FMEASelectionAgent:
         lookup = self._build_mode_to_effect_lookup(simplified_result)
         grouped = []
 
+        # 建一个 mode -> full item lookup
+        mode_meta_lookup = {
+            item.get("query_mode_text", ""): item
+            for item in simplified_result.get("mode_to_effect", [])
+        }
+
         for mode_text in selected_modes:
             effect_candidates = lookup.get(mode_text, [])[:max_effects_per_mode]
+            mode_meta = mode_meta_lookup.get(mode_text, {})
+
             grouped.append({
+                "element_text": mode_meta.get("element_text", ""),
+                "function_text": mode_meta.get("function_text", ""),
                 "mode": mode_text,
                 "effect_candidates": [
                     {
@@ -98,7 +111,7 @@ class FMEASelectionAgent:
                         {
                             "mode_text": "string",
                             "selected": True,
-                            "reason": "why this mode is plausible for the cause",
+                            "reason": "why this mode is plausible for the cause under the given element/function context",
                             "confidence": 0.0
                         }
                     ],
@@ -108,24 +121,34 @@ class FMEASelectionAgent:
         }
 
         return f"""
-You are an FMEA reasoning agent.
+    You are an FMEA reasoning agent.
 
-Task:
-1. For EACH cause, choose the most suitable failure mode or modes from the provided candidates.
-2. Use engineering semantic logic first.
-3. Use rank only as supporting evidence:
-   - rank 1 is stronger than rank 2
-   - smaller rank means stronger retrieval preference
-4. Do not invent any mode outside the provided candidates.
-5. Normally select 1-2 mode per cause unless another is also clearly plausible.
-6. Keep reasoning concise and practical.
+    Task:
+    1. For EACH cause, choose the most suitable failure mode or modes from the provided candidates.
+    2. Use engineering semantic logic first.
+    3. Use the following context carefully:
+    - element_text = the higher-level failure element / subsystem
+    - cause_discipline = the engineering source category of the cause
+    - function_text = the sub-function or functional block where the candidate mode belongs
+    4. Judge plausibility under the full context:
+    cause within element -> candidate mode within function.
+    5. Use rank only as supporting evidence:
+    - rank 1 is stronger than rank 2
+    - smaller rank means stronger retrieval preference
+    6. Do not invent any mode outside the provided candidates.
+    7. Normally select 1-2 mode per cause unless another is also clearly plausible.
+    8. Keep reasoning concise and practical.
 
-Input:
-{json.dumps(grouped_payload, indent=2, ensure_ascii=False)}
+    Important:
+    - A candidate mode may be textually similar but belong to an implausible function block.
+    - Prefer modes whose function context is consistent with the cause and the element behavior.
 
-Return ONLY valid JSON matching this schema:
-{json.dumps(schema, indent=2, ensure_ascii=False)}
-""".strip()
+    Input:
+    {json.dumps(grouped_payload, indent=2, ensure_ascii=False)}
+
+    Return ONLY valid JSON matching this schema:
+    {json.dumps(schema, indent=2, ensure_ascii=False)}
+    """.strip()
 
     def _build_grouped_mode_to_effect_prompt(self, grouped_payload: List[dict]) -> str:
         schema = {
@@ -136,7 +159,7 @@ Return ONLY valid JSON matching this schema:
                         {
                             "effect_text": "string",
                             "selected": True,
-                            "reason": "why this effect is plausible for the mode",
+                            "reason": "why this effect is plausible for the mode under the given element/function context",
                             "confidence": 0.0
                         }
                     ],
@@ -151,12 +174,20 @@ You are an FMEA reasoning agent.
 Task:
 1. For EACH failure mode, choose the most suitable failure effect or effects from the provided candidates.
 2. Use engineering semantic logic first.
-3. Use rank only as supporting evidence:
+3. Use the following context carefully:
+   - element_text = the higher-level failure element / subsystem
+   - function_text = the sub-function or functional block where the mode occurs
+4. Judge plausibility under the full context:
+   mode within function within element -> candidate effect.
+5. Use rank only as supporting evidence:
    - rank 1 is stronger than rank 2
    - smaller rank means stronger retrieval preference
-4. Do not invent any effect outside the provided candidates.
-5. Normally select only 1 effect per mode unless another is also clearly plausible.
-6. Keep reasoning concise and practical.
+6. Do not invent any effect outside the provided candidates.
+7. Normally select only 1 effect per mode unless another is also clearly plausible.
+8. Keep reasoning concise and practical.
+Important:
+- The same mode text may lead to different effects depending on the function block and element context.
+- Prefer effects that are system-logically consistent with the mode's function.
 
 Input:
 {json.dumps(grouped_payload, indent=2, ensure_ascii=False)}
@@ -399,6 +430,13 @@ Return ONLY valid JSON matching this schema:
             item["mode"]: item
             for item in mode_effect_list
         }
+        mode_context_lookup = {
+            item.get("query_mode_text", ""): {
+                "element_text": item.get("element_text", ""),
+                "function_text": item.get("function_text", "")
+            }
+            for item in simplified_result.get("mode_to_effect", [])
+        }
 
         # Step 3: join
         chains = []
@@ -417,11 +455,17 @@ Return ONLY valid JSON matching this schema:
                         continue
 
                     effect = eff["effect_text"]
+                    ctx = mode_context_lookup.get(mode, {})
+                    element_text = ctx.get("element_text", "")
+                    function_text = ctx.get("function_text", "")
+
                     chains.append({
+                        "element": element_text,
+                        "function": function_text,
                         "cause": cause,
                         "mode": mode,
                         "effect": effect,
-                        "chain_text": f"{cause} -> {mode} -> {effect}"
+                        "chain_text": f"[{element_text} | {function_text}] {cause} -> {mode} -> {effect}"
                     })
 
         return {

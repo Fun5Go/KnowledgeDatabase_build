@@ -42,70 +42,78 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ================================
 # Helpers 
 # ================================
-def build_minimal_result_for_llm(results):
+def build_minimal_result_for_llm(results, structure_input):
     """
-    Rebuild final inference result for LLM prompt.
-    Only keep:
+    Rebuild final inference result for LLM prompt with structure context.
+    Keep:
+      - element_text
+      - function_text (for mode)
+      - discipline (for cause, optional)
       - query cause/mode text
       - predicted mode/effect query text
       - rank
-    Remove all other fields such as score, pair_details, mapped info, etc.
-
-    Input:
-        results = {
-            "mapped": ...,
-            "cause_to_mode": [...],
-            "mode_to_effect": [...]
-        }
-
-    Output:
-        {
-            "cause_to_mode": [
-                {
-                    "query_cause_text": "...",
-                    "predicted_modes": [
-                        {"rank": 1, "mode_query_text": "..."},
-                        ...
-                    ]
-                },
-                ...
-            ],
-            "mode_to_effect": [
-                {
-                    "query_mode_text": "...",
-                    "predicted_effects": [
-                        {"rank": 1, "effect_query_text": "..."},
-                        ...
-                    ]
-                },
-                ...
-            ]
-        }
     """
+
     simplified = {
         "cause_to_mode": [],
         "mode_to_effect": []
     }
 
+    # ----------------------------
+    # Build structure context lookup
+    # ----------------------------
+    element_text = ""
+    mode_to_function = {}
+    cause_to_discipline = {}
+
+    nodes = structure_input.get("nodes", [])
+    if nodes:
+        node = nodes[0]   # 当前结构里只有一个 E1
+        element_text = node.get("failure_element", "")
+
+        # modes: {function: [mode1, mode2, ...]}
+        for function_text, modes in node.get("modes", {}).items():
+            for mode_text in modes:
+                mode_to_function[mode_text] = function_text
+
+        # causes: {discipline: [cause1, cause2, ...]}
+        for discipline, causes in node.get("causes", {}).items():
+            for cause_text in causes:
+                cause_to_discipline[cause_text] = discipline
+
+    # ----------------------------
     # Simplify cause -> mode
+    # ----------------------------
     for cause_item in results.get("cause_to_mode", []):
+        query_cause_text = cause_item.get("query_cause_text", "")
+
         simplified_cause_item = {
-            "query_cause_text": cause_item.get("query_cause_text", ""),
+            "element_text": element_text,
+            "cause_discipline": cause_to_discipline.get(query_cause_text, ""),
+            "query_cause_text": query_cause_text,
             "predicted_modes": []
         }
 
         for mode_item in cause_item.get("predicted_modes", []):
+            mode_query_text = mode_item.get("mode_query_text", "")
             simplified_cause_item["predicted_modes"].append({
                 "rank": mode_item.get("rank"),
-                "mode_query_text": mode_item.get("mode_query_text", "")
+                "mode_query_text": mode_query_text,
+                "function_text": mode_to_function.get(mode_query_text, "")
             })
 
         simplified["cause_to_mode"].append(simplified_cause_item)
 
+    # ----------------------------
     # Simplify mode -> effect
+    # ----------------------------
     for mode_item in results.get("mode_to_effect", []):
+        query_mode_text = mode_item.get("query_mode_text", "")
+
         simplified_mode_item = {
-            "query_mode_text": mode_item.get("query_mode_text", ""),
+            "element_text": element_text,
+            "function_text": mode_to_function.get(query_mode_text, ""),
+            "query_mode_text": query_mode_text,
             "predicted_effects": []
         }
 
@@ -185,7 +193,7 @@ def MAPandPRED(structure_input):
     try:
         with kg_client.session() as session:
             results = run_structure_mapping_and_inference(
-                is_print=False,
+                is_print=True,
                 session=session,
                 structure_input=structure_input,
                 model=model,
@@ -205,20 +213,20 @@ def MAPandPRED(structure_input):
 @traceable(
     run_type="chain",
     name="fmea_experiment-integration",
-    tags=["fmea", "exp", "prompt_v1"]
+    tags=["fmea", "exp1", "prompt_v1"]
 )
 def run_fmea_experiment(agent, simplified_result):
     return agent.select_all(
         simplified_result=simplified_result,
-        top_n_modes=4,
-        max_effects_per_mode=3,
+        top_n_modes=8,
+        max_effects_per_mode=4,
     )
 
     
 if __name__ == "__main__":
 
     results = MAPandPRED(structure_input_motorcontrol)
-    simplified_results = build_minimal_result_for_llm(results)
+    simplified_results = build_minimal_result_for_llm(results,structure_input_motorcontrol)
     # print(json.dumps(simplified_results, indent=2, ensure_ascii=False))
 
 
