@@ -140,10 +140,10 @@ def search_top_chunks_per_query(
     retrieval_mode: str = "hybrid",
     use_rerank: bool = True,
     doc_type: str = "FS",
-    candidate_k: int = 50,
+    candidate_k: int = 30,
     final_k: int = 5,
     hybrid_alpha: float = 0.5,
-    min_lexical_score: float = 0.0,
+    min_lexical_score: float = 0.4,
 ) -> List[Dict[str, Any]]:
 
     query_results = []
