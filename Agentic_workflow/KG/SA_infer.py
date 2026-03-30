@@ -1452,7 +1452,7 @@ def main():
             run_structure_mapping_and_inference(
                 is_print=True,
                 session=session,
-                structure_input=structure_input_powertrain,
+                structure_input=structure_input_motorcontrol,
                 model=model,
                 x=x,
                 edge_index=edge_index,

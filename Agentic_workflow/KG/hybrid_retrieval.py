@@ -1110,7 +1110,7 @@ if __name__ == "__main__":
                 review_mode="none",          # "none" / "human" / "llm"
                 review_agent=None,
                 print_candidates=True,
-                keep_group_or_single_only = False,
+                keep_group_or_single_only = True,
             )
 
             print_mapping_results("CAUSE MAPPING", mapped["causes"])

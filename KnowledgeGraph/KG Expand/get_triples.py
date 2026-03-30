@@ -17,13 +17,8 @@ def export_kg():
         auth=(NEO4J_USER, NEO4J_PASSWORD)
     )
 
-    RELATIONS = [
-        "HAS_FUNCTION",
-        "HAS_MODE",
-        "CAUSES",
-        "LEADS_TO",
-    ]
-
+    # Only relations you want to infer/train
+    RELATIONS = ["CAUSES", "LEADS_TO"]
     relation_filter = ",".join([f"'{r}'" for r in RELATIONS])
 
     query = f"""
@@ -33,17 +28,22 @@ def export_kg():
       AND t.semantic_id IS NOT NULL
       AND h.embedding IS NOT NULL
       AND t.embedding IS NOT NULL
+      AND NOT (h:SubCause OR h:SubMode OR h:SubEffect)
+      AND NOT (t:SubCause OR t:SubMode OR t:SubEffect)
     RETURN
         h.semantic_id AS head,
         type(r) AS relation,
         t.semantic_id AS tail,
         coalesce(r.weight, 1.0) AS weight,
-        head(labels(h)) AS h_type,
-        head(labels(t)) AS t_type,
-        h.text AS h_text,
-        t.text AS t_text,
+
+        labels(h) AS h_labels,
+        labels(t) AS t_labels,
+        coalesce(h.text, h.name, h.semantic_id) AS h_text,
+        coalesce(t.text, t.name, t.semantic_id) AS t_text,
         h.embedding AS h_emb,
-        t.embedding AS t_emb
+        t.embedding AS t_emb,
+        coalesce(h.is_group, false) AS h_is_group,
+        coalesce(t.is_group, false) AS t_is_group
     """
 
     with driver.session() as session:
@@ -52,53 +52,64 @@ def export_kg():
         triples = []
         nodes = {}
 
+        def node_kind(is_group: bool) -> str:
+            return "group" if is_group else "single"
+
+        def main_type(labels_list):
+            # pick one of Cause/Mode/Effect if present; else fallback first label
+            for x in ("Cause", "Mode", "Effect"):
+                if x in labels_list:
+                    return x
+            return labels_list[0] if labels_list else "Unknown"
+
         for record in result:
             h = record["head"]
             r = record["relation"]
             t = record["tail"]
             w = float(record["weight"])
 
-            h_emb = record["h_emb"]
-            t_emb = record["t_emb"]
-
-            if h_emb is None or t_emb is None:
-                continue
-
             triples.append((h, r, t, w))
 
+            # store nodes
             if h not in nodes:
-                nodes[h] = (
-                    record["h_type"],
-                    record["h_text"],
-                    h_emb
-                )
+                h_labels = record["h_labels"] or []
+                nodes[h] = {
+                    "node_type": main_type(h_labels),
+                    "node_kind": node_kind(bool(record["h_is_group"])),
+                    "text": record["h_text"],
+                    "embedding": record["h_emb"],
+                    "labels": h_labels,
+                }
 
             if t not in nodes:
-                nodes[t] = (
-                    record["t_type"],
-                    record["t_text"],
-                    t_emb
-                )
+                t_labels = record["t_labels"] or []
+                nodes[t] = {
+                    "node_type": main_type(t_labels),
+                    "node_kind": node_kind(bool(record["t_is_group"])),
+                    "text": record["t_text"],
+                    "embedding": record["t_emb"],
+                    "labels": t_labels,
+                }
 
     with open(TRIPLES_FILE, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, delimiter="\t")
         writer.writerow(["head", "relation", "tail", "weight"])
-        for row in triples:
-            writer.writerow(row)
+        writer.writerows(triples)
 
     with open(NODES_FILE, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f, delimiter="\t")
-        writer.writerow(["node_id", "node_type", "text", "embedding"])
-        for node_id, (node_type, text, emb) in nodes.items():
+        writer.writerow(["node_id", "node_type", "node_kind", "text", "embedding", "labels"])
+        for node_id, info in nodes.items():
             writer.writerow([
                 node_id,
-                node_type,
-                text,
-                json.dumps(emb)
+                info["node_type"],
+                info["node_kind"],           # group or single
+                info["text"],
+                json.dumps(info["embedding"]),
+                json.dumps(info["labels"]),  # full labels for debugging
             ])
 
     driver.close()
-
     print(f"Exported {len(triples)} triples")
     print(f"Exported {len(nodes)} nodes")
 

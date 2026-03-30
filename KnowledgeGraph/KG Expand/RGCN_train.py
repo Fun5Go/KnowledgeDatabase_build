@@ -843,7 +843,7 @@ def main():
     #    but add reverse edges automatically
     # -------------------------
     edge_index, edge_type, edge_weight = build_graph_from_raw(
-        train_raw,
+        triples_raw,
         rel2id,
         add_reverse_edges=True
     )
