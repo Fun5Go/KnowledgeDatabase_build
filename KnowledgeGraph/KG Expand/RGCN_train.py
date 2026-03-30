@@ -570,14 +570,14 @@ def train(
     bad_epochs = 0
 
     rel_weights = {
-        "CAUSES": 3.0,
-        "LEADS_TO": 3.0,
-        "HAS_MODE": 1.0,
-        "HAS_FUNCTION": 1.0,
-        "CAUSES_REV": 1.5,
-        "LEADS_TO_REV": 1.5,
-        "HAS_MODE_REV": 1.0,
-        "HAS_FUNCTION_REV": 1.0,
+        "CAUSES": 1.0,
+        "LEADS_TO": 1.0,
+        "HAS_MODE": 0,
+        "HAS_FUNCTION": 0,
+        "CAUSES_REV": 1.0,
+        "LEADS_TO_REV": 1.0,
+        "HAS_MODE_REV": 0,
+        "HAS_FUNCTION_REV": 0,
     }
 
     for epoch in range(1, epochs + 1):
@@ -843,7 +843,7 @@ def main():
     #    but add reverse edges automatically
     # -------------------------
     edge_index, edge_type, edge_weight = build_graph_from_raw(
-        triples_raw,
+        train_raw,
         rel2id,
         add_reverse_edges=True
     )

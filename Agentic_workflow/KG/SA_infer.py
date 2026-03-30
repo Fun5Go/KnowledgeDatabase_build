@@ -879,6 +879,129 @@ def score_weighted_node_sets(
     pair_details = sorted(pair_details, key=lambda x: x["contribution"], reverse=True)
     return final_score, pair_details
 
+#Reverse inference enhancement
+
+def _normalize_weighted_nodes(weighted_nodes):
+    """
+    支持以下格式：
+    1) [(node_id, weight), ...]
+    2) [{"node_id": ..., "weight": ...}, ...]
+    """
+    normed = []
+    for item in weighted_nodes:
+        if isinstance(item, dict):
+            nid = item["node_id"]
+            w = float(item.get("weight", 1.0))
+        elif isinstance(item, (tuple, list)) and len(item) >= 2:
+            nid = item[0]
+            w = float(item[1])
+        else:
+            nid = item
+            w = 1.0
+        normed.append((nid, w))
+    return normed
+
+
+@torch.no_grad()
+def score_weighted_node_sets_bidirectional(
+    model,
+    z,
+    rel2id,
+    relation_name,
+    head_nodes,
+    tail_nodes,
+    forward_alpha=0.5,              # forward 占比
+    consistency_lambda=0.0,         # 一致性惩罚系数，可先设 0.05 / 0.1 试试
+    apply_sigmoid=True
+):
+    """
+    同时打：
+      forward: score(h, relation_name, t)
+      reverse: score(t, relation_name_REV, h)
+
+    再融合。
+    """
+
+    if relation_name not in rel2id:
+        raise KeyError(f"Relation '{relation_name}' not found in rel2id.")
+    rev_relation_name = relation_name + "_REV"
+    if rev_relation_name not in rel2id:
+        raise KeyError(f"Reverse relation '{rev_relation_name}' not found in rel2id.")
+
+    relation_id = rel2id[relation_name]
+    reverse_relation_id = rel2id[rev_relation_name]
+
+    head_nodes = _normalize_weighted_nodes(head_nodes)
+    tail_nodes = _normalize_weighted_nodes(tail_nodes)
+
+    if not head_nodes or not tail_nodes:
+        return None, []
+
+    triples_fwd = []
+    triples_rev = []
+    pair_meta = []
+
+    for h_id, h_w in head_nodes:
+        for t_id, t_w in tail_nodes:
+            pair_weight = h_w * t_w
+
+            triples_fwd.append([h_id, relation_id, t_id])
+            triples_rev.append([t_id, reverse_relation_id, h_id])
+
+            pair_meta.append({
+                "head_id": h_id,
+                "tail_id": t_id,
+                "head_weight": h_w,
+                "tail_weight": t_w,
+                "pair_weight": pair_weight
+            })
+
+    device = z.device
+    triples_fwd = torch.tensor(triples_fwd, dtype=torch.long, device=device)
+    triples_rev = torch.tensor(triples_rev, dtype=torch.long, device=device)
+
+    forward_logits = model.score(z, triples_fwd)
+    reverse_logits = model.score(z, triples_rev)
+
+    # 双向融合
+    fused_logits = (
+        forward_alpha * forward_logits
+        + (1.0 - forward_alpha) * reverse_logits
+        - consistency_lambda * torch.abs(forward_logits - reverse_logits)
+    )
+
+    if apply_sigmoid:
+        pair_scores = torch.sigmoid(fused_logits)
+    else:
+        pair_scores = fused_logits
+
+    pair_weights = torch.tensor(
+        [x["pair_weight"] for x in pair_meta],
+        dtype=torch.float,
+        device=device
+    )
+
+    denom = pair_weights.sum().clamp_min(1e-8)
+    final_score = (pair_scores * pair_weights).sum() / denom
+
+    pair_details = []
+    for meta, f_logit, r_logit, fused_logit, p_score in zip(
+        pair_meta,
+        forward_logits.tolist(),
+        reverse_logits.tolist(),
+        fused_logits.tolist(),
+        pair_scores.tolist()
+    ):
+        d = dict(meta)
+        d.update({
+            "forward_logit": f_logit,
+            "reverse_logit": r_logit,
+            "fused_logit": fused_logit,
+            "pair_score": p_score
+        })
+        pair_details.append(d)
+
+    return float(final_score.item()), pair_details
 
 @torch.no_grad()
 def infer_query_cause_to_query_modes_weighted(
@@ -890,6 +1013,8 @@ def infer_query_cause_to_query_modes_weighted(
 ):
     if "CAUSES" not in rel2id:
         raise KeyError("Relation 'CAUSES' not found in rel2id.")
+    if "CAUSES_REV" not in rel2id:
+        raise KeyError("Relation 'CAUSES_REV' not found in rel2id.")
 
     cause_weighted_nodes = build_weighted_node_list(
         mapped_nodes=mapped_cause_nodes,
@@ -900,7 +1025,6 @@ def infer_query_cause_to_query_modes_weighted(
     if not cause_weighted_nodes:
         return [], cause_weighted_nodes
 
-    relation_id = rel2id["CAUSES"]
     results = []
 
     for mode_item in mapped_mode_items:
@@ -915,12 +1039,15 @@ def infer_query_cause_to_query_modes_weighted(
         if not mode_weighted_nodes:
             continue
 
-        score, pair_details = score_weighted_node_sets(
+        score, pair_details = score_weighted_node_sets_bidirectional(
             model=model,
             z=z,
-            relation_id=relation_id,
+            rel2id=rel2id,
+            relation_name="CAUSES",
             head_nodes=cause_weighted_nodes,
             tail_nodes=mode_weighted_nodes,
+            forward_alpha=0.6,          # cause->mode 以正向为主
+            consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
 
@@ -949,6 +1076,8 @@ def infer_query_mode_to_query_effects_weighted(
 ):
     if "LEADS_TO" not in rel2id:
         raise KeyError("Relation 'LEADS_TO' not found in rel2id.")
+    if "LEADS_TO_REV" not in rel2id:
+        raise KeyError("Relation 'LEADS_TO_REV' not found in rel2id.")
 
     mode_weighted_nodes = build_weighted_node_list(
         mapped_nodes=mapped_mode_nodes,
@@ -959,7 +1088,6 @@ def infer_query_mode_to_query_effects_weighted(
     if not mode_weighted_nodes:
         return [], mode_weighted_nodes
 
-    relation_id = rel2id["LEADS_TO"]
     results = []
 
     for effect_item in mapped_effect_items:
@@ -974,12 +1102,15 @@ def infer_query_mode_to_query_effects_weighted(
         if not effect_weighted_nodes:
             continue
 
-        score, pair_details = score_weighted_node_sets(
+        score, pair_details = score_weighted_node_sets_bidirectional(
             model=model,
             z=z,
-            relation_id=relation_id,
+            rel2id=rel2id,
+            relation_name="LEADS_TO",
             head_nodes=mode_weighted_nodes,
             tail_nodes=effect_weighted_nodes,
+            forward_alpha=0.6,          # mode->effect 仍以正向为主
+            consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
 
@@ -1321,7 +1452,7 @@ def main():
             run_structure_mapping_and_inference(
                 is_print=True,
                 session=session,
-                structure_input=structure_input_motorcontrol,
+                structure_input=structure_input_powertrain,
                 model=model,
                 x=x,
                 edge_index=edge_index,

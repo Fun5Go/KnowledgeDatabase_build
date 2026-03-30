@@ -140,7 +140,7 @@ structure_input_motorcontrol = {
 # 1. CONFIG
 # =========================================================
 
-FINAL_TOP_K  = 10
+FINAL_TOP_K  = 5
 POOL_K = 200
 FUSION_TOP_K = 100  
 # Dense threshold is meaningful for cosine similarity
@@ -205,20 +205,13 @@ def deduplicate_mapped_nodes(mapped_nodes: List[Dict[str, Any]]) -> List[Dict[st
     return sorted(best.values(), key=lambda x: float(x["score"]), reverse=True)
 
 
-def _build_common_where_clause(
-    use_discipline_filter: bool,
-    discipline: Optional[str],
-):
-    where_clauses = []
-
+def _build_common_where_clause(use_discipline_filter=False, discipline=None) -> str:
+    clauses = []
     if use_discipline_filter and discipline is not None:
-        where_clauses.append("""
-            coalesce(node.discipline, "unknown") IN $allowed_disciplines
-        """)
-
-    if where_clauses:
-        return "WHERE " + "\n AND ".join(where_clauses)
-    return ""
+        clauses.append("coalesce(node.discipline,'unknown') IN $allowed_disciplines")
+    if not clauses:
+        return ""
+    return "AND " + " AND ".join(clauses)
 
 LUCENE_SPECIAL_CHARS = r'(\+|-|&&|\|\||!|\(|\)|\{|\}|\[|\]|\^|"|~|\*|\?|:|\\|/)'
 
@@ -440,7 +433,7 @@ def retrieve_dense_candidates(
     top_k: int = 10,
     pool_k: int = 100,
     min_score: float = 0.0,
-    keep_group_or_single_only: bool = True,
+    keep_group_or_single_only: bool = False,
     use_discipline_filter: bool = False,
     discipline: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -458,27 +451,30 @@ def retrieve_dense_candidates(
     if use_discipline_filter and discipline is not None:
         params["allowed_disciplines"] = [discipline, "unknown"]
 
-    filter_clause = _build_common_where_clause(
+    group_filter = ""
+    if keep_group_or_single_only:
+        group_filter = "AND NOT (node:SubCause OR node:SubMode OR node:SubEffect)"
+
+    common_filter = _build_common_where_clause(
         use_discipline_filter=use_discipline_filter,
         discipline=discipline,
     )
 
     cypher = f"""
-    CALL db.index.vector.queryNodes(
-        '{index_name}',
-        {pool_k},
-        $embedding
-    )
+    CALL db.index.vector.queryNodes('{index_name}', {pool_k}, $embedding)
     YIELD node, score
 
     WITH node, vector.similarity.cosine(node.embedding, $embedding) AS final_score
-    {filter_clause}
+    WHERE 1=1
+    AND node:{label}
+    {common_filter}
+    {group_filter}
     RETURN
-        node.semantic_id AS kg_id,
-        coalesce(node.text, node.name, node.semantic_id) AS kg_text,
-        coalesce(node.discipline, "unknown") AS discipline,
-        final_score,
-        "dense" AS source
+    node.semantic_id AS kg_id,
+    coalesce(node.text, node.name, node.semantic_id) AS kg_text,
+    coalesce(node.discipline, "unknown") AS discipline,
+    final_score,
+    "dense" AS source
     ORDER BY final_score DESC
     LIMIT $k
     """
@@ -507,7 +503,7 @@ def retrieve_bm25_candidates(
     query_text: str,
     top_k: int = 10,
     min_score: float = 0.0,
-    keep_group_or_single_only: bool = True,
+    keep_group_or_single_only: bool = False,
     use_discipline_filter: bool = False,
     discipline: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -516,14 +512,13 @@ def retrieve_bm25_candidates(
     params = {
         "query_text": escaped_query,
         "k": top_k,
+        "use_discipline_filter": bool(use_discipline_filter and discipline is not None),
+        "allowed_disciplines": [discipline, "unknown"] if (use_discipline_filter and discipline is not None) else [],
     }
-    if use_discipline_filter and discipline is not None:
-        params["allowed_disciplines"] = [discipline, "unknown"]
 
-    filter_clause = _build_common_where_clause(
-        use_discipline_filter=use_discipline_filter,
-        discipline=discipline,
-    )
+    group_filter = ""
+    if keep_group_or_single_only:
+        group_filter = "AND NOT (node:SubCause OR node:SubMode OR node:SubEffect)"
 
     cypher = f"""
     CALL db.index.fulltext.queryNodes(
@@ -533,7 +528,12 @@ def retrieve_bm25_candidates(
     YIELD node, score
 
     WITH node, score AS final_score
-    {filter_clause}
+    WHERE node:{label}
+      {group_filter}
+      AND (
+        $use_discipline_filter = false
+        OR coalesce(node.discipline, "unknown") IN $allowed_disciplines
+      )
     RETURN
         node.semantic_id AS kg_id,
         coalesce(node.text, node.name, node.semantic_id) AS kg_text,
@@ -648,6 +648,7 @@ def retrieve_candidates(
     use_discipline_filter: bool = False,
     discipline: Optional[str] = None,
     hybrid_alpha: float = HYBRID_ALPHA,
+    keep_group_or_single_only: bool = True
 ) -> List[Dict[str, Any]]:
 
     if method == "dense":
@@ -661,6 +662,7 @@ def retrieve_candidates(
             min_score=dense_min_score,
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
+            keep_group_or_single_only = keep_group_or_single_only,
         )
 
     if method == "bm25":
@@ -676,6 +678,7 @@ def retrieve_candidates(
             min_score=bm25_min_score,
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
+            keep_group_or_single_only = keep_group_or_single_only,
         )
 
     if method == "hybrid":
@@ -917,6 +920,7 @@ def map_query_texts_to_nodes(
     review_agent=None,
     print_candidates: bool = True,
     hybrid_alpha: float = HYBRID_ALPHA,
+    keep_group_or_single_only: bool = True
 ) -> List[Dict[str, Any]]:
     results = []
 
@@ -944,6 +948,7 @@ def map_query_texts_to_nodes(
             use_discipline_filter=use_discipline_filter,
             discipline=discipline,
             hybrid_alpha=hybrid_alpha,
+            keep_group_or_single_only = keep_group_or_single_only
         )
         candidates = enrich_candidates_with_context(
             session=session,
@@ -991,6 +996,7 @@ def map_structure_input_to_kg(
     review_mode: ReviewMode = "none",
     review_agent=None,
     print_candidates: bool = True,
+    keep_group_or_single_only: bool =True
 ):
     causes, modes, effects = extract_structure_queries(structure_input)
 
@@ -1007,6 +1013,7 @@ def map_structure_input_to_kg(
         review_mode=review_mode,
         review_agent=review_agent,
         print_candidates=print_candidates,
+        keep_group_or_single_only = keep_group_or_single_only,
     )
 
     mode_maps = map_query_texts_to_nodes(
@@ -1021,6 +1028,7 @@ def map_structure_input_to_kg(
         review_mode=review_mode,
         review_agent=review_agent,
         print_candidates=print_candidates,
+        keep_group_or_single_only = keep_group_or_single_only,
     )
 
     effect_maps = map_query_texts_to_nodes(
@@ -1035,6 +1043,7 @@ def map_structure_input_to_kg(
         review_mode=review_mode,
         review_agent=review_agent,
         print_candidates=print_candidates,
+        keep_group_or_single_only = keep_group_or_single_only,
     )
 
     return {
@@ -1097,10 +1106,11 @@ if __name__ == "__main__":
             mapped = map_structure_input_to_kg(
                 session=session,
                 structure_input=structure_input_motorcontrol,
-                retrieval_method="hybrid",   # "dense" / "bm25" / "hybrid"
-                review_mode="human",          # "none" / "human" / "llm"
+                retrieval_method="dense",   # "dense" / "bm25" / "hybrid"
+                review_mode="none",          # "none" / "human" / "llm"
                 review_agent=None,
                 print_candidates=True,
+                keep_group_or_single_only = False,
             )
 
             print_mapping_results("CAUSE MAPPING", mapped["causes"])
