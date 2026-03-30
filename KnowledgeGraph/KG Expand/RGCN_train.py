@@ -574,8 +574,8 @@ def train(
         "LEADS_TO": 3.0,
         "HAS_MODE": 1.0,
         "HAS_FUNCTION": 1.0,
-        "CAUSES_REV": 3.0,
-        "LEADS_TO_REV": 3.0,
+        "CAUSES_REV": 1.5,
+        "LEADS_TO_REV": 1.5,
         "HAS_MODE_REV": 1.0,
         "HAS_FUNCTION_REV": 1.0,
     }
