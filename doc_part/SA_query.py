@@ -213,7 +213,7 @@ def search_top_chunks_per_query(
     vector_store,
     cross_encoder,
     retrieval_mode: str = "hybrid",
-    use_rerank: bool = True,
+    use_rerank: bool = False,
     doc_type: str = "FS",
     candidate_k: int = 30,
     final_k: int = 5,

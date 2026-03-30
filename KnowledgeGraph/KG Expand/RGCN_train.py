@@ -1,8 +1,10 @@
 import os
 import ast
+import csv
 import json
 import random
 from collections import defaultdict
+from typing import Dict, List, Tuple, Optional
 
 import pandas as pd
 import torch
@@ -14,23 +16,41 @@ from torch_geometric.nn import RGCNConv
 # =========================================================
 # 0. CONFIG
 # =========================================================
+NODES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
+TRIPLES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
+SAVE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_complex_with_reverse_best.pt"
+
 SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-random.seed(SEED)
-torch.manual_seed(SEED)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(SEED)
+# training config
+HIDDEN_DIM = 256
+EMB_DIM = 256
+DROPOUT = 0.1
+NUM_BASES = 4
 
-NODES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
-TRIPLES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
-SAVE_PATH = "rgcn_weighted_best_model.pt"
+EPOCHS = 300
+LR = 1e-3
+WEIGHT_DECAY = 1e-4
+NUM_NEG_PER_POS = 3
+PATIENCE = 15
+
+TRAIN_RATIO = 0.90
+VALID_RATIO = 0.05
+
+FOCUS_RELATIONS = ("CAUSES", "LEADS_TO")
+
+
+def set_seed(seed: int = 42):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
 
 
 # =========================================================
 # 1. LOAD DATA
 # =========================================================
-def load_nodes(node_file):
+def load_nodes(node_file: str):
     df = pd.read_csv(node_file, sep="\t")
 
     required_cols = {"node_id", "node_type", "embedding"}
@@ -56,7 +76,7 @@ def load_nodes(node_file):
     return node2id, id2node, id2type, x
 
 
-def load_triples(triple_file, node2id):
+def load_triples(triple_file: str, node2id: Dict[str, int]):
     df = pd.read_csv(triple_file, sep="\t")
 
     required_cols = {"head", "relation", "tail", "weight"}
@@ -85,12 +105,17 @@ def load_triples(triple_file, node2id):
 # =========================================================
 # 2. DATA SPLIT
 # =========================================================
-def split_triples_by_relation(triples_raw, train_ratio=0.9, valid_ratio=0.05, seed=42):
+def split_triples_by_relation(
+    triples_raw: List[Tuple[int, str, int, float]],
+    train_ratio: float = 0.9,
+    valid_ratio: float = 0.05,
+    seed: int = 42
+):
     random.seed(seed)
 
     rel_buckets = defaultdict(list)
     for triple in triples_raw:
-        rel_buckets[triple[1]].append(triple)  # triple[1] = relation string
+        rel_buckets[triple[1]].append(triple)
 
     train_triples, valid_triples, test_triples = [], [], []
 
@@ -112,9 +137,70 @@ def split_triples_by_relation(triples_raw, train_ratio=0.9, valid_ratio=0.05, se
 
 
 # =========================================================
-# 3. BUILD GRAPH
+# 3. RELATION SCHEMA
 # =========================================================
-def build_graph(triples_raw, rel2id):
+def build_full_rel2type(base_rel2type: Dict[str, Tuple[str, str]]):
+    rel2type_full = {}
+    for r, (h_type, t_type) in base_rel2type.items():
+        rel2type_full[r] = (h_type, t_type)
+        rel2type_full[r + "_REV"] = (t_type, h_type)
+    return rel2type_full
+
+
+def validate_relation_schema(rel_list_base, rel2type_base):
+    missing = [r for r in rel_list_base if r not in rel2type_base]
+    if missing:
+        raise ValueError(
+            f"Relations found in triples.tsv but missing in schema: {missing}"
+        )
+
+
+def build_relation_mappings(rel_list_base, base_rel2type):
+    validate_relation_schema(rel_list_base, base_rel2type)
+
+    rel_list_full = rel_list_base + [r + "_REV" for r in rel_list_base]
+    rel2id = {r: i for i, r in enumerate(rel_list_full)}
+    id2rel = {i: r for r, i in rel2id.items()}
+    rel2type = build_full_rel2type(base_rel2type)
+
+    return rel2id, id2rel, rel2type
+
+
+# =========================================================
+# 4. REVERSE RELATION AUGMENTATION
+# =========================================================
+def add_reverse_triples_indexed(
+    triples_indexed: List[Tuple[int, int, int]],
+    id2rel: Dict[int, str],
+    rel2id: Dict[str, int]
+):
+    """
+    Input triples are indexed triples: (h, r_id, t)
+    Output = original + reverse triples
+    """
+    rev_triples = []
+    for h, r, t in triples_indexed:
+        r_str = id2rel[r]
+        r_rev = r_str + "_REV"
+        if r_rev not in rel2id:
+            raise ValueError(f"Reverse relation not found in rel2id: {r_rev}")
+        rev_triples.append((t, rel2id[r_rev], h))
+
+    return list(triples_indexed) + rev_triples
+
+
+def duplicate_weights_for_reverse(weights: List[float]):
+    return list(weights) + list(weights)
+
+
+# =========================================================
+# 5. BUILD GRAPH
+# =========================================================
+def build_graph_from_raw(
+    triples_raw: List[Tuple[int, str, int, float]],
+    rel2id: Dict[str, int],
+    add_reverse_edges: bool = True
+):
     edge_index = []
     edge_type = []
     edge_weight = []
@@ -123,17 +209,17 @@ def build_graph(triples_raw, rel2id):
         if r not in rel2id:
             continue
 
-        r_rev = r + "_REV"
-        if r_rev not in rel2id:
-            continue
-
         edge_index.append([h, t])
         edge_type.append(rel2id[r])
         edge_weight.append(float(w))
 
-        edge_index.append([t, h])
-        edge_type.append(rel2id[r_rev])
-        edge_weight.append(float(w))
+        if add_reverse_edges:
+            r_rev = r + "_REV"
+            if r_rev not in rel2id:
+                raise ValueError(f"Missing reverse relation in rel2id: {r_rev}")
+            edge_index.append([t, h])
+            edge_type.append(rel2id[r_rev])
+            edge_weight.append(float(w))
 
     if not edge_index:
         raise ValueError("No valid edges were built. Check triples and relation mappings.")
@@ -146,7 +232,7 @@ def build_graph(triples_raw, rel2id):
 
 
 # =========================================================
-# 4. MODEL
+# 6. MODEL
 # =========================================================
 class RGCN(nn.Module):
     def __init__(self, in_dim, hidden_dim, out_dim, num_relations, dropout=0.2, num_bases=4):
@@ -227,26 +313,7 @@ class Model(nn.Module):
 
 
 # =========================================================
-# 5. RELATION SCHEMA
-# =========================================================
-def build_full_rel2type(base_rel2type):
-    rel2type_full = {}
-    for r, (h_type, t_type) in base_rel2type.items():
-        rel2type_full[r] = (h_type, t_type)
-        rel2type_full[r + "_REV"] = (t_type, h_type)
-    return rel2type_full
-
-
-def validate_relation_schema(rel_list_base, rel2type_base):
-    missing = [r for r in rel_list_base if r not in rel2type_base]
-    if missing:
-        raise ValueError(
-            f"The following relations exist in triples.tsv but are missing in rel2type schema: {missing}"
-        )
-
-
-# =========================================================
-# 6. TYPE INDEX / TRUE TRIPLES
+# 7. TYPE INDEX / TRUE TRIPLES
 # =========================================================
 def build_type_index(id2type):
     type_to_nodes = defaultdict(list)
@@ -269,7 +336,7 @@ def build_true_triple_dict(triples):
 
 
 # =========================================================
-# 7. NEGATIVE SAMPLING
+# 8. NEGATIVE SAMPLING
 # =========================================================
 def negative_sampling_filtered(
     triples,
@@ -288,10 +355,10 @@ def negative_sampling_filtered(
 
         for _ in range(num_neg_per_pos):
             corrupt_head = (random.random() < 0.5)
+            sampled = False
 
             if corrupt_head:
                 candidates = type_to_nodes[head_type]
-                sampled = False
                 for _ in range(max_tries):
                     h_neg = random.choice(candidates)
                     if h_neg != h and (h_neg, r, t) not in true_triple_set:
@@ -310,7 +377,6 @@ def negative_sampling_filtered(
 
             else:
                 candidates = type_to_nodes[tail_type]
-                sampled = False
                 for _ in range(max_tries):
                     t_neg = random.choice(candidates)
                     if t_neg != t and (h, r, t_neg) not in true_triple_set:
@@ -328,13 +394,13 @@ def negative_sampling_filtered(
                             break
 
     if len(neg) == 0:
-        raise ValueError("No negative samples generated. Please check your schema/data.")
+        raise ValueError("No negative samples generated. Please check schema/data.")
 
     return torch.tensor(neg, dtype=torch.long)
 
 
 # =========================================================
-# 8. METRICS
+# 9. METRICS
 # =========================================================
 @torch.no_grad()
 def evaluate_tail_prediction(
@@ -417,7 +483,7 @@ def evaluate_tail_prediction(
     return overall_metrics, relation_metrics
 
 
-def macro_mrr_of_relations(relation_metrics, focus_relations):
+def focus_mrr(relation_metrics, focus_relations=("CAUSES", "LEADS_TO")):
     vals = []
     for r in focus_relations:
         if r in relation_metrics and relation_metrics[r]["Count"] > 0:
@@ -426,7 +492,7 @@ def macro_mrr_of_relations(relation_metrics, focus_relations):
 
 
 # =========================================================
-# 9. SAVE / LOAD
+# 10. SAVE / LOAD
 # =========================================================
 def save_checkpoint(model, optimizer, scheduler, epoch, best_score, path):
     ckpt = {
@@ -462,7 +528,7 @@ def load_model(path, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.2, nu
 
 
 # =========================================================
-# 10. TRAIN
+# 11. TRAIN
 # =========================================================
 def train(
     model,
@@ -471,7 +537,7 @@ def train(
     edge_type,
     train_triples,
     train_weights,
-    valid_triples,
+    valid_triples_forward_only,
     train_true_triples,
     all_true_triples_for_eval,
     id2type,
@@ -482,7 +548,7 @@ def train(
     weight_decay=1e-4,
     num_neg_per_pos=8,
     patience=15,
-    save_path="rgcn_weighted_best_model.pt",
+    save_path="rgcn_complex_best.pt",
     focus_relations=("CAUSES", "LEADS_TO")
 ):
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -504,12 +570,12 @@ def train(
     bad_epochs = 0
 
     rel_weights = {
-        "CAUSES": 1.0,
-        "LEADS_TO": 1.0,
+        "CAUSES": 3.0,
+        "LEADS_TO": 3.0,
         "HAS_MODE": 1.0,
         "HAS_FUNCTION": 1.0,
-        "CAUSES_REV": 1.0,
-        "LEADS_TO_REV": 1.0,
+        "CAUSES_REV": 3.0,
+        "LEADS_TO_REV": 3.0,
         "HAS_MODE_REV": 1.0,
         "HAS_FUNCTION_REV": 1.0,
     }
@@ -538,7 +604,7 @@ def train(
         neg_weight = F.softmax(neg_score.detach() * adv_temp, dim=1)
 
         train_rel_weight = torch.tensor(
-            [rel_weights[id2rel[r]] for (_, r, _) in train_triples],
+            [rel_weights.get(id2rel[r], 1.0) for (_, r, _) in train_triples],
             dtype=torch.float,
             device=DEVICE
         )
@@ -552,7 +618,6 @@ def train(
         neg_loss = (neg_loss_each * final_sample_weight).mean()
 
         reg_loss = model.decoder.rel.pow(2).mean() + z.pow(2).mean()
-
         loss = pos_loss + neg_loss + 1e-4 * reg_loss
 
         optimizer.zero_grad()
@@ -565,7 +630,7 @@ def train(
             x=x,
             edge_index=edge_index,
             edge_type=edge_type,
-            eval_triples=valid_triples,
+            eval_triples=valid_triples_forward_only,
             all_true_triples=all_true_triples_for_eval,
             id2type=id2type,
             rel2type=rel2type,
@@ -573,10 +638,7 @@ def train(
             hits_ks=(1, 3, 10)
         )
 
-        val_focus_score = (
-            0.5 * valid_rel_metrics.get("CAUSES", {}).get("MRR", 0.0) +
-            0.5 * valid_rel_metrics.get("LEADS_TO", {}).get("MRR", 0.0)
-        )
+        val_focus_score = focus_mrr(valid_rel_metrics, focus_relations=focus_relations)
         scheduler.step(val_focus_score)
 
         current_lr = optimizer.param_groups[0]["lr"]
@@ -611,7 +673,7 @@ def train(
 
 
 # =========================================================
-# 11. INFERENCE HELPERS
+# 12. INFERENCE HELPERS
 # =========================================================
 @torch.no_grad()
 def predict_score(model, x, edge_index, edge_type, triple_tensor):
@@ -700,9 +762,11 @@ def print_candidate_stats(eval_triples, id2type, rel2type, id2rel):
 
 
 # =========================================================
-# 12. MAIN
+# 13. MAIN
 # =========================================================
 def main():
+    set_seed(SEED)
+
     # -------------------------
     # 1) Load data
     # -------------------------
@@ -710,8 +774,8 @@ def main():
     triples_raw, rel_list_base = load_triples(TRIPLES_FILE, node2id)
 
     print(f"Loaded {len(node2id)} nodes")
-    print(f"Loaded {len(triples_raw)} triples")
-    print(f"Relations in data: {rel_list_base}")
+    print(f"Loaded {len(triples_raw)} raw triples")
+    print(f"Relations in raw data: {rel_list_base}")
 
     # -------------------------
     # 2) Define base relation schema
@@ -723,110 +787,131 @@ def main():
         "HAS_MODE": ("Function", "Mode"),
     }
 
-    validate_relation_schema(rel_list_base, base_rel2type)
+    # -------------------------
+    # 3) Build relation mappings (include REV)
+    # -------------------------
+    rel2id, id2rel, rel2type = build_relation_mappings(rel_list_base, base_rel2type)
+
+    print("\nFull relation set used by model:")
+    for r, rid in rel2id.items():
+        print(f"  {rid:02d} -> {r}")
 
     # -------------------------
-    # 3) Build relation mappings
-    # -------------------------
-    rel_list_full = rel_list_base + [r + "_REV" for r in rel_list_base]
-    rel2id = {r: i for i, r in enumerate(rel_list_full)}
-    id2rel = {i: r for r, i in rel2id.items()}
-    rel2type = build_full_rel2type(base_rel2type)
-
-    # -------------------------
-    # 4) Split raw triples
+    # 4) Split raw triples (base relations only)
     # -------------------------
     train_raw, valid_raw, test_raw = split_triples_by_relation(
         triples_raw,
-        train_ratio=0.9,
-        valid_ratio=0.05,
+        train_ratio=TRAIN_RATIO,
+        valid_ratio=VALID_RATIO,
         seed=SEED
     )
 
-    print(f"Train raw triples: {len(train_raw)}")
+    print(f"\nTrain raw triples: {len(train_raw)}")
     print(f"Valid raw triples: {len(valid_raw)}")
     print(f"Test raw triples : {len(test_raw)}")
 
-    # indexed triples for scoring/eval
-    train_triples = [(h, rel2id[r], t) for (h, r, t, w) in train_raw]
-    valid_triples = [(h, rel2id[r], t) for (h, r, t, w) in valid_raw]
-    test_triples = [(h, rel2id[r], t) for (h, r, t, w) in test_raw]
+    # -------------------------
+    # 5) Convert raw triples to indexed BASE triples
+    # -------------------------
+    train_triples_base = [(h, rel2id[r], t) for (h, r, t, w) in train_raw]
+    valid_triples_base = [(h, rel2id[r], t) for (h, r, t, w) in valid_raw]
+    test_triples_base = [(h, rel2id[r], t) for (h, r, t, w) in test_raw]
 
-    # edge weights for training loss
-    train_weights = [float(w) for (h, r, t, w) in train_raw]
-
-    # filtered evaluation uses all true triples
-    all_true_triples = train_triples + valid_triples + test_triples
-
-    # negative sampling only uses train truths
-    train_true_triples = train_triples
+    train_weights_base = [float(w) for (_, _, _, w) in train_raw]
 
     # -------------------------
-    # 5) Build graph ONLY from train triples
+    # 6) Add reverse triples for training / full truth
     # -------------------------
-    edge_index, edge_type, edge_weight = build_graph(triples_raw, rel2id)
+    train_triples_full = add_reverse_triples_indexed(train_triples_base, id2rel, rel2id)
+    valid_triples_full = add_reverse_triples_indexed(valid_triples_base, id2rel, rel2id)
+    test_triples_full = add_reverse_triples_indexed(test_triples_base, id2rel, rel2id)
+
+    train_weights_full = duplicate_weights_for_reverse(train_weights_base)
+
+    all_true_base = train_triples_base + valid_triples_base + test_triples_base
+    all_true_full = add_reverse_triples_indexed(all_true_base, id2rel, rel2id)
+
+    # negative sampling uses train truths only
+    train_true_triples_full = train_triples_full
+
+    print(f"\nTrain triples for loss (base + rev): {len(train_triples_full)}")
+    print(f"Valid triples full (base + rev):     {len(valid_triples_full)}")
+    print(f"Test triples full (base + rev):      {len(test_triples_full)}")
+
+    # -------------------------
+    # 7) Build graph ONLY from train raw triples
+    #    but add reverse edges automatically
+    # -------------------------
+    edge_index, edge_type, edge_weight = build_graph_from_raw(
+        triples_raw,
+        rel2id,
+        add_reverse_edges=True
+    )
 
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
     edge_type = edge_type.to(DEVICE)
     edge_weight = edge_weight.to(DEVICE)
 
-    print(f"Graph edges (with reverse): {edge_index.shape[1]}")
-    print(f"Edge weight stats: min={edge_weight.min().item():.4f}, "
-          f"max={edge_weight.max().item():.4f}, mean={edge_weight.mean().item():.4f}")
+    print(f"\nGraph edges used by RGCN (with reverse): {edge_index.shape[1]}")
+    print(
+        f"Edge weight stats: min={edge_weight.min().item():.4f}, "
+        f"max={edge_weight.max().item():.4f}, mean={edge_weight.mean().item():.4f}"
+    )
 
     # -------------------------
-    # 6) Build model
+    # 8) Build model
     # -------------------------
     model = Model(
         in_dim=x.shape[1],
-        hidden_dim=256,
-        emb_dim=256,
+        hidden_dim=HIDDEN_DIM,
+        emb_dim=EMB_DIM,
         num_relations=len(rel2id),
-        dropout=0.1,
-        num_bases=4
+        dropout=DROPOUT,
+        num_bases=NUM_BASES
     ).to(DEVICE)
 
+    print("\nModel:")
     print(model)
 
     # -------------------------
-    # 7) Train
+    # 9) Train
     # -------------------------
     model = train(
         model=model,
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
-        train_triples=train_triples,
-        train_weights=train_weights,
-        valid_triples=valid_triples,
-        train_true_triples=train_true_triples,
-        all_true_triples_for_eval=all_true_triples,
+        train_triples=train_triples_full,                 # train on base + rev
+        train_weights=train_weights_full,                 # duplicated weights
+        valid_triples_forward_only=valid_triples_base,    # early stop on forward task
+        train_true_triples=train_true_triples_full,
+        all_true_triples_for_eval=all_true_full,
         id2type=id2type,
         rel2type=rel2type,
         id2rel=id2rel,
-        epochs=300,
-        lr=0.001,
-        weight_decay=1e-4,
-        num_neg_per_pos=3,
-        patience=15,
+        epochs=EPOCHS,
+        lr=LR,
+        weight_decay=WEIGHT_DECAY,
+        num_neg_per_pos=NUM_NEG_PER_POS,
+        patience=PATIENCE,
         save_path=SAVE_PATH,
-        focus_relations=("CAUSES", "LEADS_TO")
+        focus_relations=FOCUS_RELATIONS
     )
 
-    print("Training finished.")
+    print("\nTraining finished.")
 
     # -------------------------
-    # 8) Final evaluation
+    # 10) Final evaluation (forward only)
     # -------------------------
-    print("\n===== VALID SET EVALUATION =====")
+    print("\n===== VALID SET EVALUATION (FORWARD ONLY) =====")
     valid_metrics, valid_rel_metrics = evaluate_tail_prediction(
         model=model,
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
-        eval_triples=valid_triples,
-        all_true_triples=all_true_triples,
+        eval_triples=valid_triples_base,
+        all_true_triples=all_true_full,
         id2type=id2type,
         rel2type=rel2type,
         id2rel=id2rel,
@@ -837,14 +922,14 @@ def main():
     for rel, metrics in valid_rel_metrics.items():
         print(rel, metrics)
 
-    print("\n===== TEST SET EVALUATION =====")
+    print("\n===== TEST SET EVALUATION (FORWARD ONLY) =====")
     test_metrics, test_rel_metrics = evaluate_tail_prediction(
         model=model,
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
-        eval_triples=test_triples,
-        all_true_triples=all_true_triples,
+        eval_triples=test_triples_base,
+        all_true_triples=all_true_full,
         id2type=id2type,
         rel2type=rel2type,
         id2rel=id2rel,
@@ -855,7 +940,46 @@ def main():
     for rel, metrics in test_rel_metrics.items():
         print(rel, metrics)
 
-    print_candidate_stats(test_triples, id2type, rel2type, id2rel)
+    # -------------------------
+    # 11) Optional evaluation (base + rev)
+    # -------------------------
+    print("\n===== VALID SET EVALUATION (BASE + REV) =====")
+    valid_metrics_full, valid_rel_metrics_full = evaluate_tail_prediction(
+        model=model,
+        x=x,
+        edge_index=edge_index,
+        edge_type=edge_type,
+        eval_triples=valid_triples_full,
+        all_true_triples=all_true_full,
+        id2type=id2type,
+        rel2type=rel2type,
+        id2rel=id2rel,
+        hits_ks=(1, 3, 10)
+    )
+    print("Overall Valid Full Metrics:", valid_metrics_full)
+    print("Per-relation Valid Full Metrics:")
+    for rel, metrics in valid_rel_metrics_full.items():
+        print(rel, metrics)
+
+    print("\n===== TEST SET EVALUATION (BASE + REV) =====")
+    test_metrics_full, test_rel_metrics_full = evaluate_tail_prediction(
+        model=model,
+        x=x,
+        edge_index=edge_index,
+        edge_type=edge_type,
+        eval_triples=test_triples_full,
+        all_true_triples=all_true_full,
+        id2type=id2type,
+        rel2type=rel2type,
+        id2rel=id2rel,
+        hits_ks=(1, 3, 10)
+    )
+    print("Overall Test Full Metrics:", test_metrics_full)
+    print("Per-relation Test Full Metrics:")
+    for rel, metrics in test_rel_metrics_full.items():
+        print(rel, metrics)
+
+    print_candidate_stats(test_triples_base, id2type, rel2type, id2rel)
 
 
 if __name__ == "__main__":

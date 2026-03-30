@@ -161,7 +161,7 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 NODE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
 TRIPLE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
-MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_best_model.pt"
+MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_complex_with_reverse_best.pt"
 
 HIDDEN_DIM = 256
 EMD_DIM = 256
@@ -1321,7 +1321,7 @@ def main():
             run_structure_mapping_and_inference(
                 is_print=True,
                 session=session,
-                structure_input=structure_input_powertrain,
+                structure_input=structure_input_motorcontrol,
                 model=model,
                 x=x,
                 edge_index=edge_index,

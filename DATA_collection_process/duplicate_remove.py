@@ -13,7 +13,7 @@ from pathlib import Path
 # CONFIG
 # ===============================
 # INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\8D.json"
-INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\FS\FS.json"
+INPUT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\Orion_list\TS\TS.json"
 OPERATION = "deduplicate"  # "deduplicate" | "type_classify"
 
 PROCESS_WORDS = [

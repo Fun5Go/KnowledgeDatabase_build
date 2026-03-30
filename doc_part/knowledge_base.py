@@ -1,7 +1,8 @@
 import os
 import re
-from typing import List, Dict, Optional
 import json
+from typing import List, Dict, Optional, Tuple
+
 import pdfplumber
 from docx import Document as DocxDocument
 
@@ -20,8 +21,8 @@ COLLECTION_NAME = "fs_requirements"
 
 # ---- PDF layout settings ----
 HEADER_CROP = 90
-FOOTER_CROP = 70
 LEFT_ID_THRESHOLD = 160
+PREFIX_MERGE_MAX_GAP = 6.0
 
 # ---- start parsing from this heading ----
 START_HEADING_PATTERN = re.compile(r"^\s*1\s+Introduction\s*$", re.IGNORECASE)
@@ -32,6 +33,7 @@ REQ_AT_LINE_START_PATTERN = re.compile(
     rf"^({REQ_ID_CORE})(?:\s+({REQ_ID_CORE}))?(?:\s+(.*))?$"
 )
 REQ_TOKEN_PATTERN = re.compile(REQ_ID_CORE)
+
 # ---- normal text chunking ----
 NORMAL_CHUNK_SIZE = 1200
 NORMAL_CHUNK_OVERLAP = 150
@@ -67,36 +69,43 @@ def is_noise_line(text: str) -> bool:
     }:
         return True
 
-    if re.fullmatch(r"\d+", text):
+    if re.fullmatch(r"\d+", low):
         return True
 
-    if low.startswith("document title "):
+    if low.startswith("document title"):
         return True
-    if low.startswith("document id "):
+    if low.startswith("document id"):
+        return True
+    if low.startswith("date "):
         return True
 
     return False
 
 
+def merge_hyphenated_lines(lines: List[str]) -> List[str]:
+    merged = []
+    i = 0
+    while i < len(lines):
+        cur = lines[i].strip()
+        if i < len(lines) - 1:
+            nxt = lines[i + 1].strip()
+            if cur.endswith("-") and nxt:
+                merged.append(cur + nxt)
+                i += 2
+                continue
+        merged.append(cur)
+        i += 1
+    return merged
+
+
 def clean_chunk_text(text: str) -> str:
     lines = [clean_line(line) for line in text.splitlines()]
-    out = []
-
-    for line in lines:
-        if not line:
-            continue
-        if is_noise_line(line):
-            continue
-        out.append(line)
-
-    return "\n".join(out).strip()
+    lines = [line for line in lines if line and not is_noise_line(line)]
+    lines = merge_hyphenated_lines(lines)
+    return "\n".join(lines).strip()
 
 
 def split_text_with_overlap(text: str, chunk_size: int = 1200, overlap: int = 150) -> List[str]:
-    """
-    Simple character-based chunking for non-REQ text.
-    Tries to split near paragraph/newline boundaries when possible.
-    """
     text = text.strip()
     if not text:
         return []
@@ -112,11 +121,9 @@ def split_text_with_overlap(text: str, chunk_size: int = 1200, overlap: int = 15
         end = min(start + chunk_size, n)
 
         if end < n:
-            # try to cut at paragraph boundary
             para_break = text.rfind("\n\n", start, end)
             line_break = text.rfind("\n", start, end)
             sentence_break = text.rfind(". ", start, end)
-
             cut = max(para_break, line_break, sentence_break)
             if cut > start + chunk_size // 2:
                 end = cut + (2 if cut == sentence_break else 0)
@@ -133,10 +140,73 @@ def split_text_with_overlap(text: str, chunk_size: int = 1200, overlap: int = 15
     return chunks
 
 
+def parse_requirement_line(text: str):
+    m = REQ_AT_LINE_START_PATTERN.match(text.strip())
+    if not m:
+        return None
+
+    id1 = m.group(1)
+    id2 = m.group(2)
+    remainder = (m.group(3) or "").strip()
+
+    ids = [id1]
+    if id2:
+        ids.append(id2)
+
+    return {
+        "ids": ids,
+        "remainder": remainder
+    }
+
+
+def parse_requirement_ids(text: str) -> List[str]:
+    return REQ_TOKEN_PATTERN.findall(text or "")
+
+
+def is_requirement_label_text(text: str) -> bool:
+    if not text:
+        return False
+    tokens = REQ_TOKEN_PATTERN.findall(text)
+    if not tokens:
+        return False
+
+    compact = re.sub(r"\s+", "", text)
+    compact_tokens = "".join(tokens)
+    return compact == compact_tokens
+
+
+def looks_like_rationale_label(text: str) -> bool:
+    return text.strip().lower() == "rationale"
+
+
+def looks_like_continuation(text: str) -> bool:
+    if not text:
+        return False
+    t = text.strip()
+    if not t:
+        return False
+
+    # 数字、标点、小写开头，通常像上一句的续行
+    if re.match(r"^[0-9:;,\.\)\]-]", t):
+        return True
+    if re.match(r"^[a-z]", t):
+        return True
+
+    return False
+
+
+def ends_with_hyphen(text_lines: List[str]) -> bool:
+    for line in reversed(text_lines):
+        s = line.strip()
+        if s:
+            return s.endswith("-")
+    return False
+
+
 # =========================================================
 # PDF LOW-LEVEL HELPERS
 # =========================================================
-def group_words_to_lines(words: List[Dict], y_tolerance: float = 3) -> List[List[Dict]]:
+def group_words_to_lines(words: List[Dict], y_tolerance: float = 3.0) -> List[List[Dict]]:
     if not words:
         return []
 
@@ -157,20 +227,78 @@ def group_words_to_lines(words: List[Dict], y_tolerance: float = 3) -> List[List
     return lines
 
 
-def line_to_text_and_positions(line_words: List[Dict]):
+def words_to_text(words: List[Dict]) -> str:
+    if not words:
+        return ""
+    words = sorted(words, key=lambda x: x["x0"])
+    return clean_line(" ".join(w["text"] for w in words))
+
+
+def split_line_left_right(line_words: List[Dict], threshold: float = LEFT_ID_THRESHOLD) -> Tuple[str, str]:
+    left_words = [w for w in line_words if w["x0"] < threshold]
+    right_words = [w for w in line_words if w["x0"] >= threshold]
+
+    left_text = words_to_text(left_words)
+    right_text = words_to_text(right_words)
+    return left_text, right_text
+
+
+def line_to_info(line_words: List[Dict]) -> Dict:
     line_words = sorted(line_words, key=lambda x: x["x0"])
     text = " ".join(w["text"] for w in line_words).strip()
     x0 = min(w["x0"] for w in line_words)
     x1 = max(w["x1"] for w in line_words)
     top = min(w["top"] for w in line_words)
-    return text, x0, x1, top
+    bottom = max(w["bottom"] for w in line_words)
+
+    return {
+        "text": clean_line(text),
+        "x0": x0,
+        "x1": x1,
+        "top": top,
+        "bottom": bottom,
+        "words": line_words,
+    }
+
+
+def lines_are_close(prev_line: Dict, curr_line: Dict, max_gap: float = PREFIX_MERGE_MAX_GAP) -> bool:
+    gap = curr_line["top"] - prev_line["bottom"]
+    return gap <= max_gap
+
+
+def is_same_requirement_prefix_block(
+    prev_line_info: Optional[Dict],
+    curr_line_info: Dict,
+    left_text: str,
+    right_text: str,
+    current_ids: Optional[List[str]],
+    current_req_lines: List[str],
+    max_gap: float = PREFIX_MERGE_MAX_GAP,
+) -> bool:
+    """
+    判断当前这一行的 prefix 是否应该并入当前 requirement block，而不是新开 chunk。
+    """
+    if not current_ids:
+        return False
+
+    left_ids = parse_requirement_ids(left_text)
+    if not left_ids or not is_requirement_label_text(left_text):
+        return False
+
+    close_to_prev = False
+    if prev_line_info is not None:
+        close_to_prev = lines_are_close(prev_line_info, curr_line_info, max_gap=max_gap)
+
+    continuation_hint = (
+        not right_text
+        or looks_like_continuation(right_text)
+        or ends_with_hyphen(current_req_lines)
+    )
+
+    return close_to_prev and continuation_hint
 
 
 def extract_region_text(page, bbox, label: str = "") -> str:
-    """
-    Extract text from a page region for debug printing.
-    bbox = (x0, top, x1, bottom)
-    """
     try:
         region = page.crop(bbox)
         txt = region.extract_text() or ""
@@ -181,9 +309,6 @@ def extract_region_text(page, bbox, label: str = "") -> str:
 
 
 def print_pdf_header_footer_debug(file_path: str, max_pages: Optional[int] = None):
-    """
-    Print header/footer text of each page so you can verify crop settings.
-    """
     print("\n" + "=" * 120)
     print("[DEBUG] HEADER / FOOTER CHECK")
     print("=" * 120)
@@ -196,7 +321,7 @@ def print_pdf_header_footer_debug(file_path: str, max_pages: Optional[int] = Non
             page = pdf.pages[page_idx]
 
             header_bbox = (0, 0, page.width, HEADER_CROP)
-            footer_bbox = (0, page.height - FOOTER_CROP, page.width, page.height)
+            footer_bbox = (0, page.height - 120, page.width, page.height)
 
             header_text = extract_region_text(page, header_bbox, "header")
             footer_text = extract_region_text(page, footer_bbox, "footer")
@@ -207,40 +332,9 @@ def print_pdf_header_footer_debug(file_path: str, max_pages: Optional[int] = Non
             print("[FOOTER]")
             print(footer_text if footer_text else "[EMPTY]")
 
-def parse_requirement_line(text: str):
-    """
-    Parse lines like:
-      REQ_5
-      DRQ_202*
-      REQ_169[PCR] Undervoltage protection shall be implemented on the iPS3
-      DRQ_202* REQ_2
-    Returns:
-      {
-        "ids": [...],
-        "remainder": "..."
-      }
-    or None
-    """
-    m = REQ_AT_LINE_START_PATTERN.match(text.strip())
-    if not m:
-        return None
-
-    id1 = m.group(1)
-    id2 = m.group(2)
-    remainder = (m.group(3) or "").strip()
-
-    ids = [id1]
-    if id2:
-        ids.append(id2)
-
-    return {
-        "ids": ids,
-        "remainder": remainder
-    }
-
 
 # =========================================================
-# PDF PARSER
+# FLUSH HELPERS
 # =========================================================
 def flush_normal_buffer(
     chunks: List[Document],
@@ -304,14 +398,39 @@ def flush_req_buffer(
     )
 
 
+def update_requirement_id_header(current_req_lines: List[str], current_ids: List[str]) -> List[str]:
+    header = f"Requirement IDs: {', '.join(current_ids)}"
+    if current_req_lines:
+        current_req_lines[0] = header
+    else:
+        current_req_lines = [header]
+    return current_req_lines
+
+
+def append_requirement_text(current_req_lines: List[str], text: str):
+    if not text:
+        return
+
+    if len(current_req_lines) >= 2 and current_req_lines[-1].startswith("Requirement: "):
+        current_req_lines[-1] += " " + text
+    else:
+        current_req_lines.append(f"Requirement: {text}")
+
+
+def append_rationale_text(current_req_lines: List[str], text: str):
+    if not text:
+        return
+
+    if len(current_req_lines) >= 2 and current_req_lines[-1].startswith("Rationale: "):
+        current_req_lines[-1] += " " + text
+    else:
+        current_req_lines.append(f"Rationale: {text}")
+
+
+# =========================================================
+# PDF PARSER
+# =========================================================
 def extract_fs_chunks_from_pdf(file_path: str) -> List[Document]:
-    """
-    Rules:
-    1. Print/debug header/footer separately with helper
-    2. Start parsing only after '1 Introduction'
-    3. Before first REQ/DRQ/LIM/CHO -> normal chunking
-    4. After REQ starts -> chunk by requirement block
-    """
     chunks: List[Document] = []
 
     started = False
@@ -328,88 +447,137 @@ def extract_fs_chunks_from_pdf(file_path: str) -> List[Document]:
         for page_idx, page in enumerate(pdf.pages):
             page_no = page_idx + 1
 
-            # crop out header/footer
-            cropped = page.crop((0, HEADER_CROP, page.width, page.height - FOOTER_CROP))
+            # 只裁 header，不裁 footer，避免把 rationale 裁掉
+            cropped = page.crop((0, HEADER_CROP, page.width, page.height))
 
             words = cropped.extract_words(
-                use_text_flow=True,
+                use_text_flow=False,
                 keep_blank_chars=False,
+                extra_attrs=["fontname", "size"],
             )
 
             if not words:
                 continue
 
-            lines = group_words_to_lines(words, y_tolerance=3)
+            lines = group_words_to_lines(words, y_tolerance=3.0)
+            line_infos = [line_to_info(line_words) for line_words in lines]
 
-            for line_words in lines:
-                raw_text, x0, _, _ = line_to_text_and_positions(line_words)
-                text = clean_line(raw_text)
+            prev_line_info = None
 
-                if not text or is_noise_line(text):
+            for line_info in line_infos:
+                full_text = line_info["text"]
+                left_text, right_text = split_line_left_right(line_info["words"], LEFT_ID_THRESHOLD)
+
+                if not full_text or is_noise_line(full_text):
+                    prev_line_info = line_info
                     continue
 
-                # Wait until "1 Introduction"
                 if not started:
-                    if START_HEADING_PATTERN.match(text):
+                    if START_HEADING_PATTERN.match(full_text):
                         started = True
-                        normal_lines.append(text)
+                        normal_lines.append(full_text)
                         if page_no not in normal_pages:
                             normal_pages.append(page_no)
+                    prev_line_info = line_info
                     continue
 
-                # Check if this line is a requirement id line on the left
-                # Check if this line starts a requirement block
-                is_left_label = x0 < LEFT_ID_THRESHOLD
-                parsed_req = parse_requirement_line(text)
+                left_ids = parse_requirement_ids(left_text)
 
-                if is_left_label and parsed_req:
-                    # switch normal -> requirement mode
+                # -------------------------------------------------
+                # Case 1: 左侧是 requirement prefix
+                # -------------------------------------------------
+                if left_ids and is_requirement_label_text(left_text):
+                    # 如果像同一个 block 的附加 prefix，则并入当前 requirement
+                    if is_same_requirement_prefix_block(
+                        prev_line_info=prev_line_info,
+                        curr_line_info=line_info,
+                        left_text=left_text,
+                        right_text=right_text,
+                        current_ids=current_ids,
+                        current_req_lines=current_req_lines,
+                        max_gap=PREFIX_MERGE_MAX_GAP,
+                    ):
+                        for rid in left_ids:
+                            if rid not in current_ids:
+                                current_ids.append(rid)
+
+                        current_req_lines = update_requirement_id_header(current_req_lines, current_ids)
+
+                        if right_text:
+                            append_requirement_text(current_req_lines, right_text)
+
+                        if page_no not in current_req_pages:
+                            current_req_pages.append(page_no)
+
+                        prev_line_info = line_info
+                        continue
+
+                    # 否则是真正的新 requirement
                     if not in_requirement_mode:
                         flush_normal_buffer(chunks, normal_lines, file_path, normal_pages)
                         normal_lines = []
                         normal_pages = []
                         in_requirement_mode = True
 
-                    # flush previous requirement
                     flush_req_buffer(chunks, current_ids, current_req_lines, file_path, current_req_pages)
 
-                    current_ids = parsed_req["ids"]
-                    current_req_lines = current_ids[:]
+                    current_ids = left_ids[:]
                     current_req_pages = [page_no]
+                    current_req_lines = [f"Requirement IDs: {', '.join(current_ids)}"]
 
-                    # if the requirement line already contains body text, keep it
-                    if parsed_req["remainder"]:
-                        current_req_lines.append(parsed_req["remainder"])
+                    if right_text:
+                        append_requirement_text(current_req_lines, right_text)
 
+                    prev_line_info = line_info
                     continue
 
-                # fallback requirement detection
-                if is_left_label:
-                    tokens = REQ_TOKEN_PATTERN.findall(text)
-                    if tokens and len(tokens) <= 2 and text.replace(" ", "") in "".join(tokens).replace(" ", ""):
-                        if not in_requirement_mode:
-                            flush_normal_buffer(chunks, normal_lines, file_path, normal_pages)
-                            normal_lines = []
-                            normal_pages = []
-                            in_requirement_mode = True
+                # -------------------------------------------------
+                # Case 2: 左侧是 Rationale
+                # -------------------------------------------------
+                if looks_like_rationale_label(left_text):
+                    if in_requirement_mode and current_ids:
+                        if right_text:
+                            append_rationale_text(current_req_lines, right_text)
+                        else:
+                            current_req_lines.append("Rationale:")
 
-                        flush_req_buffer(chunks, current_ids, current_req_lines, file_path, current_req_pages)
-
-                        current_ids = tokens
-                        current_req_lines = tokens[:]
-                        current_req_pages = [page_no]
-                        continue
-
-                # normal content handling
-                if in_requirement_mode:
-                    if current_ids:
-                        current_req_lines.append(text)
                         if page_no not in current_req_pages:
                             current_req_pages.append(page_no)
-                else:
-                    normal_lines.append(text)
-                    if page_no not in normal_pages:
-                        normal_pages.append(page_no)
+                    else:
+                        normal_lines.append(full_text)
+                        if page_no not in normal_pages:
+                            normal_pages.append(page_no)
+
+                    prev_line_info = line_info
+                    continue
+
+                # -------------------------------------------------
+                # Case 3: requirement 正文续行
+                # -------------------------------------------------
+                if in_requirement_mode and current_ids:
+                    continuation = right_text if right_text else full_text
+
+                    if continuation and not is_noise_line(continuation):
+                        # 如果上一行是 Rationale，就继续拼到 Rationale
+                        if current_req_lines and current_req_lines[-1].startswith("Rationale:"):
+                            append_rationale_text(current_req_lines, continuation)
+                        else:
+                            append_requirement_text(current_req_lines, continuation)
+
+                        if page_no not in current_req_pages:
+                            current_req_pages.append(page_no)
+
+                    prev_line_info = line_info
+                    continue
+
+                # -------------------------------------------------
+                # Case 4: 普通 section 文本
+                # -------------------------------------------------
+                normal_lines.append(full_text)
+                if page_no not in normal_pages:
+                    normal_pages.append(page_no)
+
+                prev_line_info = line_info
 
         # flush remaining buffers
         if in_requirement_mode:
@@ -448,11 +616,10 @@ def extract_fs_chunks_from_docx(file_path: str) -> List[Document]:
                 normal_lines.append(text)
             continue
 
-        m = REQ_LINE_PATTERN.match(text)
+        parsed = parse_requirement_line(text)
 
-        if m:
+        if parsed:
             if not in_requirement_mode:
-                # flush normal chunks
                 txt = clean_chunk_text("\n".join(normal_lines))
                 if txt:
                     split_parts = split_text_with_overlap(
@@ -476,50 +643,28 @@ def extract_fs_chunks_from_docx(file_path: str) -> List[Document]:
                 normal_lines = []
                 in_requirement_mode = True
 
-            if current_ids and current_req_lines:
-                req_text = clean_chunk_text("\n".join(current_req_lines))
-                if req_text:
-                    chunks.append(
-                        Document(
-                            page_content=req_text,
-                            metadata={
-                                "source": file_path,
-                                "file_name": os.path.basename(file_path),
-                                "type": "FS",
-                                "chunk_mode": "requirement",
-                                "requirement_ids": current_ids[:],
-                                "primary_requirement_id": current_ids[0],
-                            },
-                        )
-                    )
+            flush_req_buffer(chunks, current_ids, current_req_lines, file_path, [])
 
-            current_ids = [g for g in m.groups() if g]
-            current_req_lines = current_ids[:]
+            current_ids = parsed["ids"][:]
+            current_req_lines = [f"Requirement IDs: {', '.join(current_ids)}"]
+
+            if parsed["remainder"]:
+                append_requirement_text(current_req_lines, parsed["remainder"])
+
         else:
-            if in_requirement_mode:
-                if current_ids:
-                    current_req_lines.append(text)
+            if in_requirement_mode and current_ids:
+                if looks_like_rationale_label(text):
+                    current_req_lines.append("Rationale:")
+                else:
+                    if current_req_lines and current_req_lines[-1].startswith("Rationale:"):
+                        append_rationale_text(current_req_lines, text)
+                    else:
+                        append_requirement_text(current_req_lines, text)
             else:
                 normal_lines.append(text)
 
-    # flush
     if in_requirement_mode:
-        if current_ids and current_req_lines:
-            req_text = clean_chunk_text("\n".join(current_req_lines))
-            if req_text:
-                chunks.append(
-                    Document(
-                        page_content=req_text,
-                        metadata={
-                            "source": file_path,
-                            "file_name": os.path.basename(file_path),
-                            "type": "FS",
-                            "chunk_mode": "requirement",
-                            "requirement_ids": current_ids[:],
-                            "primary_requirement_id": current_ids[0],
-                        },
-                    )
-                )
+        flush_req_buffer(chunks, current_ids, current_req_lines, file_path, [])
     else:
         txt = clean_chunk_text("\n".join(normal_lines))
         if txt:
@@ -669,12 +814,12 @@ def main():
     print("[DEBUG] CHUNK PREVIEW")
     print("=" * 120)
 
-    for i, ch in enumerate(chunks[:10], start=1):
+    for i, ch in enumerate(chunks[:20], start=1):
         print(f"\n--- CHUNK {i} ---")
         print("METADATA:")
         print(ch.metadata)
         print("CONTENT:")
-        print(ch.page_content[:1800])
+        print(ch.page_content[:2000])
 
     # 4. embedding + vector store
     embeddings = create_embeddings()

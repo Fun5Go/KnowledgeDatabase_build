@@ -139,19 +139,19 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 NODE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
 TRIPLE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
-MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_best_model.pt"
+MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_weighted_best_model.pt"
 
 HIDDEN_DIM = 256
 EMD_DIM = 256
 
 TOP_K_MAP = 5
-MIN_SIM = 0.73
+MIN_SIM = 0.70
 POOL_K = 100
 
 TOP_K_PRED = 3
 PRED_SCORE_THRESHOLD = 0.0
 
-WEIGHTING_METHOD = "linear"   # ["linear", "square", "uniform"]
+WEIGHTING_METHOD = "square"   # ["linear", "square", "uniform"]
 APPLY_SIGMOID_TO_PAIR_SCORE = True
 SHOW_TOP_PAIR_DETAILS = 5
 
