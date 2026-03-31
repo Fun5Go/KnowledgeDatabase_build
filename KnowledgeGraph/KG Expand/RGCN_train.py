@@ -1,16 +1,14 @@
 import os
 import ast
-import csv
-import json
 import random
 from collections import defaultdict
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import RGCNConv
+from torch_geometric.nn import MessagePassing
 
 
 # =========================================================
@@ -18,7 +16,7 @@ from torch_geometric.nn import RGCNConv
 # =========================================================
 NODES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
 TRIPLES_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
-SAVE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_complex_with_reverse_best.pt"
+SAVE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_complex_weighted_best.pt"
 
 SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -39,6 +37,12 @@ TRAIN_RATIO = 0.90
 VALID_RATIO = 0.05
 
 FOCUS_RELATIONS = ("CAUSES", "LEADS_TO")
+
+# edge weight config
+GRAPH_WEIGHT_CLAMP_MIN = 1e-3
+GRAPH_WEIGHT_CLAMP_MAX = 10.0
+GRAPH_WEIGHT_POWER = 1.0
+USE_LOSS_WEIGHT = True
 
 
 def set_seed(seed: int = 42):
@@ -150,9 +154,7 @@ def build_full_rel2type(base_rel2type: Dict[str, Tuple[str, str]]):
 def validate_relation_schema(rel_list_base, rel2type_base):
     missing = [r for r in rel_list_base if r not in rel2type_base]
     if missing:
-        raise ValueError(
-            f"Relations found in triples.tsv but missing in schema: {missing}"
-        )
+        raise ValueError(f"Relations found in triples.tsv but missing in schema: {missing}")
 
 
 def build_relation_mappings(rel_list_base, base_rel2type):
@@ -174,10 +176,6 @@ def add_reverse_triples_indexed(
     id2rel: Dict[int, str],
     rel2id: Dict[str, int]
 ):
-    """
-    Input triples are indexed triples: (h, r_id, t)
-    Output = original + reverse triples
-    """
     rev_triples = []
     for h, r, t in triples_indexed:
         r_str = id2rel[r]
@@ -194,7 +192,41 @@ def duplicate_weights_for_reverse(weights: List[float]):
 
 
 # =========================================================
-# 5. BUILD GRAPH
+# 5. EDGE WEIGHT UTILS
+# =========================================================
+def normalize_weight_list(
+    weights: List[float],
+    clamp_min: float = 1e-3,
+    clamp_max: float = 10.0,
+    power: float = 1.0
+):
+    w = torch.tensor(weights, dtype=torch.float)
+    w = w.clamp_min(clamp_min)
+    if power != 1.0:
+        w = w.pow(power)
+    w = w / w.mean().clamp_min(1e-8)
+    if clamp_max is not None:
+        w = w.clamp(max=clamp_max)
+    return w.tolist()
+
+
+def normalize_weight_tensor(
+    weights: torch.Tensor,
+    clamp_min: float = 1e-3,
+    clamp_max: float = 10.0,
+    power: float = 1.0
+):
+    w = weights.float().clamp_min(clamp_min)
+    if power != 1.0:
+        w = w.pow(power)
+    w = w / w.mean().clamp_min(1e-8)
+    if clamp_max is not None:
+        w = w.clamp(max=clamp_max)
+    return w
+
+
+# =========================================================
+# 6. BUILD GRAPH
 # =========================================================
 def build_graph_from_raw(
     triples_raw: List[Tuple[int, str, int, float]],
@@ -232,22 +264,125 @@ def build_graph_from_raw(
 
 
 # =========================================================
-# 6. MODEL
+# 7. WEIGHTED RGCN LAYER
+# =========================================================
+class WeightedRGCNConv(MessagePassing):
+    """
+    R-GCN with basis decomposition + edge weight aware message passing.
+
+    Message for relation r:
+        m_{j->i}^{(r)} = alpha_r * normalized_edge_weight_{j,i} * (x_j W_r)
+
+    alpha_r is a learnable positive scalar for each relation.
+    """
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        num_relations: int,
+        num_bases: int = 4,
+        root_weight: bool = True,
+        bias: bool = True
+    ):
+        super().__init__(aggr="add")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.num_relations = num_relations
+        self.num_bases = min(num_bases, num_relations)
+
+        self.basis = nn.Parameter(torch.empty(self.num_bases, in_channels, out_channels))
+        self.att = nn.Parameter(torch.empty(num_relations, self.num_bases))
+
+        self.root = nn.Parameter(torch.empty(in_channels, out_channels)) if root_weight else None
+        self.bias = nn.Parameter(torch.empty(out_channels)) if bias else None
+
+        # learnable relation-wise positive scaling factor for edge weights
+        self.rel_edge_scale = nn.Parameter(torch.ones(num_relations))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.basis)
+        nn.init.xavier_uniform_(self.att)
+        if self.root is not None:
+            nn.init.xavier_uniform_(self.root)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+        nn.init.ones_(self.rel_edge_scale)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: torch.Tensor,
+        edge_weight: torch.Tensor = None
+    ):
+        num_nodes = x.size(0)
+        out = x.new_zeros(num_nodes, self.out_channels)
+
+        if edge_weight is None:
+            edge_weight = x.new_ones(edge_type.size(0))
+        edge_weight = edge_weight.to(dtype=x.dtype, device=x.device)
+
+        weight = torch.matmul(
+            self.att,
+            self.basis.view(self.num_bases, -1)
+        ).view(self.num_relations, self.in_channels, self.out_channels)
+
+        for rel in range(self.num_relations):
+            rel_mask = (edge_type == rel)
+            if not bool(rel_mask.any()):
+                continue
+
+            rel_edge_index = edge_index[:, rel_mask]
+            rel_edge_weight = edge_weight[rel_mask]
+
+            dst = rel_edge_index[1]
+            denom = x.new_zeros(num_nodes)
+            denom.index_add_(0, dst, rel_edge_weight)
+            norm = 1.0 / denom[dst].clamp_min(1e-12)
+
+            rel_scale = F.softplus(self.rel_edge_scale[rel])
+            msg_weight = rel_edge_weight * norm * rel_scale
+
+            x_rel = x @ weight[rel]
+
+            out = out + self.propagate(
+                rel_edge_index,
+                x=x_rel,
+                edge_weight=msg_weight,
+                size=None
+            )
+
+        if self.root is not None:
+            out = out + x @ self.root
+
+        if self.bias is not None:
+            out = out + self.bias
+
+        return out
+
+    def message(self, x_j: torch.Tensor, edge_weight: torch.Tensor):
+        return x_j * edge_weight.view(-1, 1)
+
+
+# =========================================================
+# 8. MODEL
 # =========================================================
 class RGCN(nn.Module):
     def __init__(self, in_dim, hidden_dim, out_dim, num_relations, dropout=0.2, num_bases=4):
         super().__init__()
-        self.conv1 = RGCNConv(in_dim, hidden_dim, num_relations, num_bases=num_bases)
-        self.conv2 = RGCNConv(hidden_dim, out_dim, num_relations, num_bases=num_bases)
+        self.conv1 = WeightedRGCNConv(in_dim, hidden_dim, num_relations, num_bases=num_bases)
+        self.conv2 = WeightedRGCNConv(hidden_dim, out_dim, num_relations, num_bases=num_bases)
         self.norm1 = nn.LayerNorm(hidden_dim)
         self.dropout = dropout
 
-    def forward(self, x, edge_index, edge_type):
-        x = self.conv1(x, edge_index, edge_type)
+    def forward(self, x, edge_index, edge_type, edge_weight):
+        x = self.conv1(x, edge_index, edge_type, edge_weight)
         x = self.norm1(x)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.conv2(x, edge_index, edge_type)
+        x = self.conv2(x, edge_index, edge_type, edge_weight)
         return x
 
 
@@ -298,22 +433,22 @@ class Model(nn.Module):
         )
         self.decoder = ComplExDecoder(num_relations, emb_dim)
 
-    def encode(self, x, edge_index, edge_type):
+    def encode(self, x, edge_index, edge_type, edge_weight):
         x = self.input_proj(x)
         x = F.relu(x)
-        z = self.rgcn(x, edge_index, edge_type)
+        z = self.rgcn(x, edge_index, edge_type, edge_weight)
         return z
 
     def score(self, z, triples):
         return self.decoder(z, triples)
 
-    def forward(self, x, edge_index, edge_type, triples):
-        z = self.encode(x, edge_index, edge_type)
+    def forward(self, x, edge_index, edge_type, edge_weight, triples):
+        z = self.encode(x, edge_index, edge_type, edge_weight)
         return self.score(z, triples)
 
 
 # =========================================================
-# 7. TYPE INDEX / TRUE TRIPLES
+# 9. TYPE INDEX / TRUE TRIPLES
 # =========================================================
 def build_type_index(id2type):
     type_to_nodes = defaultdict(list)
@@ -336,7 +471,7 @@ def build_true_triple_dict(triples):
 
 
 # =========================================================
-# 8. NEGATIVE SAMPLING
+# 10. NEGATIVE SAMPLING
 # =========================================================
 def negative_sampling_filtered(
     triples,
@@ -400,7 +535,7 @@ def negative_sampling_filtered(
 
 
 # =========================================================
-# 9. METRICS
+# 11. METRICS
 # =========================================================
 @torch.no_grad()
 def evaluate_tail_prediction(
@@ -408,6 +543,7 @@ def evaluate_tail_prediction(
     x,
     edge_index,
     edge_type,
+    edge_weight,
     eval_triples,
     all_true_triples,
     id2type,
@@ -416,7 +552,7 @@ def evaluate_tail_prediction(
     hits_ks=(1, 3, 10)
 ):
     model.eval()
-    z = model.encode(x, edge_index, edge_type)
+    z = model.encode(x, edge_index, edge_type, edge_weight)
 
     true_tails, _, _ = build_true_triple_dict(all_true_triples)
     type_to_nodes = build_type_index(id2type)
@@ -492,7 +628,7 @@ def focus_mrr(relation_metrics, focus_relations=("CAUSES", "LEADS_TO")):
 
 
 # =========================================================
-# 10. SAVE / LOAD
+# 12. SAVE / LOAD
 # =========================================================
 def save_checkpoint(model, optimizer, scheduler, epoch, best_score, path):
     ckpt = {
@@ -528,13 +664,14 @@ def load_model(path, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.2, nu
 
 
 # =========================================================
-# 11. TRAIN
+# 13. TRAIN
 # =========================================================
 def train(
     model,
     x,
     edge_index,
     edge_type,
+    edge_weight,
     train_triples,
     train_weights,
     valid_triples_forward_only,
@@ -560,10 +697,8 @@ def train(
     train_true_set = set(train_true_triples)
 
     train_triples_tensor = torch.tensor(train_triples, dtype=torch.long, device=DEVICE)
-    train_edge_weight = torch.tensor(train_weights, dtype=torch.float, device=DEVICE)
-
-    # normalize around mean=1
-    train_edge_weight = train_edge_weight / train_edge_weight.mean().clamp_min(1e-8)
+    train_loss_weight = torch.tensor(train_weights, dtype=torch.float, device=DEVICE)
+    train_loss_weight = train_loss_weight / train_loss_weight.mean().clamp_min(1e-8)
 
     best_score = -1.0
     best_state = None
@@ -572,12 +707,12 @@ def train(
     rel_weights = {
         "CAUSES": 1.0,
         "LEADS_TO": 1.0,
-        "HAS_MODE": 0,
-        "HAS_FUNCTION": 0,
+        "HAS_MODE": 0.0,
+        "HAS_FUNCTION": 0.0,
         "CAUSES_REV": 1.0,
         "LEADS_TO_REV": 1.0,
-        "HAS_MODE_REV": 0,
-        "HAS_FUNCTION_REV": 0,
+        "HAS_MODE_REV": 0.0,
+        "HAS_FUNCTION_REV": 0.0,
     }
 
     for epoch in range(1, epochs + 1):
@@ -592,7 +727,7 @@ def train(
             num_neg_per_pos=num_neg_per_pos
         ).to(DEVICE)
 
-        z = model.encode(x, edge_index, edge_type)
+        z = model.encode(x, edge_index, edge_type, edge_weight)
 
         pos_score = model.score(z, train_triples_tensor)
         neg_score = model.score(z, neg_triples)
@@ -609,7 +744,10 @@ def train(
             device=DEVICE
         )
 
-        final_sample_weight = train_rel_weight * train_edge_weight
+        if USE_LOSS_WEIGHT:
+            final_sample_weight = train_rel_weight * train_loss_weight
+        else:
+            final_sample_weight = train_rel_weight
 
         pos_loss_each = -F.logsigmoid(pos_score)
         neg_loss_each = -(neg_weight * F.logsigmoid(-neg_score)).sum(dim=1)
@@ -618,7 +756,13 @@ def train(
         neg_loss = (neg_loss_each * final_sample_weight).mean()
 
         reg_loss = model.decoder.rel.pow(2).mean() + z.pow(2).mean()
-        loss = pos_loss + neg_loss + 1e-4 * reg_loss
+
+        edge_scale_reg = 0.0
+        for module in model.modules():
+            if isinstance(module, WeightedRGCNConv):
+                edge_scale_reg = edge_scale_reg + (F.softplus(module.rel_edge_scale) - 1.0).pow(2).mean()
+
+        loss = pos_loss + neg_loss + 1e-4 * reg_loss + 1e-4 * edge_scale_reg
 
         optimizer.zero_grad()
         loss.backward()
@@ -630,6 +774,7 @@ def train(
             x=x,
             edge_index=edge_index,
             edge_type=edge_type,
+            edge_weight=edge_weight,
             eval_triples=valid_triples_forward_only,
             all_true_triples=all_true_triples_for_eval,
             id2type=id2type,
@@ -673,12 +818,12 @@ def train(
 
 
 # =========================================================
-# 12. INFERENCE HELPERS
+# 14. INFERENCE HELPERS
 # =========================================================
 @torch.no_grad()
-def predict_score(model, x, edge_index, edge_type, triple_tensor):
+def predict_score(model, x, edge_index, edge_type, edge_weight, triple_tensor):
     model.eval()
-    z = model.encode(x, edge_index, edge_type)
+    z = model.encode(x, edge_index, edge_type, edge_weight)
     logit = model.score(z, triple_tensor.to(DEVICE))
     prob = torch.sigmoid(logit)
     return prob
@@ -690,13 +835,14 @@ def predict_tail(
     x,
     edge_index,
     edge_type,
+    edge_weight,
     head_id,
     relation_id,
     candidate_tail_ids,
     top_k=10
 ):
     model.eval()
-    z = model.encode(x, edge_index, edge_type)
+    z = model.encode(x, edge_index, edge_type, edge_weight)
 
     triples = torch.tensor(
         [[head_id, relation_id, tail_id] for tail_id in candidate_tail_ids],
@@ -721,13 +867,14 @@ def predict_head(
     x,
     edge_index,
     edge_type,
+    edge_weight,
     relation_id,
     tail_id,
     candidate_head_ids,
     top_k=10
 ):
     model.eval()
-    z = model.encode(x, edge_index, edge_type)
+    z = model.encode(x, edge_index, edge_type, edge_weight)
 
     triples = torch.tensor(
         [[head_id, relation_id, tail_id] for head_id in candidate_head_ids],
@@ -762,7 +909,7 @@ def print_candidate_stats(eval_triples, id2type, rel2type, id2rel):
 
 
 # =========================================================
-# 13. MAIN
+# 15. MAIN
 # =========================================================
 def main():
     set_seed(SEED)
@@ -831,7 +978,6 @@ def main():
     all_true_base = train_triples_base + valid_triples_base + test_triples_base
     all_true_full = add_reverse_triples_indexed(all_true_base, id2rel, rel2id)
 
-    # negative sampling uses train truths only
     train_true_triples_full = train_triples_full
 
     print(f"\nTrain triples for loss (base + rev): {len(train_triples_full)}")
@@ -840,7 +986,7 @@ def main():
 
     # -------------------------
     # 7) Build graph ONLY from train raw triples
-    #    but add reverse edges automatically
+    #    and add reverse edges automatically
     # -------------------------
     edge_index, edge_type, edge_weight = build_graph_from_raw(
         triples_raw,
@@ -848,14 +994,21 @@ def main():
         add_reverse_edges=True
     )
 
+    edge_weight = normalize_weight_tensor(
+        edge_weight,
+        clamp_min=GRAPH_WEIGHT_CLAMP_MIN,
+        clamp_max=GRAPH_WEIGHT_CLAMP_MAX,
+        power=GRAPH_WEIGHT_POWER
+    )
+
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
     edge_type = edge_type.to(DEVICE)
     edge_weight = edge_weight.to(DEVICE)
 
-    print(f"\nGraph edges used by RGCN (with reverse): {edge_index.shape[1]}")
+    print(f"\nGraph edges used by RGCN (train only, with reverse): {edge_index.shape[1]}")
     print(
-        f"Edge weight stats: min={edge_weight.min().item():.4f}, "
+        f"Graph edge weight stats: min={edge_weight.min().item():.4f}, "
         f"max={edge_weight.max().item():.4f}, mean={edge_weight.mean().item():.4f}"
     )
 
@@ -882,9 +1035,10 @@ def main():
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
-        train_triples=train_triples_full,                 # train on base + rev
-        train_weights=train_weights_full,                 # duplicated weights
-        valid_triples_forward_only=valid_triples_base,    # early stop on forward task
+        edge_weight=edge_weight,
+        train_triples=train_triples_full,
+        train_weights=train_weights_full,
+        valid_triples_forward_only=valid_triples_base,
         train_true_triples=train_true_triples_full,
         all_true_triples_for_eval=all_true_full,
         id2type=id2type,
@@ -910,6 +1064,7 @@ def main():
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
+        edge_weight=edge_weight,
         eval_triples=valid_triples_base,
         all_true_triples=all_true_full,
         id2type=id2type,
@@ -928,6 +1083,7 @@ def main():
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
+        edge_weight=edge_weight,
         eval_triples=test_triples_base,
         all_true_triples=all_true_full,
         id2type=id2type,
@@ -949,6 +1105,7 @@ def main():
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
+        edge_weight=edge_weight,
         eval_triples=valid_triples_full,
         all_true_triples=all_true_full,
         id2type=id2type,
@@ -967,6 +1124,7 @@ def main():
         x=x,
         edge_index=edge_index,
         edge_type=edge_type,
+        edge_weight=edge_weight,
         eval_triples=test_triples_full,
         all_true_triples=all_true_full,
         id2type=id2type,

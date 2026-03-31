@@ -150,7 +150,7 @@ MIN_SCORE_DENSE = 0.7
 MIN_SCORE_BM25 = 2.5
 
 # Hybrid score is normalized/fused, so do not use 0.7 here by default
-MIN_SCORE_HYBRID = 0.45
+MIN_SCORE_HYBRID = 0.5
 
 HYBRID_ALPHA = 0.65
 

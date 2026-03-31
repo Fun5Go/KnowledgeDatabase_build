@@ -1046,7 +1046,7 @@ def infer_query_cause_to_query_modes_weighted(
             relation_name="CAUSES",
             head_nodes=cause_weighted_nodes,
             tail_nodes=mode_weighted_nodes,
-            forward_alpha=0.6,          # cause->mode 以正向为主
+            forward_alpha=0.7,          # cause->mode 以正向为主
             consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
@@ -1109,7 +1109,7 @@ def infer_query_mode_to_query_effects_weighted(
             relation_name="LEADS_TO",
             head_nodes=mode_weighted_nodes,
             tail_nodes=effect_weighted_nodes,
-            forward_alpha=0.6,          # mode->effect 仍以正向为主
+            forward_alpha=0.7,          # mode->effect 仍以正向为主
             consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
