@@ -431,6 +431,7 @@ def ingest_fmea_jsonl(
                 element = content.get("system_element")
                 function = content.get("function")
                 process_step = None
+                controls_prevention = content.get("controls_prevention")
             else:
                 system = None
                 element = content.get("process_step")
@@ -443,6 +444,9 @@ def ingest_fmea_jsonl(
             cause_text = content.get("failure_cause")
             discipline = (content.get("cause_discipline") or "").strip() or "unknown"
 
+            current_detection =  content.get("current_detection")
+            recommended_action = content.get("recommended_action")
+
             # -------------------------------------------------
             # severity / rpn  (within this grouped sig in THIS file)
             # -------------------------------------------------
@@ -452,6 +456,27 @@ def ingest_fmea_jsonl(
                 if parse_number(r.get("RPN", {}).get("severity")) is not None
             ]
             severity = max(severity_vals) if severity_vals else None
+
+            occurrence_vals = [
+                parse_number(r.get("RPN", {}).get("occurrence"))
+                for r in group
+                if parse_number(r.get("RPN", {}).get("occurrence")) is not None
+            ]
+            occurrence = max(occurrence_vals) if occurrence_vals else None
+
+            detection_vals = [
+                parse_number(r.get("RPN", {}).get("detection"))
+                for r in group
+                if parse_number(r.get("RPN", {}).get("detection")) is not None
+            ]
+            detection = max(detection_vals) if detection_vals else None
+
+            rpn_vals = [
+                parse_number(r.get("RPN", {}).get("RPN"))
+                for r in group
+                if parse_number(r.get("RPN", {}).get("RPN")) is not None
+            ]
+            rpn = max(rpn_vals) if rpn_vals else None
 
             rpn_vals = [
                 parse_number(r.get("RPN", {}).get("RPN"))
@@ -497,7 +522,14 @@ def ingest_fmea_jsonl(
                     discipline=discipline,
 
                     severity=severity,
+                    occurrence=occurrence,
+                    detection=detection,
                     rpn=rpn,
+
+                    detection_method=current_detection,
+                    recommended_action=recommended_action,
+                    prevention=controls_prevention,
+
 
                     source_type=source_type,
                     fmea_type=fmea_type,

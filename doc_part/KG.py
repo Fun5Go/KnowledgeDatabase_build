@@ -1,23 +1,19 @@
 import os
 import re
-import json
-from typing import List, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Tuple, Any
 
 import pdfplumber
 from docx import Document as DocxDocument
-
-from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+from dotenv import load_dotenv
+from neo4j import GraphDatabase
+from chromadb.utils import embedding_functions
 
 
 # =========================================================
 # CONFIG
 # =========================================================
 FILE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\FS6303220015R11.pdf"
-
-PERSIST_DIR = r"./DATA/chroma_langchain_db"
-COLLECTION_NAME = "technical_specification"
 
 # ---- PDF layout settings ----
 HEADER_CROP = 90
@@ -37,14 +33,55 @@ SECTION_HEADING_PATTERN = re.compile(
     r"^\s*\d+(?:\.\d+)+\s+[A-Z][^\n]*$"
 )
 
+
 # ---- normal text chunking ----
 NORMAL_CHUNK_SIZE = 1200
 NORMAL_CHUNK_OVERLAP = 150
+
+# ---- debug ----
+DEBUG_HEADER_FOOTER = True
+DEBUG_PREVIEW_CHUNKS = True
+PREVIEW_CHUNK_COUNT = 20
+
+# ---- batch ----
+BATCH_SIZE = 100
+
+
+# =========================================================
+# ENV / NEO4J / EMBEDDING
+# =========================================================
+load_dotenv()
+
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
+
+embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="all-MiniLM-L6-v2"
+)
+
+_embedding_cache: Dict[str, List[float]] = {}
+
+
+# =========================================================
+# SIMPLE CHUNK CONTAINER
+# =========================================================
+@dataclass
+class ChunkDoc:
+    page_content: str
+    metadata: Dict[str, Any]
 
 
 # =========================================================
 # UTILS
 # =========================================================
+def safe_text(text: Any) -> str:
+    if text is None:
+        return ""
+    return str(text).strip()
+
+
 def normalize_spaces(text: str) -> str:
     if not text:
         return ""
@@ -93,7 +130,7 @@ def merge_hyphenated_lines(lines: List[str]) -> List[str]:
         if i < len(lines) - 1:
             nxt = lines[i + 1].strip()
             if cur.endswith("-") and nxt:
-                merged.append(cur + nxt)
+                merged.append(cur[:-1] + nxt)
                 i += 2
                 continue
         merged.append(cur)
@@ -189,7 +226,6 @@ def looks_like_continuation(text: str) -> bool:
     if not t:
         return False
 
-    # 数字、标点、小写开头，通常像上一句的续行
     if re.match(r"^[0-9:;,\.\)\]-]", t):
         return True
     if re.match(r"^[a-z]", t):
@@ -216,6 +252,56 @@ def ends_with_hyphen(text_lines: List[str]) -> bool:
         if s:
             return s.endswith("-")
     return False
+
+
+def make_document_id(file_path: str) -> str:
+    return os.path.splitext(os.path.basename(file_path))[0]
+
+
+def embed(text: str) -> Optional[List[float]]:
+    text = safe_text(text)
+    if not text:
+        return None
+    if text in _embedding_cache:
+        return _embedding_cache[text]
+
+    vec = embedder([text])[0]
+    vec = [float(x) for x in vec]
+    _embedding_cache[text] = vec
+    return vec
+
+
+def extract_requirement_only_text(chunk_text: str) -> str:
+    lines = chunk_text.splitlines()
+    req_parts = []
+
+    for line in lines:
+        line = clean_line(line)
+        if not line:
+            continue
+        if line.startswith("Requirement:"):
+            req_parts.append(line[len("Requirement:"):].strip())
+
+    return clean_line(" ".join(req_parts))
+
+
+def extract_rationale_only_text(chunk_text: str) -> str:
+    lines = chunk_text.splitlines()
+    rationale_parts = []
+
+    for line in lines:
+        line = clean_line(line)
+        if not line:
+            continue
+        if line.startswith("Rationale:"):
+            rationale_parts.append(line[len("Rationale:"):].strip())
+
+    return clean_line(" ".join(rationale_parts))
+
+
+
+def make_chunk_name(file_name: str, requirement_id: str) -> str:
+    return f"{file_name}_{requirement_id}"
 
 
 # =========================================================
@@ -290,9 +376,6 @@ def is_same_requirement_prefix_block(
     current_req_lines: List[str],
     max_gap: float = PREFIX_MERGE_MAX_GAP,
 ) -> bool:
-    """
-    判断当前这一行的 prefix 是否应该并入当前 requirement block，而不是新开 chunk。
-    """
     if not current_ids:
         return False
 
@@ -352,7 +435,7 @@ def print_pdf_header_footer_debug(file_path: str, max_pages: Optional[int] = Non
 # FLUSH HELPERS
 # =========================================================
 def flush_normal_buffer(
-    chunks: List[Document],
+    chunks: List[ChunkDoc],
     normal_lines: List[str],
     file_path: str,
     pages: List[int],
@@ -369,7 +452,7 @@ def flush_normal_buffer(
 
     for idx, part in enumerate(split_parts, start=1):
         chunks.append(
-            Document(
+            ChunkDoc(
                 page_content=part,
                 metadata={
                     "source": file_path,
@@ -384,7 +467,7 @@ def flush_normal_buffer(
 
 
 def flush_req_buffer(
-    chunks: List[Document],
+    chunks: List[ChunkDoc],
     current_ids: Optional[List[str]],
     current_text_lines: List[str],
     file_path: str,
@@ -398,7 +481,7 @@ def flush_req_buffer(
         return
 
     chunks.append(
-        Document(
+        ChunkDoc(
             page_content=text,
             metadata={
                 "source": file_path,
@@ -445,8 +528,8 @@ def append_rationale_text(current_req_lines: List[str], text: str):
 # =========================================================
 # PDF PARSER
 # =========================================================
-def extract_fs_chunks_from_pdf(file_path: str) -> List[Document]:
-    chunks: List[Document] = []
+def extract_fs_chunks_from_pdf(file_path: str) -> List[ChunkDoc]:
+    chunks: List[ChunkDoc] = []
 
     started = False
     in_requirement_mode = False
@@ -462,7 +545,6 @@ def extract_fs_chunks_from_pdf(file_path: str) -> List[Document]:
         for page_idx, page in enumerate(pdf.pages):
             page_no = page_idx + 1
 
-            # 只裁 header，不裁 footer，避免把 rationale 裁掉
             cropped = page.crop((0, HEADER_CROP, page.width, page.height))
 
             words = cropped.extract_words(
@@ -498,7 +580,7 @@ def extract_fs_chunks_from_pdf(file_path: str) -> List[Document]:
 
                 left_ids = parse_requirement_ids(left_text)
 
-                # -------------------------------------------------
+                               # -------------------------------------------------
                 # Case 1: 左侧是 requirement prefix
                 # -------------------------------------------------
                 if left_ids and is_requirement_label_text(left_text):
@@ -604,8 +686,6 @@ def extract_fs_chunks_from_pdf(file_path: str) -> List[Document]:
                     prev_line_info = line_info
                     continue
 
-
-        # flush remaining buffers
         if in_requirement_mode:
             flush_req_buffer(chunks, current_ids, current_req_lines, file_path, current_req_pages)
         else:
@@ -618,8 +698,8 @@ def extract_fs_chunks_from_pdf(file_path: str) -> List[Document]:
 # =========================================================
 # DOCX PARSER
 # =========================================================
-def extract_fs_chunks_from_docx(file_path: str) -> List[Document]:
-    chunks: List[Document] = []
+def extract_fs_chunks_from_docx(file_path: str) -> List[ChunkDoc]:
+    chunks: List[ChunkDoc] = []
 
     started = False
     in_requirement_mode = False
@@ -655,7 +735,7 @@ def extract_fs_chunks_from_docx(file_path: str) -> List[Document]:
                     )
                     for idx, part in enumerate(split_parts, start=1):
                         chunks.append(
-                            Document(
+                            ChunkDoc(
                                 page_content=part,
                                 metadata={
                                     "source": file_path,
@@ -701,7 +781,7 @@ def extract_fs_chunks_from_docx(file_path: str) -> List[Document]:
             )
             for idx, part in enumerate(split_parts, start=1):
                 chunks.append(
-                    Document(
+                    ChunkDoc(
                         page_content=part,
                         metadata={
                             "source": file_path,
@@ -717,44 +797,11 @@ def extract_fs_chunks_from_docx(file_path: str) -> List[Document]:
     return chunks
 
 
+
 # =========================================================
-# ENRICH FOR EMBEDDING
+# PREPARE CHUNKS
 # =========================================================
-def enrich_chunk_for_embedding(ch: Document) -> Document:
-    source = ch.metadata.get("file_name", os.path.basename(ch.metadata.get("source", "")))
-    doc_type = ch.metadata.get("type", "FS")
-    chunk_mode = ch.metadata.get("chunk_mode", "")
-
-    pages = ch.metadata.get("pages", [])
-    if isinstance(pages, list) and pages:
-        pages_str = ", ".join(map(str, pages))
-    else:
-        pages_str = ""
-
-    req_ids = ", ".join(ch.metadata.get("requirement_ids", []))
-
-    prefix_lines = [
-        f"Document Type: {doc_type}",
-        f"Source: {source}",
-        f"Chunk Mode: {chunk_mode}",
-    ]
-
-    if pages_str:
-        prefix_lines.append(f"Pages: {pages_str}")
-    if req_ids:
-        prefix_lines.append(f"Requirement IDs: {req_ids}")
-
-    prefix_lines.append("Content:")
-
-    content = "\n".join(prefix_lines) + "\n" + ch.page_content
-
-    return Document(
-        page_content=content.strip(),
-        metadata=ch.metadata,
-    )
-
-
-def prepare_fs_chunks(file_path: str) -> List[Document]:
+def prepare_fs_chunks(file_path: str) -> List[ChunkDoc]:
     lower = file_path.lower()
 
     if lower.endswith(".pdf"):
@@ -764,61 +811,252 @@ def prepare_fs_chunks(file_path: str) -> List[Document]:
     else:
         raise ValueError("Unsupported file type. Use PDF or DOCX.")
 
-    enriched = [enrich_chunk_for_embedding(ch) for ch in chunks]
-    print(f"[INFO] Total chunks ready for embedding: {len(enriched)}")
-    return enriched
+    requirement_chunks = [
+        ch for ch in chunks
+        if ch.metadata.get("chunk_mode") == "requirement"
+    ]
+
+    print(f"[INFO] Total requirement chunks ready for KG import: {len(requirement_chunks)}")
+    return requirement_chunks
 
 
 # =========================================================
-# VECTOR STORE
+# KG BUILDER
 # =========================================================
-def create_embeddings(model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-    embeddings = HuggingFaceEmbeddings(
-        model_name=model_name,
-        model_kwargs={"device": "cpu"},
-    )
-    print("[INFO] Embeddings model initialized")
-    return embeddings
+
+def make_document_id(file_path: str) -> str:
+    return os.path.splitext(os.path.basename(file_path))[0]
 
 
-def create_vector_store(
-    embeddings,
-    persist_dir: str = PERSIST_DIR,
-    collection_name: str = COLLECTION_NAME,
-):
-    vector_store = Chroma(
-        collection_name=collection_name,
-        embedding_function=embeddings,
-        persist_directory=persist_dir,
-    )
-    print("[INFO] Vector store initialized")
-    return vector_store
+def make_fschunk_name(file_name: str, requirement_id: str) -> str:
+    new_filename = file_name.replace(".pdf", "")
+    return f"{new_filename}_{requirement_id}"
 
 
-def add_chunks_to_vector_store(vector_store, chunks: List[Document]):
-    cleaned_chunks = []
+def make_rationale_chunk_name(file_name: str, requirement_id: str) -> str:
+    return f"{file_name}_{requirement_id}_rationale"
 
-    for ch in chunks:
-        cleaned_metadata = {}
-        for k, v in ch.metadata.items():
-            if isinstance(v, (str, int, float, bool)) or v is None:
-                cleaned_metadata[k] = v
-            elif isinstance(v, list):
-                cleaned_metadata[k] = json.dumps(v, ensure_ascii=False)
-            else:
-                cleaned_metadata[k] = str(v)
 
-        cleaned_chunks.append(
-            Document(
-                page_content=ch.page_content,
-                metadata=cleaned_metadata,
+class VectorKGBuilder:
+    def __init__(self, uri, user, password, database="neo4j"):
+        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        self.database = database
+
+    def close(self):
+        self.driver.close()
+
+    def setup_schema(self):
+        queries = [
+            """
+            CREATE CONSTRAINT specification_document_semantic_id_unique IF NOT EXISTS
+            FOR (n:SpecificationDocument)
+            REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT fschunk_name_unique IF NOT EXISTS
+            FOR (n:FSChunk)
+            REQUIRE n.name IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT rationale_chunk_name_unique IF NOT EXISTS
+            FOR (n:RationaleChunk)
+            REQUIRE n.name IS UNIQUE
+            """
+        ]
+        with self.driver.session(database=self.database) as session:
+            for q in queries:
+                session.run(q)
+
+        print("[INFO] Neo4j schema ready")
+
+    def upsert_document_node(self, document_id: str, file_path: str):
+        file_name = os.path.basename(file_path)
+
+        props = {
+            "semantic_id": document_id,
+            "file_name": file_name,
+            "source": file_path,
+        }
+
+        query = """
+        MERGE (d:SpecificationDocument {semantic_id: $document_id})
+        SET d = $props
+        """
+        with self.driver.session(database=self.database) as session:
+            session.run(query, document_id=document_id, props=props)
+
+    def purge_document_subgraph(self, document_id: str):
+        with self.driver.session(database=self.database) as session:
+            # 先删新结构下的 rationale -> FSChunk
+            session.run(
+                """
+                MATCH (ra:RationaleChunk)-[:RATIONALE_FOR]->(fs:FSChunk)-[:PART_OF]->(d:SpecificationDocument {semantic_id: $document_id})
+                DETACH DELETE ra
+                """,
+                document_id=document_id,
             )
-        )
 
-    ids = vector_store.add_documents(cleaned_chunks)
-    print(f"[INFO] Added {len(ids)} chunks to vector store")
-    return ids
+            # 再删所有 PART_OF 到该 document 的 chunk
+            session.run(
+                """
+                MATCH (n)-[:PART_OF]->(d:SpecificationDocument {semantic_id: $document_id})
+                DETACH DELETE n
+                """,
+                document_id=document_id,
+            )
 
+        print(f"[INFO] Purged old subgraph for document: {document_id}")
+
+    def cleanup_orphan_requirement_nodes(self):
+        """
+        清理旧版本遗留下来的 Requirement 节点。
+        只删除孤立节点，安全。
+        """
+        query = """
+        MATCH (r:Requirement)
+        WHERE NOT (r)--()
+        DELETE r
+        """
+        with self.driver.session(database=self.database) as session:
+            session.run(query)
+
+        print("[INFO] Cleaned orphan Requirement nodes")
+
+    def _build_fschunk_row(self, chunk) -> Optional[Dict[str, Any]]:
+        file_name = safe_text(chunk.metadata.get("file_name"))
+        primary_requirement_id = safe_text(chunk.metadata.get("primary_requirement_id"))
+        pages = chunk.metadata.get("pages", [])
+        chunk_type = safe_text(chunk.metadata.get("type", "FS"))
+
+        if not isinstance(pages, list):
+            pages = []
+
+        if not file_name or not primary_requirement_id:
+            return None
+
+        if not file_name or not primary_requirement_id:
+            return None
+
+        # Clean the file_name by removing ".pdf" if it exists
+        cleaned_file_name = file_name.replace(".pdf", "")
+
+        requirement_text = extract_requirement_only_text(chunk.page_content)
+        if not requirement_text:
+            return None
+
+        return {
+            "name": make_fschunk_name(cleaned_file_name, primary_requirement_id),  # Use cleaned file_name here
+            "embedding": embed(requirement_text),
+            "text": requirement_text,
+            "pages": pages,
+            "type": chunk_type,
+        }
+
+    def _build_rationale_row(self, chunk) -> Optional[Dict[str, Any]]:
+        file_name = safe_text(chunk.metadata.get("file_name"))
+        primary_requirement_id = safe_text(chunk.metadata.get("primary_requirement_id"))
+        pages = chunk.metadata.get("pages", [])
+        chunk_type = safe_text(chunk.metadata.get("type", "FS"))
+
+        if not isinstance(pages, list):
+            pages = []
+
+        if not file_name or not primary_requirement_id:
+            return None
+
+        # Clean the file_name by removing ".pdf" if it exists
+        cleaned_file_name = file_name.replace(".pdf", "")
+
+        rationale_text = extract_rationale_only_text(chunk.page_content)
+        if not rationale_text:
+            return None
+
+        return {
+            "name": make_rationale_chunk_name(cleaned_file_name, primary_requirement_id),
+            "fschunk_name": make_fschunk_name(cleaned_file_name, primary_requirement_id),
+            "embedding": embed(rationale_text),
+            "text": rationale_text,
+            "pages": pages,
+            "type": chunk_type,
+        }
+
+    def import_fschunks(self, document_id: str, chunks: List[Any], batch_size: int = 100):
+        rows = []
+        for ch in chunks:
+            row = self._build_fschunk_row(ch)
+            if row is not None:
+                rows.append(row)
+
+        if not rows:
+            print("[INFO] No FSChunk rows to import")
+            return
+
+        query = """
+        UNWIND $rows AS row
+        MERGE (c:FSChunk {name: row.name})
+        SET c = {
+            name: row.name,
+            embedding: row.embedding,
+            text: row.text,
+            pages: row.pages,
+            type: row.type
+        }
+        WITH c
+        MATCH (d:SpecificationDocument {semantic_id: $document_id})
+        MERGE (c)-[:PART_OF]->(d)
+        """
+
+        with self.driver.session(database=self.database) as session:
+            for i in range(0, len(rows), batch_size):
+                batch = rows[i:i + batch_size]
+                session.run(query, rows=batch, document_id=document_id)
+                print(f"[INFO] Imported FSChunk batch {i + 1} - {i + len(batch)} / {len(rows)}")
+
+    def import_rationale_chunks(self, chunks: List[Any], batch_size: int = 100):
+        rows = []
+        for ch in chunks:
+            row = self._build_rationale_row(ch)
+            if row is not None:
+                rows.append(row)
+
+        if not rows:
+            print("[INFO] No RationaleChunk rows to import")
+            return
+
+        query = """
+        UNWIND $rows AS row
+        MATCH (fs:FSChunk {name: row.fschunk_name})
+        MERGE (ra:RationaleChunk {name: row.name})
+        SET ra = {
+            name: row.name,
+            embedding: row.embedding,
+            text: row.text,
+            pages: row.pages,
+            type: row.type
+        }
+        MERGE (ra)-[:RATIONALE_FOR]->(fs)
+        """
+
+        with self.driver.session(database=self.database) as session:
+            for i in range(0, len(rows), batch_size):
+                batch = rows[i:i + batch_size]
+                session.run(query, rows=batch)
+                print(f"[INFO] Imported RationaleChunk batch {i + 1} - {i + len(batch)} / {len(rows)}")
+
+    def refresh_document(self, file_path: str, chunks: List[Any], batch_size: int = 100):
+        document_id = make_document_id(file_path)
+
+        self.upsert_document_node(document_id, file_path)
+        self.purge_document_subgraph(document_id)
+
+        # 先导入 FSChunk，再导入 RationaleChunk
+        self.import_fschunks(document_id, chunks, batch_size=batch_size)
+        self.import_rationale_chunks(chunks, batch_size=batch_size)
+
+        # 清理旧模型残留
+        self.cleanup_orphan_requirement_nodes()
+
+        print(f"[INFO] Refreshed document: {document_id}")
 
 # =========================================================
 # MAIN
@@ -829,31 +1067,42 @@ def main():
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
 
-    # 1. debug header/footer
-    print_pdf_header_footer_debug(file_path, max_pages=5)
+    if DEBUG_HEADER_FOOTER and file_path.lower().endswith(".pdf"):
+        print_pdf_header_footer_debug(file_path, max_pages=5)
 
-    # 2. parse and chunk
     chunks = prepare_fs_chunks(file_path)
 
-    # 3. preview chunks
-    print("\n" + "=" * 120)
-    print("[DEBUG] CHUNK PREVIEW")
-    print("=" * 120)
+    if DEBUG_PREVIEW_CHUNKS:
+        print("\n" + "=" * 120)
+        print("[DEBUG] REQUIREMENT CHUNK PREVIEW")
+        print("=" * 120)
 
-    for i, ch in enumerate(chunks[:20], start=1):
-        print(f"\n--- CHUNK {i} ---")
-        print("METADATA:")
-        print(ch.metadata)
-        print("CONTENT:")
-        print(ch.page_content[:2000])
+        for i, ch in enumerate(chunks[:PREVIEW_CHUNK_COUNT], start=1):
+            print(f"\n--- CHUNK {i} ---")
+            print("METADATA:")
+            print(ch.metadata)
+            print("RAW CONTENT:")
+            print(ch.page_content[:2000])
+            print("REQUIREMENT TEXT ONLY:")
+            print(extract_requirement_only_text(ch.page_content))
 
-    # 4. embedding + vector store
-    embeddings = create_embeddings()
-    vector_store = create_vector_store(embeddings)
-    add_chunks_to_vector_store(vector_store, chunks)
+    kg_builder = VectorKGBuilder(
+        uri=NEO4J_URI,
+        user=NEO4J_USER,
+        password=NEO4J_PASSWORD,
+        database=NEO4J_DATABASE,
+    )
 
-    print("[DONE]")
-
+    try:
+        kg_builder.setup_schema()
+        kg_builder.refresh_document(
+            file_path=file_path,
+            chunks=chunks,
+            batch_size=BATCH_SIZE,
+        )
+        print("[DONE]")
+    finally:
+        kg_builder.close()
 
 if __name__ == "__main__":
     main()

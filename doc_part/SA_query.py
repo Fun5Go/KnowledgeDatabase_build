@@ -9,7 +9,7 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
 PERSIST_DIR = "./DATA/chroma_langchain_db"
-COLLECTION_NAME = "fs_requirements"
+COLLECTION_NAME = "technical_specification"
 
 
 def normalize_text(text: str) -> str:

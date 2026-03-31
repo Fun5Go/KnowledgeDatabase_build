@@ -139,10 +139,16 @@ NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 NODE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
 TRIPLE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
-MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_weighted_best_model.pt"
+MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_complex_weighted_best.pt"
 
 HIDDEN_DIM = 256
-EMD_DIM = 256
+EMB_DIM = 256
+DROPOUT = 0.1
+NUM_BASES = 4
+
+GRAPH_WEIGHT_CLAMP_MIN = 1e-3
+GRAPH_WEIGHT_CLAMP_MAX = 10.0
+GRAPH_WEIGHT_POWER = 1.0
 
 TOP_K_MAP = 5
 MIN_SIM = 0.70
@@ -248,9 +254,19 @@ def embed(text: str):
 # =========================================================
 # 4. LOAD DATA
 # =========================================================
+from torch_geometric.nn import MessagePassing
 
+
+# =========================================================
+# 1) LOAD DATA
+# =========================================================
 def load_nodes(node_file: str):
     df = pd.read_csv(node_file, sep="\t")
+
+    required_cols = {"node_id", "node_type", "embedding"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing columns in node file: {missing}")
 
     node_ids = df["node_id"].tolist()
     node_types = df["node_type"].tolist()
@@ -262,7 +278,7 @@ def load_nodes(node_file: str):
     elif "name" in df.columns:
         node_texts = df["name"].fillna("").tolist()
     else:
-        node_texts = node_ids[:]
+        node_texts = [str(n) for n in node_ids]
 
     embeddings = []
     for emb_str in df["embedding"]:
@@ -270,6 +286,7 @@ def load_nodes(node_file: str):
         embeddings.append(emb)
 
     x = torch.stack(embeddings)
+    x = F.normalize(x, p=2, dim=1)
 
     node2id = {nid: i for i, nid in enumerate(node_ids)}
     id2node = {i: nid for nid, i in node2id.items()}
@@ -280,82 +297,217 @@ def load_nodes(node_file: str):
 
 
 def load_triples(triple_file: str, node2id: Dict[str, int]):
+    """
+    Returns:
+        triples_raw: List[(h_id, r_str, t_id, weight)]
+        rel_list_base: sorted unique relation strings
+    """
     df = pd.read_csv(triple_file, sep="\t")
+
+    required_cols = {"head", "relation", "tail"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing columns in triple file: {missing}")
+
+    has_weight = "weight" in df.columns
 
     triples = []
     relations = set()
 
     for _, row in df.iterrows():
         h, r, t = row["head"], row["relation"], row["tail"]
-
         if h not in node2id or t not in node2id:
             continue
 
-        triples.append((node2id[h], r, node2id[t]))
+        w = float(row["weight"]) if has_weight else 1.0
+        triples.append((node2id[h], r, node2id[t], w))
         relations.add(r)
 
     return triples, sorted(list(relations))
 
 
 # =========================================================
-# 5. GRAPH
+# 2) RELATION MAPPING
 # =========================================================
-
 def build_relations(rel_list_base: List[str]):
+    """
+    Keep exactly the same relation ordering style as training:
+    rel_list_full = base + reverse(base)
+    """
     rel_list_full = rel_list_base + [r + "_REV" for r in rel_list_base]
     rel2id = {r: i for i, r in enumerate(rel_list_full)}
-    id2rel = {v: k for k, v in rel2id.items()}
+    id2rel = {i: r for r, i in rel2id.items()}
     return rel2id, id2rel
 
 
-def build_graph(triples_raw: List[Tuple[int, str, int]], rel2id: Dict[str, int]):
+# =========================================================
+# 3) GRAPH (edge_index, edge_type, edge_weight)
+# =========================================================
+def build_graph(
+    triples_raw: List[Tuple[int, str, int, float]],
+    rel2id: Dict[str, int],
+    add_reverse_edges: bool = True
+):
     edge_index = []
     edge_type = []
+    edge_weight = []
 
-    for h, r, t in triples_raw:
+    for h, r, t, w in triples_raw:
+        if r not in rel2id:
+            continue
+
         edge_index.append([h, t])
         edge_type.append(rel2id[r])
+        edge_weight.append(float(w))
 
-        rev_r = r + "_REV"
-        if rev_r not in rel2id:
-            raise KeyError(f"Reverse relation missing in rel2id: {rev_r}")
+        if add_reverse_edges:
+            rev_r = r + "_REV"
+            if rev_r not in rel2id:
+                raise KeyError(f"Reverse relation missing in rel2id: {rev_r}")
+            edge_index.append([t, h])
+            edge_type.append(rel2id[rev_r])
+            edge_weight.append(float(w))
 
-        edge_index.append([t, h])
-        edge_type.append(rel2id[rev_r])
+    if len(edge_index) == 0:
+        raise ValueError("No edges built. Check triples/relations.")
 
     edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
     edge_type = torch.tensor(edge_type, dtype=torch.long)
+    edge_weight = torch.tensor(edge_weight, dtype=torch.float)
 
-    return edge_index, edge_type
+    return edge_index, edge_type, edge_weight
+
+
+def normalize_edge_weight(
+    edge_weight: torch.Tensor,
+    clamp_min: float = 1e-3,
+    clamp_max: float = 10.0,
+    power: float = 1.0
+):
+    w = edge_weight.float().clamp_min(clamp_min)
+    if power != 1.0:
+        w = w.pow(power)
+    w = w / w.mean().clamp_min(1e-8)
+    if clamp_max is not None:
+        w = w.clamp(max=clamp_max)
+    return w
 
 
 # =========================================================
-# 6. MODEL
+# 4) WEIGHTED RGCN CONV
 # =========================================================
+class WeightedRGCNConv(MessagePassing):
+    """
+    Basis-decomposed R-GCN with edge-weight aware aggregation.
 
+    For each relation r:
+        W_r = sum_b att[r,b] * basis[b]
+
+    For edges of relation r:
+        msg_weight(e=j->i) = w_e / sum_{k->i} w_{k->i} * softplus(scale_r)
+
+        message = msg_weight * (x_j W_r)
+    """
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        num_relations: int,
+        num_bases: int = 4,
+        root_weight: bool = True,
+        bias: bool = True
+    ):
+        super().__init__(aggr="add")
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.num_relations = num_relations
+        self.num_bases = min(num_bases, num_relations)
+
+        self.basis = nn.Parameter(torch.empty(self.num_bases, in_channels, out_channels))
+        self.att = nn.Parameter(torch.empty(num_relations, self.num_bases))
+
+        self.root = nn.Parameter(torch.empty(in_channels, out_channels)) if root_weight else None
+        self.bias = nn.Parameter(torch.empty(out_channels)) if bias else None
+
+        self.rel_edge_scale = nn.Parameter(torch.ones(num_relations))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        nn.init.xavier_uniform_(self.basis)
+        nn.init.xavier_uniform_(self.att)
+        if self.root is not None:
+            nn.init.xavier_uniform_(self.root)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+        nn.init.ones_(self.rel_edge_scale)
+
+    def forward(self, x, edge_index, edge_type, edge_weight=None):
+        num_nodes = x.size(0)
+        out = x.new_zeros(num_nodes, self.out_channels)
+
+        if edge_weight is None:
+            edge_weight = x.new_ones(edge_type.size(0))
+        edge_weight = edge_weight.to(dtype=x.dtype, device=x.device)
+
+        weight = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
+        weight = weight.view(self.num_relations, self.in_channels, self.out_channels)
+
+        for rel in range(self.num_relations):
+            mask = (edge_type == rel)
+            if not bool(mask.any()):
+                continue
+
+            rel_edge_index = edge_index[:, mask]
+            rel_edge_weight = edge_weight[mask]
+
+            dst = rel_edge_index[1]
+            denom = x.new_zeros(num_nodes)
+            denom.index_add_(0, dst, rel_edge_weight)
+            norm = 1.0 / denom[dst].clamp_min(1e-12)
+
+            rel_scale = F.softplus(self.rel_edge_scale[rel])
+            msg_weight = rel_edge_weight * norm * rel_scale
+
+            x_rel = x @ weight[rel]
+            out = out + self.propagate(
+                rel_edge_index,
+                x=x_rel,
+                edge_weight=msg_weight,
+                size=None
+            )
+
+        if self.root is not None:
+            out = out + x @ self.root
+        if self.bias is not None:
+            out = out + self.bias
+
+        return out
+
+    def message(self, x_j, edge_weight):
+        return x_j * edge_weight.view(-1, 1)
+
+
+# =========================================================
+# 5) MODEL
+# =========================================================
 class RGCN(nn.Module):
-    def __init__(self, in_dim, hidden_dim, out_dim, num_relations, dropout=0.3, num_bases=4):
+    def __init__(self, in_dim, hidden_dim, out_dim, num_relations, dropout=0.1, num_bases=4):
         super().__init__()
-        self.conv1 = RGCNConv(in_dim, hidden_dim, num_relations, num_bases=num_bases)
-        self.conv2 = RGCNConv(hidden_dim, out_dim, num_relations, num_bases=num_bases)
+        self.conv1 = WeightedRGCNConv(in_dim, hidden_dim, num_relations, num_bases=num_bases)
+        self.conv2 = WeightedRGCNConv(hidden_dim, out_dim, num_relations, num_bases=num_bases)
         self.norm1 = nn.LayerNorm(hidden_dim)
         self.dropout = dropout
 
-    def forward(self, x, edge_index, edge_type):
-        x = self.conv1(x, edge_index, edge_type)
+    def forward(self, x, edge_index, edge_type, edge_weight):
+        x = self.conv1(x, edge_index, edge_type, edge_weight=edge_weight)
         x = self.norm1(x)
         x = F.relu(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
-        x = self.conv2(x, edge_index, edge_type)
+        x = self.conv2(x, edge_index, edge_type, edge_weight=edge_weight)
         return x
 
 
 class ComplExDecoder(nn.Module):
-    """
-    z shape: [num_nodes, 2 * emb_dim]
-    first half = real part
-    second half = imaginary part
-    """
     def __init__(self, num_relations, emb_dim):
         super().__init__()
         self.emb_dim = emb_dim
@@ -377,12 +529,11 @@ class ComplExDecoder(nn.Module):
             + s_re * r_im * o_im
             - s_im * r_im * o_re
         ).sum(dim=-1)
-
         return score
 
 
 class Model(nn.Module):
-    def __init__(self, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.3, num_bases=4):
+    def __init__(self, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.1, num_bases=4):
         super().__init__()
 
         self.input_proj = nn.Linear(in_dim, hidden_dim)
@@ -396,24 +547,35 @@ class Model(nn.Module):
             dropout=dropout,
             num_bases=num_bases
         )
-
         self.decoder = ComplExDecoder(num_relations, emb_dim)
 
-    def encode(self, x, edge_index, edge_type):
+    def encode(self, x, edge_index, edge_type, edge_weight):
         x = self.input_proj(x)
         x = F.relu(x)
-        z = self.rgcn(x, edge_index, edge_type)
+        z = self.rgcn(x, edge_index, edge_type, edge_weight=edge_weight)
         return z
 
     def score(self, z, triples):
         return self.decoder(z, triples)
 
-    def forward(self, x, edge_index, edge_type, triples):
-        z = self.encode(x, edge_index, edge_type)
+    def forward(self, x, edge_index, edge_type, edge_weight, triples):
+        z = self.encode(x, edge_index, edge_type, edge_weight=edge_weight)
         return self.score(z, triples)
 
 
-def load_model(path, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.3, num_bases=4, device="cpu"):
+# =========================================================
+# 6) LOAD MODEL
+# =========================================================
+def load_model(
+    path: str,
+    in_dim: int,
+    hidden_dim: int,
+    emb_dim: int,
+    num_relations: int,
+    dropout: float = 0.1,
+    num_bases: int = 4,
+    device=DEVICE
+):
     model = Model(
         in_dim=in_dim,
         hidden_dim=hidden_dim,
@@ -427,13 +589,17 @@ def load_model(path, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.3, nu
 
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         model.load_state_dict(ckpt["model_state_dict"])
+        print(f"Loaded checkpoint from: {path}")
+        if "epoch" in ckpt:
+            print(f"Checkpoint epoch: {ckpt['epoch']}")
+        if "best_score" in ckpt:
+            print(f"Checkpoint best_score: {ckpt['best_score']}")
     else:
         model.load_state_dict(ckpt)
+        print(f"Loaded raw state_dict from: {path}")
 
     model.eval()
-    print(f"Loaded model from: {path}")
     return model
-
 
 # =========================================================
 # 7. NEO4J
@@ -577,12 +743,13 @@ def map_structure_input_to_kg(session, structure_input: Dict[str, Any]):
 # =========================================================
 
 @torch.no_grad()
-def encode_graph_once(model, x, edge_index, edge_type):
+def encode_graph_once(model, x, edge_index, edge_type, edge_weight):
     model.eval()
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
     edge_type = edge_type.to(DEVICE)
-    return model.encode(x, edge_index, edge_type)
+    edge_weight = edge_weight.to(DEVICE)
+    return model.encode(x, edge_index, edge_type, edge_weight)
 
 
 @torch.no_grad()
@@ -871,7 +1038,7 @@ def infer_query_cause_to_query_modes_weighted(
             relation_name="CAUSES",
             head_nodes=cause_weighted_nodes,
             tail_nodes=mode_weighted_nodes,
-            forward_alpha=0.1,          # cause->mode 以正向为主
+            forward_alpha=0.5,          # cause->mode 以正向为主
             consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
@@ -1002,7 +1169,7 @@ def infer_query_mode_to_query_effects_weighted(
             relation_name="LEADS_TO",
             head_nodes=mode_weighted_nodes,
             tail_nodes=effect_weighted_nodes,
-            forward_alpha=0.2,          # mode->effect 仍以正向为主
+            forward_alpha=0.5,          # mode->effect 仍以正向为主
             consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
@@ -1178,7 +1345,8 @@ def run_structure_mapping_and_inference(
     session,
     structure_input,
     model, x, edge_index, edge_type,
-    node2id, id2node, id2type, id2text, rel2id
+    node2id, id2node, id2type, id2text, rel2id,
+    edge_weight
 ):
     mapped = map_structure_input_to_kg(session, structure_input)
 
@@ -1192,7 +1360,7 @@ def run_structure_mapping_and_inference(
     print(f"Mapped mode query count   : {len(mapped['modes'])}")
     print(f"Mapped effect query count : {len(mapped['effects'])}")
 
-    z = encode_graph_once(model, x, edge_index, edge_type)
+    z = encode_graph_once(model, x, edge_index, edge_type, edge_weight)
 
     # =====================================================
     # 1) QUERY-LEVEL: Cause query -> Mode queries
@@ -1297,22 +1465,38 @@ def run_structure_mapping_and_inference(
 
 def main():
     node2id, id2node, id2type, id2text, x = load_nodes(NODE_FILE)
+
+    # triples_raw: (h_id, r_str, t_id, w)
     triples_raw, rel_list_base = load_triples(TRIPLE_FILE, node2id)
+
     rel2id, id2rel = build_relations(rel_list_base)
-    edge_index, edge_type = build_graph(triples_raw, rel2id)
+
+    edge_index, edge_type, edge_weight = build_graph(
+        triples_raw=triples_raw,
+        rel2id=rel2id,
+        add_reverse_edges=True
+    )
+
+    edge_weight = normalize_edge_weight(
+        edge_weight,
+        clamp_min=GRAPH_WEIGHT_CLAMP_MIN,
+        clamp_max=GRAPH_WEIGHT_CLAMP_MAX,
+        power=GRAPH_WEIGHT_POWER
+    )
 
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
     edge_type = edge_type.to(DEVICE)
+    edge_weight = edge_weight.to(DEVICE)
 
     model = load_model(
         path=MODEL_PATH,
         in_dim=x.shape[1],
         hidden_dim=HIDDEN_DIM,
-        emb_dim=EMD_DIM,
+        emb_dim=EMB_DIM,
         num_relations=len(rel2id),
-        dropout=0.1,
-        num_bases=4,
+        dropout=DROPOUT,
+        num_bases=NUM_BASES,
         device=DEVICE
     )
 
@@ -1327,7 +1511,7 @@ def main():
         with kg_client.session() as session:
             run_structure_mapping_and_inference(
                 session=session,
-                structure_input=structure_input_powertrain,
+                structure_input=structure_input_motorcontrol,
                 model=model,
                 x=x,
                 edge_index=edge_index,
@@ -1336,7 +1520,8 @@ def main():
                 id2node=id2node,
                 id2type=id2type,
                 id2text=id2text,
-                rel2id=rel2id
+                rel2id=rel2id,
+                edge_weight = edge_weight
             )
     finally:
         kg_client.close()

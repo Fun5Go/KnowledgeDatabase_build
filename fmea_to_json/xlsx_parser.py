@@ -132,10 +132,9 @@ def extract_old_fmea_failures(df, metadata, file_name):
             clean(failure_cause_raw),
         ])
 
-        is_valid_failure_row = has_failure_text is not None
-
-        if not is_valid_failure_row:
+        if not has_failure_text:
             continue
+
 
         # ---- 继承逻辑 ----
         process_step, last_process_step = inherit(process_step_raw, last_process_step)
