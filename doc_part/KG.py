@@ -480,6 +480,9 @@ def flush_req_buffer(
     if not text:
         return
 
+    primary_requirement_id = current_ids[0]
+    related_requirement_ids = current_ids[1:] if len(current_ids) > 1 else []
+
     chunks.append(
         ChunkDoc(
             page_content=text,
@@ -490,7 +493,8 @@ def flush_req_buffer(
                 "type": "FS",
                 "chunk_mode": "requirement",
                 "requirement_ids": current_ids[:],
-                "primary_requirement_id": current_ids[0],
+                "primary_requirement_id": primary_requirement_id,
+                "related_requirement_ids": related_requirement_ids,
             },
         )
     )
@@ -580,7 +584,7 @@ def extract_fs_chunks_from_pdf(file_path: str) -> List[ChunkDoc]:
 
                 left_ids = parse_requirement_ids(left_text)
 
-                               # -------------------------------------------------
+                # -------------------------------------------------
                 # Case 1: 左侧是 requirement prefix
                 # -------------------------------------------------
                 if left_ids and is_requirement_label_text(left_text):
@@ -829,8 +833,8 @@ def make_document_id(file_path: str) -> str:
 
 
 def make_fschunk_name(file_name: str, requirement_id: str) -> str:
-    new_filename = file_name.replace(".pdf", "")
-    return f"{new_filename}_{requirement_id}"
+    base_name = os.path.splitext(file_name)[0]
+    return f"{base_name}_{requirement_id}"
 
 
 def make_rationale_chunk_name(file_name: str, requirement_id: str) -> str:
@@ -925,27 +929,34 @@ class VectorKGBuilder:
     def _build_fschunk_row(self, chunk) -> Optional[Dict[str, Any]]:
         file_name = safe_text(chunk.metadata.get("file_name"))
         primary_requirement_id = safe_text(chunk.metadata.get("primary_requirement_id"))
+        related_requirement_ids = chunk.metadata.get("related_requirement_ids", [])
         pages = chunk.metadata.get("pages", [])
         chunk_type = safe_text(chunk.metadata.get("type", "FS"))
 
         if not isinstance(pages, list):
             pages = []
 
-        if not file_name or not primary_requirement_id:
-            return None
+        if not isinstance(related_requirement_ids, list):
+            related_requirement_ids = []
 
         if not file_name or not primary_requirement_id:
             return None
-
-        # Clean the file_name by removing ".pdf" if it exists
-        cleaned_file_name = file_name.replace(".pdf", "")
 
         requirement_text = extract_requirement_only_text(chunk.page_content)
         if not requirement_text:
             return None
 
+        related_fschunk_names = [
+            make_fschunk_name(file_name, rid)
+            for rid in related_requirement_ids
+            if rid and rid != primary_requirement_id
+        ]
+
         return {
-            "name": make_fschunk_name(cleaned_file_name, primary_requirement_id),  # Use cleaned file_name here
+            "name": make_fschunk_name(file_name, primary_requirement_id),
+            "primary_requirement_id": primary_requirement_id,
+            "related_requirement_ids": related_requirement_ids,
+            "related_fschunk_names": related_fschunk_names,
             "embedding": embed(requirement_text),
             "text": requirement_text,
             "pages": pages,
@@ -996,6 +1007,8 @@ class VectorKGBuilder:
         MERGE (c:FSChunk {name: row.name})
         SET c = {
             name: row.name,
+            primary_requirement_id: row.primary_requirement_id,
+            related_requirement_ids: row.related_requirement_ids,
             embedding: row.embedding,
             text: row.text,
             pages: row.pages,
@@ -1043,14 +1056,52 @@ class VectorKGBuilder:
                 session.run(query, rows=batch)
                 print(f"[INFO] Imported RationaleChunk batch {i + 1} - {i + len(batch)} / {len(rows)}")
 
+    def import_related_links(self, chunks: List[Any], batch_size: int = 100):
+        rows = []
+
+        for ch in chunks:
+            row = self._build_fschunk_row(ch)
+            if row is None:
+                continue
+
+            source_name = row["name"]
+            for target_name in row.get("related_fschunk_names", []):
+                if target_name and target_name != source_name:
+                    rows.append({
+                        "source_name": source_name,
+                        "target_name": target_name,
+                    })
+
+        if not rows:
+            print("[INFO] No RELATED links to import")
+            return
+
+        query = """
+        UNWIND $rows AS row
+        MATCH (src:FSChunk {name: row.source_name})
+        MATCH (dst:FSChunk {name: row.target_name})
+        MERGE (src)-[:RELATED]->(dst)
+        """
+
+        with self.driver.session(database=self.database) as session:
+            for i in range(0, len(rows), batch_size):
+                batch = rows[i:i + batch_size]
+                session.run(query, rows=batch)
+                print(f"[INFO] Imported RELATED batch {i + 1} - {i + len(batch)} / {len(rows)}")
+
     def refresh_document(self, file_path: str, chunks: List[Any], batch_size: int = 100):
         document_id = make_document_id(file_path)
 
         self.upsert_document_node(document_id, file_path)
         self.purge_document_subgraph(document_id)
 
-        # 先导入 FSChunk，再导入 RationaleChunk
+        # 先导入 FSChunk
         self.import_fschunks(document_id, chunks, batch_size=batch_size)
+
+        # 再建 FSChunk 之间的 RELATED
+        self.import_related_links(chunks, batch_size=batch_size)
+
+        # 再导入 RationaleChunk
         self.import_rationale_chunks(chunks, batch_size=batch_size)
 
         # 清理旧模型残留
