@@ -9,12 +9,13 @@ from docx import Document as DocxDocument
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
+from chromadb.utils import embedding_functions
 
 
 # =========================================================
 # CONFIG
 # =========================================================
-FILE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\FS6303220015R11.pdf"
+FILE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\TS6303220021R05.pdf"
 
 PERSIST_DIR = r"./DATA/chroma_langchain_db"
 COLLECTION_NAME = "technical_specification"
@@ -169,13 +170,29 @@ def parse_requirement_ids(text: str) -> List[str]:
 def is_requirement_label_text(text: str) -> bool:
     if not text:
         return False
-    tokens = REQ_TOKEN_PATTERN.findall(text)
+
+    # 至少得有一个 requirement id
+    tokens = parse_requirement_ids(text)
     if not tokens:
         return False
 
-    compact = re.sub(r"\s+", "", text)
-    compact_tokens = "".join(tokens)
-    return compact == compact_tokens
+    # 允许的内容：
+    # 1. requirement id，如 REQ_13 / DRQ_15 / CHO_35
+    # 2. 引用标记，如 [11]
+    # 3. 空白
+    remainder = text
+
+    # 去掉 requirement ids
+    remainder = REQ_TOKEN_PATTERN.sub("", remainder)
+
+    # 去掉引用标记 [11]
+    remainder = re.sub(r"\[\d+\]", "", remainder)
+
+    # 去掉所有空白
+    remainder = re.sub(r"\s+", "", remainder)
+
+    # 如果什么都不剩，说明整块左栏本质上就是 label 区
+    return remainder == ""
 
 
 def looks_like_rationale_label(text: str) -> bool:
