@@ -12,12 +12,18 @@ from dotenv import load_dotenv
 from chromadb.utils import embedding_functions
 from torch_geometric.nn import RGCNConv
 
+# Use GPU if available
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =========================================================
-# 0. USER INPUT
+# 0. USER INPUT (example structured FMEA-like input)
 # =========================================================
-
+# The user provides a structured "element" with:
+#  - failure_element name
+#  - a list of modes
+#  - a dict/list of causes
+#  - a list of effects
+# This will be mapped to existing KG nodes via vector search in Neo4j.
 structure_input_powertrain = {
     "product_domain": "motor_drives",
     "nodes": [
@@ -129,7 +135,7 @@ structure_input_motorcontrol = {
 # =========================================================
 # 1. CONFIG
 # =========================================================
-
+# Load environment variables (Neo4j credentials)
 load_dotenv()
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
@@ -137,45 +143,57 @@ NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
+# Local files used to reconstruct the same graph used at training time
 NODE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\nodes.tsv"
 TRIPLE_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\triples.tsv"
 MODEL_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\rgcn_complex_weighted_best.pt"
 
+# Must match training hyperparameters
 HIDDEN_DIM = 256
 EMB_DIM = 256
 DROPOUT = 0.1
 NUM_BASES = 4
 
+# Graph edge weight normalization settings (same as training)
 GRAPH_WEIGHT_CLAMP_MIN = 1e-3
 GRAPH_WEIGHT_CLAMP_MAX = 10.0
 GRAPH_WEIGHT_POWER = 1.0
 
+# Mapping config: how many KG candidates to retrieve per query text
 TOP_K_MAP = 5
 MIN_SIM = 0.70
 POOL_K = 100
 
+# Inference config: how many predicted query-to-query links to keep
 TOP_K_PRED = 3
 PRED_SCORE_THRESHOLD = 0.0
 
+# When multiple KG nodes are mapped for one query text, combine them with weights
 WEIGHTING_METHOD = "square"   # ["linear", "square", "uniform"]
 APPLY_SIGMOID_TO_PAIR_SCORE = True
 SHOW_TOP_PAIR_DETAILS = 5
 
 # =========================================================
-# 2. HELPERS
+# 2. TEXT / STRUCTURE HELPERS
 # =========================================================
 
 def stable_id(text: str) -> str:
+    """Create a stable hash id for a piece of text (useful for caching)."""
     return hashlib.md5(text.encode("utf-8")).hexdigest()
 
-
 def safe_text(value) -> str:
+    """Convert any input to a clean string; return empty if None."""
     if value is None:
         return ""
     return str(value).strip()
 
-
 def flatten_causes(causes):
+    """
+    Normalize causes to a flat list[str].
+    Input can be:
+      - list[str]
+      - dict[str, list[str]] (e.g., mechanics/hardware/software)
+    """
     if not causes:
         return []
 
@@ -191,8 +209,11 @@ def flatten_causes(causes):
 
     return []
 
-
 def deduplicate_mapped_nodes(mapped_nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    A query text might map to the same KG node multiple times.
+    Keep only the best (highest score) mapping per kg_id.
+    """
     best = {}
     for item in mapped_nodes:
         kg_id = item["kg_id"]
@@ -200,8 +221,8 @@ def deduplicate_mapped_nodes(mapped_nodes: List[Dict[str, Any]]) -> List[Dict[st
             best[kg_id] = item
     return sorted(best.values(), key=lambda x: x["score"], reverse=True)
 
-
 def extract_structure_queries(structure_input: Dict[str, Any]):
+    """Extract all cause/mode/effect text strings from the structured input."""
     all_causes = []
     all_modes = []
     all_effects = []
@@ -213,8 +234,17 @@ def extract_structure_queries(structure_input: Dict[str, Any]):
 
     return all_causes, all_modes, all_effects
 
-
-def build_kg_text_lookup(mapped: Dict[str, List[Dict[str, Any]]], id2text: Dict[int, str], node2id: Dict[str, int]) -> Dict[str, str]:
+def build_kg_text_lookup(
+    mapped: Dict[str, List[Dict[str, Any]]],
+    id2text: Dict[int, str],
+    node2id: Dict[str, int]
+) -> Dict[str, str]:
+    """
+    Build a kg_id -> display text lookup:
+      - Prefer the text returned from Neo4j mapping
+      - Fall back to id2text loaded from nodes.tsv
+      - Fall back to kg_id itself
+    """
     lookup = {}
 
     for group in ["causes", "modes", "effects"]:
@@ -230,17 +260,19 @@ def build_kg_text_lookup(mapped: Dict[str, List[Dict[str, Any]]], id2text: Dict[
 
 
 # =========================================================
-# 3. EMBEDDING
+# 3. EMBEDDING (text -> vector for Neo4j vector search)
 # =========================================================
 
+# SentenceTransformer embeddings for mapping user query text to KG nodes
 embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="all-MiniLM-L6-v2"
 )
 
+# Simple in-memory embedding cache to avoid recomputing embeddings for repeated texts
 _embedding_cache: Dict[str, list] = {}
 
-
 def embed(text: str):
+    """Embed a text string into a vector (list[float])."""
     text = safe_text(text)
     if not text:
         return None
@@ -252,15 +284,20 @@ def embed(text: str):
 
 
 # =========================================================
-# 4. LOAD DATA
+# 4. LOAD TSV DATA (same format as training)
 # =========================================================
-from torch_geometric.nn import MessagePassing
+from torch_geometric.nn import MessagePassing  # used by WeightedRGCNConv
 
-
-# =========================================================
-# 1) LOAD DATA
-# =========================================================
 def load_nodes(node_file: str):
+    """
+    Load nodes from nodes.tsv:
+      - node_id: KG semantic id (string)
+      - node_type: label/type used for schema (Cause/Mode/Effect/etc.)
+      - embedding: stored as stringified python list
+      - text/canonical_text/name (optional): human-readable text
+    Returns:
+      node2id, id2node, id2type, id2text, x
+    """
     df = pd.read_csv(node_file, sep="\t")
 
     required_cols = {"node_id", "node_type", "embedding"}
@@ -271,6 +308,7 @@ def load_nodes(node_file: str):
     node_ids = df["node_id"].tolist()
     node_types = df["node_type"].tolist()
 
+    # Choose a text column if present; otherwise fallback to node_id
     if "text" in df.columns:
         node_texts = df["text"].fillna("").tolist()
     elif "canonical_text" in df.columns:
@@ -280,6 +318,7 @@ def load_nodes(node_file: str):
     else:
         node_texts = [str(n) for n in node_ids]
 
+    # Parse embeddings from string -> tensor, and L2-normalize
     embeddings = []
     for emb_str in df["embedding"]:
         emb = torch.tensor(ast.literal_eval(emb_str), dtype=torch.float)
@@ -288,6 +327,7 @@ def load_nodes(node_file: str):
     x = torch.stack(embeddings)
     x = F.normalize(x, p=2, dim=1)
 
+    # Build id mappings
     node2id = {nid: i for i, nid in enumerate(node_ids)}
     id2node = {i: nid for nid, i in node2id.items()}
     id2type = {node2id[nid]: t for nid, t in zip(node_ids, node_types)}
@@ -295,12 +335,12 @@ def load_nodes(node_file: str):
 
     return node2id, id2node, id2type, id2text, x
 
-
 def load_triples(triple_file: str, node2id: Dict[str, int]):
     """
+    Load triples from triples.tsv and convert head/tail kg_id -> integer node ids.
     Returns:
-        triples_raw: List[(h_id, r_str, t_id, weight)]
-        rel_list_base: sorted unique relation strings
+      triples_raw: List[(h_id, rel_str, t_id, weight)]
+      rel_list_base: sorted unique relation strings (without _REV)
     """
     df = pd.read_csv(triple_file, sep="\t")
 
@@ -327,12 +367,12 @@ def load_triples(triple_file: str, node2id: Dict[str, int]):
 
 
 # =========================================================
-# 2) RELATION MAPPING
+# 5. RELATION MAPPING (must match training ordering!)
 # =========================================================
 def build_relations(rel_list_base: List[str]):
     """
-    Keep exactly the same relation ordering style as training:
-    rel_list_full = base + reverse(base)
+    IMPORTANT: relation id ordering must match training:
+      rel_list_full = base_relations + reverse_relations
     """
     rel_list_full = rel_list_base + [r + "_REV" for r in rel_list_base]
     rel2id = {r: i for i, r in enumerate(rel_list_full)}
@@ -341,13 +381,20 @@ def build_relations(rel_list_base: List[str]):
 
 
 # =========================================================
-# 3) GRAPH (edge_index, edge_type, edge_weight)
+# 6. GRAPH BUILDING (PyG tensors)
 # =========================================================
 def build_graph(
     triples_raw: List[Tuple[int, str, int, float]],
     rel2id: Dict[str, int],
     add_reverse_edges: bool = True
 ):
+    """
+    Build PyG graph tensors:
+      edge_index: [2, E] (source, target)
+      edge_type:  [E]    relation id per edge
+      edge_weight:[E]    float weight per edge
+    Optionally add explicit reverse edges with relation name r+"_REV".
+    """
     edge_index = []
     edge_type = []
     edge_weight = []
@@ -356,10 +403,12 @@ def build_graph(
         if r not in rel2id:
             continue
 
+        # Forward edge
         edge_index.append([h, t])
         edge_type.append(rel2id[r])
         edge_weight.append(float(w))
 
+        # Reverse edge (separate relation id)
         if add_reverse_edges:
             rev_r = r + "_REV"
             if rev_r not in rel2id:
@@ -377,13 +426,19 @@ def build_graph(
 
     return edge_index, edge_type, edge_weight
 
-
 def normalize_edge_weight(
     edge_weight: torch.Tensor,
     clamp_min: float = 1e-3,
     clamp_max: float = 10.0,
     power: float = 1.0
 ):
+    """
+    Normalize graph edge weights similarly to training:
+      - clamp minimum to avoid zeros
+      - optional power transform
+      - divide by mean => average weight becomes 1
+      - clamp max to avoid extreme weights
+    """
     w = edge_weight.float().clamp_min(clamp_min)
     if power != 1.0:
         w = w.pow(power)
@@ -394,19 +449,18 @@ def normalize_edge_weight(
 
 
 # =========================================================
-# 4) WEIGHTED RGCN CONV
+# 7. WEIGHTED R-GCN CONV (same as training)
 # =========================================================
 class WeightedRGCNConv(MessagePassing):
     """
     Basis-decomposed R-GCN with edge-weight aware aggregation.
 
     For each relation r:
-        W_r = sum_b att[r,b] * basis[b]
+      W_r = sum_b att[r,b] * basis[b]
 
-    For edges of relation r:
-        msg_weight(e=j->i) = w_e / sum_{k->i} w_{k->i} * softplus(scale_r)
-
-        message = msg_weight * (x_j W_r)
+    For each edge e: j -> i (of relation r):
+      msg_weight = w_e / sum_{k->i} w_{k->i} * softplus(scale_r)
+      message    = msg_weight * (x_j W_r)
     """
     def __init__(
         self,
@@ -423,12 +477,15 @@ class WeightedRGCNConv(MessagePassing):
         self.num_relations = num_relations
         self.num_bases = min(num_bases, num_relations)
 
+        # Basis matrices and relation-specific mixing weights
         self.basis = nn.Parameter(torch.empty(self.num_bases, in_channels, out_channels))
         self.att = nn.Parameter(torch.empty(num_relations, self.num_bases))
 
+        # Optional root/self-loop transformation
         self.root = nn.Parameter(torch.empty(in_channels, out_channels)) if root_weight else None
         self.bias = nn.Parameter(torch.empty(out_channels)) if bias else None
 
+        # Relation-specific edge scaling (kept positive via softplus)
         self.rel_edge_scale = nn.Parameter(torch.ones(num_relations))
         self.reset_parameters()
 
@@ -445,13 +502,16 @@ class WeightedRGCNConv(MessagePassing):
         num_nodes = x.size(0)
         out = x.new_zeros(num_nodes, self.out_channels)
 
+        # Default weight=1 for all edges if not provided
         if edge_weight is None:
             edge_weight = x.new_ones(edge_type.size(0))
         edge_weight = edge_weight.to(dtype=x.dtype, device=x.device)
 
+        # Expand basis decomposition into full per-relation weights: [R, in, out]
         weight = torch.matmul(self.att, self.basis.view(self.num_bases, -1))
         weight = weight.view(self.num_relations, self.in_channels, self.out_channels)
 
+        # Iterate over relations and aggregate messages for edges of that relation
         for rel in range(self.num_relations):
             mask = (edge_type == rel)
             if not bool(mask.any()):
@@ -460,6 +520,7 @@ class WeightedRGCNConv(MessagePassing):
             rel_edge_index = edge_index[:, mask]
             rel_edge_weight = edge_weight[mask]
 
+            # Normalize by sum of incoming weights (per destination node)
             dst = rel_edge_index[1]
             denom = x.new_zeros(num_nodes)
             denom.index_add_(0, dst, rel_edge_weight)
@@ -476,6 +537,7 @@ class WeightedRGCNConv(MessagePassing):
                 size=None
             )
 
+        # Add root/self-loop transform
         if self.root is not None:
             out = out + x @ self.root
         if self.bias is not None:
@@ -484,13 +546,15 @@ class WeightedRGCNConv(MessagePassing):
         return out
 
     def message(self, x_j, edge_weight):
+        """Scale messages by edge weights."""
         return x_j * edge_weight.view(-1, 1)
 
 
 # =========================================================
-# 5) MODEL
+# 8. MODEL (encoder + ComplEx decoder)
 # =========================================================
 class RGCN(nn.Module):
+    """Two-layer WeightedRGCN encoder."""
     def __init__(self, in_dim, hidden_dim, out_dim, num_relations, dropout=0.1, num_bases=4):
         super().__init__()
         self.conv1 = WeightedRGCNConv(in_dim, hidden_dim, num_relations, num_bases=num_bases)
@@ -506,8 +570,12 @@ class RGCN(nn.Module):
         x = self.conv2(x, edge_index, edge_type, edge_weight=edge_weight)
         return x
 
-
 class ComplExDecoder(nn.Module):
+    """
+    ComplEx decoder with complex embeddings stored as [Re, Im] concatenation.
+    Node embeddings z: [num_nodes, 2*emb_dim]
+    Relation embeddings: [num_relations, 2*emb_dim]
+    """
     def __init__(self, num_relations, emb_dim):
         super().__init__()
         self.emb_dim = emb_dim
@@ -515,6 +583,7 @@ class ComplExDecoder(nn.Module):
         nn.init.xavier_uniform_(self.rel)
 
     def forward(self, z, triples):
+        """Compute logits for triples [B,3] = (head, relation, tail)."""
         s = z[triples[:, 0]]
         r = self.rel[triples[:, 1]]
         o = z[triples[:, 2]]
@@ -531,14 +600,20 @@ class ComplExDecoder(nn.Module):
         ).sum(dim=-1)
         return score
 
-
 class Model(nn.Module):
+    """
+    Full model:
+      x -> input_proj -> WeightedRGCN -> node embeddings z
+      z + relation embeddings -> ComplEx score
+    """
     def __init__(self, in_dim, hidden_dim, emb_dim, num_relations, dropout=0.1, num_bases=4):
         super().__init__()
 
+        # Project raw node features to hidden dimension used by GNN
         self.input_proj = nn.Linear(in_dim, hidden_dim)
         nn.init.xavier_uniform_(self.input_proj.weight)
 
+        # Encoder outputs 2*emb_dim for ComplEx
         self.rgcn = RGCN(
             in_dim=hidden_dim,
             hidden_dim=hidden_dim,
@@ -550,21 +625,24 @@ class Model(nn.Module):
         self.decoder = ComplExDecoder(num_relations, emb_dim)
 
     def encode(self, x, edge_index, edge_type, edge_weight):
+        """Compute node embeddings z."""
         x = self.input_proj(x)
         x = F.relu(x)
         z = self.rgcn(x, edge_index, edge_type, edge_weight=edge_weight)
         return z
 
     def score(self, z, triples):
+        """Compute triple logits."""
         return self.decoder(z, triples)
 
     def forward(self, x, edge_index, edge_type, edge_weight, triples):
+        """Encode then score."""
         z = self.encode(x, edge_index, edge_type, edge_weight=edge_weight)
         return self.score(z, triples)
 
 
 # =========================================================
-# 6) LOAD MODEL
+# 9. LOAD MODEL CHECKPOINT
 # =========================================================
 def load_model(
     path: str,
@@ -576,6 +654,7 @@ def load_model(
     num_bases: int = 4,
     device=DEVICE
 ):
+    """Recreate model architecture and load trained weights."""
     model = Model(
         in_dim=in_dim,
         hidden_dim=hidden_dim,
@@ -587,6 +666,7 @@ def load_model(
 
     ckpt = torch.load(path, map_location=device)
 
+    # Training saved a dict with model_state_dict
     if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
         model.load_state_dict(ckpt["model_state_dict"])
         print(f"Loaded checkpoint from: {path}")
@@ -595,17 +675,19 @@ def load_model(
         if "best_score" in ckpt:
             print(f"Checkpoint best_score: {ckpt['best_score']}")
     else:
+        # Or raw state_dict
         model.load_state_dict(ckpt)
         print(f"Loaded raw state_dict from: {path}")
 
     model.eval()
     return model
 
-# =========================================================
-# 7. NEO4J
-# =========================================================
 
+# =========================================================
+# 10. NEO4J CLIENT
+# =========================================================
 class Neo4jKGClient:
+    """Minimal Neo4j wrapper for opening/closing sessions."""
     def __init__(self, uri, user, password, database="neo4j"):
         self.driver = GraphDatabase.driver(uri, auth=(user, password))
         self.database = database
@@ -618,7 +700,7 @@ class Neo4jKGClient:
 
 
 # =========================================================
-# 8. KG RETRIEVAL / VECTOR MAPPING
+# 11. KG RETRIEVAL (vector mapping in Neo4j)
 # =========================================================
 
 def map_query_texts_to_nodes(
@@ -632,6 +714,16 @@ def map_query_texts_to_nodes(
     min_score: float = 0.80,
     keep_group_or_single_only: bool = True
 ) -> List[Dict[str, Any]]:
+    """
+    For each query text:
+      1) embed(query_text)
+      2) Neo4j vector search against index_name
+      3) return top_k_each nodes with cosine similarity >= min_score
+
+    keep_group_or_single_only:
+      - optionally filter to "group" nodes or nodes that do not BELONGS_TO a group
+        (domain-specific KG design choice).
+    """
     results = []
 
     for text in query_texts:
@@ -643,9 +735,11 @@ def map_query_texts_to_nodes(
             })
             continue
 
+        # Ensure embedding is a Python list for Neo4j parameters
         if isinstance(emb, torch.Tensor):
             emb = emb.detach().cpu().tolist()
 
+        # Optional filtering for group/single nodes
         if keep_group_or_single_only:
             filter_clause = f"""
             WHERE
@@ -655,6 +749,7 @@ def map_query_texts_to_nodes(
         else:
             filter_clause = ""
 
+        # Neo4j vector search + refined cosine similarity
         cypher = f"""
         CALL db.index.vector.queryNodes(
             '{index_name}',
@@ -696,6 +791,10 @@ def map_query_texts_to_nodes(
 
 
 def map_structure_input_to_kg(session, structure_input: Dict[str, Any]):
+    """
+    Map all extracted causes/modes/effects text from the user input
+    to KG nodes using the corresponding Neo4j vector indices.
+    """
     causes, modes, effects = extract_structure_queries(structure_input)
 
     cause_maps = map_query_texts_to_nodes(
@@ -739,11 +838,12 @@ def map_structure_input_to_kg(session, structure_input: Dict[str, Any]):
 
 
 # =========================================================
-# 9. WEIGHTED QUERY REPRESENTATION + PREDICTION
+# 12. WEIGHTED QUERY REPRESENTATION + PREDICTION
 # =========================================================
 
 @torch.no_grad()
 def encode_graph_once(model, x, edge_index, edge_type, edge_weight):
+    """Encode the KG graph once and reuse node embeddings z for all query scoring."""
     model.eval()
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
@@ -759,6 +859,13 @@ def build_weighted_node_list(
     weighting: str = "linear",
     min_sim: float = 0.0
 ):
+    """
+    Convert mapped KG nodes (with similarity scores) into a weighted set:
+      - keep only nodes existing in node2id and sim >= min_sim
+      - compute normalized weights from similarities (linear/square/uniform)
+    Output items contain:
+      kg_id, node_id (int), raw_sim, weight (sums to 1)
+    """
     valid_items = []
 
     for m in mapped_nodes:
@@ -781,6 +888,7 @@ def build_weighted_node_list(
     else:
         raise ValueError(f"Unsupported weighting method: {weighting}")
 
+    # Normalize weights to sum to 1
     weight_sum = raw_weights.sum().item()
     if weight_sum <= 0:
         raw_weights = torch.ones_like(raw_weights)
@@ -803,7 +911,7 @@ def build_weighted_node_list(
 @torch.no_grad()
 def complex_score_from_embeddings(head_emb, rel_emb, tail_emb):
     """
-    Standard ComplEx score for one triple.
+    Standard ComplEx score for a single triple using already-encoded embeddings.
     head_emb, rel_emb, tail_emb: shape [2 * emb_dim]
     """
     h_re, h_im = torch.chunk(head_emb, 2, dim=-1)
@@ -830,7 +938,11 @@ def score_weighted_node_sets(
     apply_sigmoid: bool = True
 ):
     """
-    Final score = sum_i sum_j w_hi * w_tj * pair_score(h_i, r, t_j)
+    Score two weighted node sets against a relation:
+      Final score = sum_i sum_j w_hi * w_tj * score(h_i, r, t_j)
+
+    Returns:
+      final_score (float) and pair_details (for debugging/explanations)
     """
     if not head_nodes or not tail_nodes:
         return None, []
@@ -871,13 +983,17 @@ def score_weighted_node_sets(
     return final_score, pair_details
 
 
-#Reverse inference enhancement
+# =========================================================
+# 13. BIDIRECTIONAL (forward + reverse) SCORING ENHANCEMENT
+# =========================================================
 
 def _normalize_weighted_nodes(weighted_nodes):
     """
-    支持以下格式：
-    1) [(node_id, weight), ...]
-    2) [{"node_id": ..., "weight": ...}, ...]
+    Accept multiple input formats and normalize to:
+      [(node_id, weight), ...]
+    Supported:
+      1) [(node_id, weight), ...]
+      2) [{"node_id": ..., "weight": ...}, ...]
     """
     normed = []
     for item in weighted_nodes:
@@ -902,18 +1018,20 @@ def score_weighted_node_sets_bidirectional(
     relation_name,
     head_nodes,
     tail_nodes,
-    forward_alpha=0.5,              # forward 占比
-    consistency_lambda=0.0,         # 一致性惩罚系数，可先设 0.05 / 0.1 试试
+    forward_alpha=0.5,              # weight for forward direction
+    consistency_lambda=0.0,         # penalty for disagreement between forward/reverse logits
     apply_sigmoid=True
 ):
     """
-    同时打：
-      forward: score(h, relation_name, t)
-      reverse: score(t, relation_name_REV, h)
+    Compute a fused score using both directions:
+      forward: score(h, relation, t)
+      reverse: score(t, relation_REV, h)
 
-    再融合。
+    Fused logits:
+      fused = alpha * forward + (1-alpha) * reverse - lambda * |forward - reverse|
+
+    Then combine all pair scores with pair weights (head_weight * tail_weight).
     """
-
     if relation_name not in rel2id:
         raise KeyError(f"Relation '{relation_name}' not found in rel2id.")
     rev_relation_name = relation_name + "_REV"
@@ -929,6 +1047,7 @@ def score_weighted_node_sets_bidirectional(
     if not head_nodes or not tail_nodes:
         return None, []
 
+    # Build all pair triples for forward and reverse scoring
     triples_fwd = []
     triples_rev = []
     pair_meta = []
@@ -955,27 +1074,24 @@ def score_weighted_node_sets_bidirectional(
     forward_logits = model.score(z, triples_fwd)
     reverse_logits = model.score(z, triples_rev)
 
-    # 双向融合
     fused_logits = (
         forward_alpha * forward_logits
         + (1.0 - forward_alpha) * reverse_logits
         - consistency_lambda * torch.abs(forward_logits - reverse_logits)
     )
 
-    if apply_sigmoid:
-        pair_scores = torch.sigmoid(fused_logits)
-    else:
-        pair_scores = fused_logits
+    pair_scores = torch.sigmoid(fused_logits) if apply_sigmoid else fused_logits
 
+    # Weighted average by pair_weight (not sum; keeps score in a stable range)
     pair_weights = torch.tensor(
         [x["pair_weight"] for x in pair_meta],
         dtype=torch.float,
         device=device
     )
-
     denom = pair_weights.sum().clamp_min(1e-8)
     final_score = (pair_scores * pair_weights).sum() / denom
 
+    # Return per-pair diagnostics as well
     pair_details = []
     for meta, f_logit, r_logit, fused_logit, p_score in zip(
         pair_meta,
@@ -995,6 +1111,12 @@ def score_weighted_node_sets_bidirectional(
 
     return float(final_score.item()), pair_details
 
+
+# =========================================================
+# 14. QUERY-LEVEL INFERENCE ROUTINES
+# =========================================================
+# These functions score query->query links by aggregating over mapped KG node sets.
+
 @torch.no_grad()
 def infer_query_cause_to_query_modes_weighted(
     model, z, node2id, rel2id,
@@ -1003,6 +1125,10 @@ def infer_query_cause_to_query_modes_weighted(
     top_k=5,
     weighting="linear"
 ):
+    """
+    For one cause query (mapped to multiple KG cause nodes),
+    rank all mode queries by score(cause_set, CAUSES, mode_set).
+    """
     if "CAUSES" not in rel2id:
         raise KeyError("Relation 'CAUSES' not found in rel2id.")
     if "CAUSES_REV" not in rel2id:
@@ -1031,6 +1157,7 @@ def infer_query_cause_to_query_modes_weighted(
         if not mode_weighted_nodes:
             continue
 
+        # Bidirectional fusion uses both CAUSES and CAUSES_REV
         score, pair_details = score_weighted_node_sets_bidirectional(
             model=model,
             z=z,
@@ -1038,7 +1165,7 @@ def infer_query_cause_to_query_modes_weighted(
             relation_name="CAUSES",
             head_nodes=cause_weighted_nodes,
             tail_nodes=mode_weighted_nodes,
-            forward_alpha=0.5,          # cause->mode 以正向为主
+            forward_alpha=0.5,
             consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
@@ -1067,17 +1194,13 @@ def infer_query_mode_to_query_causes_weighted(
     weighting="linear"
 ):
     """
-    Query mode -> query causes
-    实际打分的是:
-        score(candidate_cause, CAUSES, query_mode)
-    而不是:
-        score(query_mode, CAUSES_REV, candidate_cause)
+    Mode query -> rank cause queries.
+    Here we score: score(candidate_cause, CAUSES, query_mode)
+    (mode acts as tail in CAUSES relation).
     """
-
     if "CAUSES" not in rel2id:
         raise KeyError("Relation 'CAUSES' not found in rel2id.")
 
-    # 当前输入的 query mode，作为 tail
     mode_weighted_nodes = build_weighted_node_list(
         mapped_nodes=mapped_mode_nodes,
         node2id=node2id,
@@ -1093,7 +1216,6 @@ def infer_query_mode_to_query_causes_weighted(
     for cause_item in mapped_cause_items:
         cause_query_text = cause_item["query_text"]
 
-        # 候选 query cause，作为 head
         cause_weighted_nodes = build_weighted_node_list(
             mapped_nodes=cause_item["mapped_nodes"],
             node2id=node2id,
@@ -1107,8 +1229,8 @@ def infer_query_mode_to_query_causes_weighted(
             model=model,
             z=z,
             relation_id=relation_id,
-            head_nodes=cause_weighted_nodes,   # head = cause
-            tail_nodes=mode_weighted_nodes,    # tail = mode
+            head_nodes=cause_weighted_nodes,
+            tail_nodes=mode_weighted_nodes,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
 
@@ -1126,6 +1248,7 @@ def infer_query_mode_to_query_causes_weighted(
     results = sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
     return results, mode_weighted_nodes
 
+
 @torch.no_grad()
 def infer_query_mode_to_query_effects_weighted(
     model, z, node2id, rel2id,
@@ -1134,6 +1257,10 @@ def infer_query_mode_to_query_effects_weighted(
     top_k=5,
     weighting="linear"
 ):
+    """
+    For one mode query, rank effect queries by score(mode_set, LEADS_TO, effect_set).
+    Uses bidirectional fusion with LEADS_TO and LEADS_TO_REV.
+    """
     if "LEADS_TO" not in rel2id:
         raise KeyError("Relation 'LEADS_TO' not found in rel2id.")
     if "LEADS_TO_REV" not in rel2id:
@@ -1169,7 +1296,7 @@ def infer_query_mode_to_query_effects_weighted(
             relation_name="LEADS_TO",
             head_nodes=mode_weighted_nodes,
             tail_nodes=effect_weighted_nodes,
-            forward_alpha=0.5,          # mode->effect 仍以正向为主
+            forward_alpha=0.5,
             consistency_lambda=0.05,
             apply_sigmoid=APPLY_SIGMOID_TO_PAIR_SCORE
         )
@@ -1190,10 +1317,11 @@ def infer_query_mode_to_query_effects_weighted(
 
 
 # =========================================================
-# 10. PRINTING
+# 15. PRINTING / REPORTING
 # =========================================================
 
 def print_mapping_results(title: str, mapping_list: List[Dict[str, Any]]):
+    """Print query -> mapped KG nodes (with similarity scores)."""
     print(f"\n{'=' * 80}")
     print(title)
     print(f"{'=' * 80}")
@@ -1217,6 +1345,7 @@ def print_weighted_cause_to_mode_predictions(
     results,
     kg_text_lookup
 ):
+    """Print cause->mode query ranking results."""
     print(f"\n{'-' * 80}")
     print("Weighted Query Cause -> Query Mode Prediction")
     print(f"{'-' * 80}")
@@ -1225,13 +1354,6 @@ def print_weighted_cause_to_mode_predictions(
     print("\nWeighted mapped cause nodes:")
     if not used_heads:
         print("  None")
-    # else:
-    #     for rank, item in enumerate(used_heads, 1):
-    #         kg_id = item["kg_id"]
-    #         print(f"  [{rank}] {kg_id}")
-    #         print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
-    #         print(f"      Sim     : {item['raw_sim']:.4f}")
-    #         print(f"      Weight  : {item['weight']:.4f}")
 
     if not results:
         print("\nNo predicted mode queries.")
@@ -1243,17 +1365,9 @@ def print_weighted_cause_to_mode_predictions(
         print(f"  Mode Query Text    : {item['mode_query_text']}")
         print(f"  Final Pred Score   : {item['score']:.8f}")
 
+        # Pair details are available for explanation/debugging if needed
         top_pairs = item.get("pair_details", [])[:SHOW_TOP_PAIR_DETAILS]
-        # if top_pairs:
-        #     print("  Top pair contributions:")
-        #     for p in top_pairs:
-        #         print(f"    - {p['head_kg_id']} -> {p['tail_kg_id']}")
-        #         print(f"      head_sim      : {p['head_sim']:.4f}")
-        #         print(f"      tail_sim      : {p['tail_sim']:.4f}")
-        #         print(f"      head_weight   : {p['head_weight']:.4f}")
-        #         print(f"      tail_weight   : {p['tail_weight']:.4f}")
-        #         print(f"      pair_score    : {p['pair_score']:.8f}")
-        #         print(f"      contribution  : {p['contribution']:.8f}")
+
 
 def print_weighted_mode_to_cause_predictions(
     query_text,
@@ -1261,6 +1375,7 @@ def print_weighted_mode_to_cause_predictions(
     results,
     kg_text_lookup
 ):
+    """Print mode->cause query ranking results."""
     print(f"\n{'-' * 80}")
     print("Weighted Query Mode -> Query Cause Prediction")
     print(f"{'-' * 80}")
@@ -1281,16 +1396,7 @@ def print_weighted_mode_to_cause_predictions(
         print(f"  Final Pred Score  : {item['score']:.8f}")
 
         top_pairs = item.get("pair_details", [])[:SHOW_TOP_PAIR_DETAILS]
-        # if top_pairs:
-        #     print("  Top pair contributions:")
-        #     for p in top_pairs:
-        #         print(f"    - {p['head_kg_id']} -> {p['tail_kg_id']}")
-        #         print(f"      head_sim      : {p['head_sim']:.4f}")
-        #         print(f"      tail_sim      : {p['tail_sim']:.4f}")
-        #         print(f"      head_weight   : {p['head_weight']:.4f}")
-        #         print(f"      tail_weight   : {p['tail_weight']:.4f}")
-        #         print(f"      pair_score    : {p['pair_score']:.8f}")
-        #         print(f"      contribution  : {p['contribution']:.8f}")
+
 
 def print_weighted_mode_to_effect_predictions(
     query_text,
@@ -1298,6 +1404,7 @@ def print_weighted_mode_to_effect_predictions(
     results,
     kg_text_lookup
 ):
+    """Print mode->effect query ranking results."""
     print(f"\n{'-' * 80}")
     print("Weighted Query Mode -> Query Effect Prediction")
     print(f"{'-' * 80}")
@@ -1306,13 +1413,6 @@ def print_weighted_mode_to_effect_predictions(
     print("\nWeighted mapped mode nodes:")
     if not used_heads:
         print("  None")
-    # else:
-    #     for rank, item in enumerate(used_heads, 1):
-    #         kg_id = item["kg_id"]
-    #         print(f"  [{rank}] {kg_id}")
-    #         print(f"      KG Text : {kg_text_lookup.get(kg_id, kg_id)}")
-    #         print(f"      Sim     : {item['raw_sim']:.4f}")
-    #         print(f"      Weight  : {item['weight']:.4f}")
 
     if not results:
         print("\nNo predicted effect queries.")
@@ -1325,20 +1425,10 @@ def print_weighted_mode_to_effect_predictions(
         print(f"  Final Pred Score  : {item['score']:.8f}")
 
         top_pairs = item.get("pair_details", [])[:SHOW_TOP_PAIR_DETAILS]
-        # if top_pairs:
-        #     print("  Top pair contributions:")
-        #     for p in top_pairs:
-        #         print(f"    - {p['head_kg_id']} -> {p['tail_kg_id']}")
-        #         print(f"      head_sim      : {p['head_sim']:.4f}")
-        #         print(f"      tail_sim      : {p['tail_sim']:.4f}")
-        #         print(f"      head_weight   : {p['head_weight']:.4f}")
-        #         print(f"      tail_weight   : {p['tail_weight']:.4f}")
-        #         print(f"      pair_score    : {p['pair_score']:.8f}")
-        #         print(f"      contribution  : {p['contribution']:.8f}")
 
 
 # =========================================================
-# 11. PIPELINE
+# 16. END-TO-END PIPELINE (mapping + inference)
 # =========================================================
 
 def run_structure_mapping_and_inference(
@@ -1348,6 +1438,12 @@ def run_structure_mapping_and_inference(
     node2id, id2node, id2type, id2text, rel2id,
     edge_weight
 ):
+    """
+    Full pipeline:
+      1) Map user input texts -> KG nodes (Neo4j vector search)
+      2) Encode KG graph once -> z
+      3) Score query-to-query predictions using weighted node sets
+    """
     mapped = map_structure_input_to_kg(session, structure_input)
 
     print_mapping_results("CAUSE MAPPING", mapped["causes"])
@@ -1360,10 +1456,11 @@ def run_structure_mapping_and_inference(
     print(f"Mapped mode query count   : {len(mapped['modes'])}")
     print(f"Mapped effect query count : {len(mapped['effects'])}")
 
+    # Encode KG node embeddings once; all scoring uses z afterwards
     z = encode_graph_once(model, x, edge_index, edge_type, edge_weight)
 
     # =====================================================
-    # 1) QUERY-LEVEL: Cause query -> Mode queries
+    # 1) Cause query -> Mode query predictions
     # =====================================================
     print(f"\n{'#' * 80}")
     print("RUNNING WEIGHTED QUERY CAUSE -> QUERY MODE INFERENCE")
@@ -1394,40 +1491,8 @@ def run_structure_mapping_and_inference(
             kg_text_lookup=kg_text_lookup
         )
 
-    # # =====================================================
-    # # 1.5) QUERY-LEVEL: Mode query -> Cause queries
-    # # =====================================================
-    # print(f"\n{'#' * 80}")
-    # print("RUNNING WEIGHTED QUERY MODE -> QUERY CAUSE INFERENCE")
-    # print(f"{'#' * 80}")
-
-    # for mode_item in mapped["modes"]:
-    #     query_text = mode_item["query_text"]
-
-    #     if not mode_item["mapped_nodes"]:
-    #         print(f"\nSkip mode query (no mapping): {query_text}")
-    #         continue
-
-    #     results, used_tails = infer_query_mode_to_query_causes_weighted(
-    #         model=model,
-    #         z=z,
-    #         node2id=node2id,
-    #         rel2id=rel2id,
-    #         mapped_mode_nodes=mode_item["mapped_nodes"],
-    #         mapped_cause_items=mapped["causes"],
-    #         top_k=TOP_K_PRED,
-    #         weighting=WEIGHTING_METHOD
-    #     )
-
-    #     print_weighted_mode_to_cause_predictions(
-    #         query_text=query_text,
-    #         used_tails=used_tails,
-    #         results=results,
-    #         kg_text_lookup=kg_text_lookup
-    #     )
-
     # =====================================================
-    # 2) QUERY-LEVEL: Mode query -> Effect queries
+    # 2) Mode query -> Effect query predictions
     # =====================================================
     print(f"\n{'#' * 80}")
     print("RUNNING WEIGHTED QUERY MODE -> QUERY EFFECT INFERENCE")
@@ -1460,17 +1525,20 @@ def run_structure_mapping_and_inference(
 
 
 # =========================================================
-# 12. MAIN
+# 17. MAIN (load everything, connect to Neo4j, run pipeline)
 # =========================================================
 
 def main():
+    # Load TSV graph artifacts
     node2id, id2node, id2type, id2text, x = load_nodes(NODE_FILE)
 
     # triples_raw: (h_id, r_str, t_id, w)
     triples_raw, rel_list_base = load_triples(TRIPLE_FILE, node2id)
 
+    # Build relation ids in the same ordering as training
     rel2id, id2rel = build_relations(rel_list_base)
 
+    # Build PyG graph tensors and normalize weights
     edge_index, edge_type, edge_weight = build_graph(
         triples_raw=triples_raw,
         rel2id=rel2id,
@@ -1484,11 +1552,13 @@ def main():
         power=GRAPH_WEIGHT_POWER
     )
 
+    # Move tensors to device
     x = x.to(DEVICE)
     edge_index = edge_index.to(DEVICE)
     edge_type = edge_type.to(DEVICE)
     edge_weight = edge_weight.to(DEVICE)
 
+    # Load trained model
     model = load_model(
         path=MODEL_PATH,
         in_dim=x.shape[1],
@@ -1500,6 +1570,7 @@ def main():
         device=DEVICE
     )
 
+    # Create Neo4j client for vector retrieval
     kg_client = Neo4jKGClient(
         uri=NEO4J_URI,
         user=NEO4J_USER,
@@ -1521,7 +1592,7 @@ def main():
                 id2type=id2type,
                 id2text=id2text,
                 rel2id=rel2id,
-                edge_weight = edge_weight
+                edge_weight=edge_weight
             )
     finally:
         kg_client.close()

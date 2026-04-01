@@ -9,7 +9,7 @@ from docx import Document as DocxDocument
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-from chromadb.utils import embedding_functions
+
 
 
 # =========================================================
