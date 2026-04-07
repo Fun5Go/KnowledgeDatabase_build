@@ -86,7 +86,7 @@ def main():
     query_spec = {
         "query_type": "element_sentences",
         "element_name": "Motor control",
-        "function_text": "Relay switching",
+        "function_text": "Soft starter",
         "top_k": 15,
     }
 
