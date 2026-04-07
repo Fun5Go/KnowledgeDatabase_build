@@ -1,6 +1,7 @@
 # chunk_retriever.py
 
 from typing import List, Dict, Any
+import re
 from neo4j import GraphDatabase
 
 from config import (
@@ -136,7 +137,9 @@ class ChunkRetriever:
             lucene_query=lucene_query,
             top_k=top_k
         )
-
+    
+    #====================================
+    #======= Product Function============
     @staticmethod
     def filter_by_product_name(
         results: List[Dict[str, Any]],
@@ -254,106 +257,324 @@ class ChunkRetriever:
         return results[0] if results else {}
     
 
+
     @staticmethod
-    def filter_by_element_name(
-        results: List[Dict[str, Any]],
-        element_name: str
-    ) -> List[Dict[str, Any]]:
+    def _normalize_text(text: str) -> str:
         """
-        Filter retrieved chunks by element mention.
+        Normalize text for robust lexical matching.
 
-        Heuristic
-        ---------
-        1. Keep the chunk if it contains the full element name.
-        2. Otherwise, keep it if it contains enough meaningful element tokens.
+        Operations
+        ----------
+        1. Lowercase
+        2. Replace non-alphanumeric characters with spaces
+        3. Collapse multiple spaces
 
-        This is useful when TS sentences use slightly different surface forms such as:
+        This helps align surface forms such as:
         - "Motor Control Module"
-        - "Motor control module"
+        - "motor-control module"
         - "Motor control"
         """
-        element_name_lower = element_name.lower().strip()
-        element_tokens = [tok for tok in element_name_lower.split() if len(tok) >= 3]
+        if not text:
+            return ""
+        text = text.lower()
+        text = re.sub(r"[^a-z0-9\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    @staticmethod
+    def _meaningful_tokens(text: str, min_len: int = 3) -> List[str]:
+        """
+        Extract meaningful tokens from text.
+
+        Parameters
+        ----------
+        text : str
+            Input text.
+        min_len : int
+            Minimum token length to keep.
+
+        Returns
+        -------
+        List[str]
+            Deduplicated token list while preserving order.
+        """
+        normalized = ChunkRetriever._normalize_text(text)
+        tokens = normalized.split()
+
+        seen = set()
+        output = []
+        for tok in tokens:
+            if len(tok) < min_len:
+                continue
+            if tok not in seen:
+                seen.add(tok)
+                output.append(tok)
+        return output
+    @staticmethod
+    def filter_by_element_and_function(
+        results: List[Dict[str, Any]],
+        element_name: str,
+        function_text: str = ""
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter retrieved chunks using an element-first strategy, optionally
+        refined by function text.
+
+        Retrieval policy
+        ----------------
+        Case 1: element only
+            Keep all chunks clearly related to the queried element.
+
+        Case 2: element + function
+            First require the chunk to be element-related.
+            Then require lexical evidence that it is also related to the
+            function text.
+
+        Rationale
+        ---------
+        In requirement corpora, an element name is usually the most reliable
+        anchor. Function wording can vary more strongly, so it should refine
+        the result set rather than replace the element constraint.
+
+        Parameters
+        ----------
+        results : List[Dict[str, Any]]
+            Retrieved chunk candidates.
+        element_name : str
+            Queried element, e.g. "Motor control".
+        function_text : str
+            Optional function refinement, e.g. "relay switching".
+
+        Returns
+        -------
+        List[Dict[str, Any]]
+            Filtered candidates.
+        """
+        element_norm = ChunkRetriever._normalize_text(element_name)
+        function_norm = ChunkRetriever._normalize_text(function_text)
+
+        element_tokens = ChunkRetriever._meaningful_tokens(element_name, min_len=3)
+        function_tokens = ChunkRetriever._meaningful_tokens(function_text, min_len=3)
 
         filtered = []
 
         for item in results:
-            text = (item.get("text") or "").lower()
+            text = item.get("text") or ""
+            text_norm = ChunkRetriever._normalize_text(text)
 
-            # Exact phrase match
-            if element_name_lower in text:
+            # ----------------------------------------------------------
+            # Step 1. Element gating: the sentence must be about element.
+            # ----------------------------------------------------------
+            element_phrase_match = element_norm in text_norm if element_norm else False
+            element_token_hits = sum(tok in text_norm for tok in element_tokens)
+
+            # Require strong enough evidence for element relevance
+            element_ok = (
+                element_phrase_match or
+                element_token_hits >= max(1, len(element_tokens) - 1)
+            )
+
+            if not element_ok:
+                continue
+
+            # ----------------------------------------------------------
+            # Step 2. If no function text is provided, keep all element hits.
+            # ----------------------------------------------------------
+            if not function_tokens:
                 filtered.append(item)
                 continue
 
-            # Token overlap match
-            matched = sum(tok in text for tok in element_tokens)
-            if matched >= max(1, len(element_tokens) - 1):
+            # ----------------------------------------------------------
+            # Step 3. Function refinement.
+            # ----------------------------------------------------------
+            function_phrase_match = function_norm in text_norm if function_norm else False
+            function_token_hits = sum(tok in text_norm for tok in function_tokens)
+
+            # Require at least partial function evidence.
+            # For short function phrases like "relay switching", both words are preferred.
+            # For longer phrases, allow one token missing.
+            function_ok = (
+                function_phrase_match or
+                function_token_hits >= max(1, len(function_tokens) - 1)
+            )
+
+            if function_ok:
                 filtered.append(item)
 
         return filtered
+    
+    @staticmethod
+    def rerank_by_element_and_function(
+        results: List[Dict[str, Any]],
+        element_name: str,
+        function_text: str = ""
+    ) -> List[Dict[str, Any]]:
+        """
+        Re-rank filtered results with element priority and optional function
+        relevance.
+
+        Ranking intuition
+        -----------------
+        1. Exact element phrase match gets a strong bonus.
+        2. Function phrase match gets another strong bonus.
+        3. Token overlap adds softer evidence.
+        4. Original retrieval score is preserved as a weak signal.
+
+        Parameters
+        ----------
+        results : List[Dict[str, Any]]
+            Filtered chunk candidates.
+        element_name : str
+            Queried element.
+        function_text : str
+            Optional function refinement.
+
+        Returns
+        -------
+        List[Dict[str, Any]]
+            Re-ranked results.
+        """
+        element_norm = ChunkRetriever._normalize_text(element_name)
+        function_norm = ChunkRetriever._normalize_text(function_text)
+
+        element_tokens = ChunkRetriever._meaningful_tokens(element_name, min_len=3)
+        function_tokens = ChunkRetriever._meaningful_tokens(function_text, min_len=3)
+
+        rescored = []
+
+        for item in results:
+            text = item.get("text") or ""
+            text_norm = ChunkRetriever._normalize_text(text)
+
+            score = 0.0
+
+            # Element evidence
+            if element_norm and element_norm in text_norm:
+                score += 5.0
+            score += sum(1.0 for tok in element_tokens if tok in text_norm)
+
+            # Function evidence
+            if function_tokens:
+                if function_norm and function_norm in text_norm:
+                    score += 5.0
+                score += sum(1.5 for tok in function_tokens if tok in text_norm)
+
+            # Preserve original retrieval score as weak prior
+            base_score = item.get("score", 0.0)
+            try:
+                score += 0.2 * float(base_score)
+            except Exception:
+                pass
+
+            new_item = dict(item)
+            new_item["rerank_score"] = score
+            rescored.append(new_item)
+
+        rescored.sort(key=lambda x: x.get("rerank_score", 0.0), reverse=True)
+        return rescored
 
     def retrieve_element_ts_seeds(
         self,
         element_name: str,
-        query_text: str = "",
+        function_text: str = "",
         top_k: int = 8
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve top TSChunk seeds for an element-centric query.
+        Retrieve TSChunk seeds for:
+        - element-only query
+        - element + function query
 
-        Design rationale
-        ----------------
-        In the current corpus, TS sentences often explicitly mention the element,
-        for example:
-        - "The Motor Control Module will measure ..."
-        - "The Motor control module will be responsible for ..."
-
-        Therefore, retrieval is centered on the element name itself, while the
-        optional query text is only used as a secondary refinement signal.
+        Retrieval strategy
+        ------------------
+        1. Dense retrieval on a combined query.
+        2. Sparse retrieval with element as a hard lexical anchor.
+        3. Fuse dense and sparse candidates.
+        4. Filter by element relevance.
+        5. If function_text is provided, further filter by function relevance.
+        6. Re-rank by lexical evidence and return top_k.
 
         Parameters
         ----------
         element_name : str
-            Queried element name from structure analysis, e.g. "Motor control".
-        query_text : str
-            Optional refinement such as "frequency", "soft start", "protection",
-            or "verification".
+            Queried element from structure analysis, e.g. "Motor control".
+        function_text : str
+            Optional function refinement, e.g. "relay switching".
+            If empty, all sentences about the element are returned.
         top_k : int
-            Number of final TS seed nodes to return.
+            Number of final TSChunk seeds.
 
         Returns
         -------
         List[Dict[str, Any]]
             Ranked TSChunk seed nodes.
         """
-        # Main semantic query: the element name should dominate the retrieval.
-        retrieval_query = f"{element_name} {query_text}".strip()
+        function_text = (function_text or "").strip()
+
+        # --------------------------------------------------------------
+        # Dense query:
+        # - element only => retrieve element-related TS sentences
+        # - element + function => retrieve semantically related candidates
+        # --------------------------------------------------------------
+        retrieval_query = (
+            f"{element_name} {function_text}".strip()
+            if function_text
+            else element_name
+        )
 
         dense_results = self.dense_search_chunks(
             query_text=retrieval_query,
             label="TSChunk",
             vector_index_name="ts_embedding_idx",
-            top_k=top_k * 3
+            top_k=top_k * 5
         )
 
-        # Sparse query: explicitly require the element phrase.
-        if query_text.strip():
-            lucene_query = f'"{element_name}" AND ({query_text} OR will OR shall OR responsible OR measure OR filter)'
+        # --------------------------------------------------------------
+        # Sparse query:
+        # - element phrase must dominate
+        # - function tokens refine only when provided
+        # --------------------------------------------------------------
+        if function_text:
+            function_terms = " OR ".join(
+                ChunkRetriever._meaningful_tokens(function_text, min_len=3)
+            )
+            if function_terms:
+                lucene_query = f'"{element_name}" AND ({function_terms})'
+            else:
+                lucene_query = f'"{element_name}"'
         else:
-            lucene_query = f'"{element_name}" OR ({element_name} AND (will OR shall OR responsible OR measure OR filter))'
+            lucene_query = f'"{element_name}"'
 
         sparse_results = self.sparse_search_chunks(
             lucene_query=lucene_query,
             label="TSChunk",
             fulltext_index_name="ts_text_idx",
-            top_k=top_k * 3
+            top_k=top_k * 5
         )
 
-        dense_results = self.filter_by_element_name(dense_results, element_name)
-        sparse_results = self.filter_by_element_name(sparse_results, element_name)
-
+        # --------------------------------------------------------------
+        # Fusion
+        # --------------------------------------------------------------
         fused = self.rrf_fusion([dense_results, sparse_results])
-        return fused[:top_k]
+
+        # --------------------------------------------------------------
+        # Element-first filter, optional function refinement
+        # --------------------------------------------------------------
+        filtered = self.filter_by_element_and_function(
+            fused,
+            element_name=element_name,
+            function_text=function_text
+        )
+
+        # --------------------------------------------------------------
+        # Re-rank so that true function hits go above generic element hits
+        # --------------------------------------------------------------
+        reranked = self.rerank_by_element_and_function(
+            filtered,
+            element_name=element_name,
+            function_text=function_text
+        )
+
+        return reranked[:top_k]
     def expand_ts_context(self, ts_node_id: str) -> Dict[str, Any]:
         """
         Expand one TSChunk to its related functional, rationale, and

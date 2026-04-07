@@ -148,7 +148,7 @@ class ChunkGraphRAG:
         """
         seeds = self.retriever.retrieve_element_ts_seeds(
             element_name=element_name,
-            query_text=query_text,
+            function_text=query_text,
             top_k=top_k
         )
 

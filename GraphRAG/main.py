@@ -86,14 +86,14 @@ def main():
     query_spec = {
         "query_type": "element_sentences",
         "element_name": "Motor control",
-        "query_text": "Relay switching",
+        "function_text": "Relay switching",
         "top_k": 15,
     }
 
     try:
         result = rag.query(
             query_type=query_spec["query_type"],
-            query_text=query_spec.get("query_text", ""),
+            query_text=query_spec.get("function_text", ""),
             top_k=query_spec.get("top_k", 8),
             product_name=query_spec.get("product_name"),
             element_name=query_spec.get("element_name"),
