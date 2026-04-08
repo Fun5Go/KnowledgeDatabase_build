@@ -138,32 +138,6 @@ class ChunkRetriever:
             top_k=top_k
         )
     
-    #====================================
-    #======= Product Function============
-    @staticmethod
-    def filter_by_product_name(
-        results: List[Dict[str, Any]],
-        product_name: str
-    ) -> List[Dict[str, Any]]:
-        """
-        Apply a lightweight product-name constraint after retrieval.
-
-        Current heuristic:
-        - keep a result if the chunk text explicitly mentions the product name
-
-        This is a post-retrieval lexical constraint. It is simple and practical,
-        although graph-structured product linkage would be more robust.
-        """
-        product_name_lower = product_name.lower().strip()
-        filtered = []
-
-        for item in results:
-            text = (item.get("text") or "").lower()
-            if product_name_lower in text:
-                filtered.append(item)
-
-        return filtered
-
     @staticmethod
     def rrf_fusion(
         result_sets: List[List[Dict[str, Any]]],
@@ -194,64 +168,542 @@ class ChunkRetriever:
 
         fused_list.sort(key=lambda x: x["rrf_score"], reverse=True)
         return fused_list
+    
+    @staticmethod
+    def _score_direct_product_match(text: str, product_text: str) -> float:
+        """
+        Score direct lexical evidence that a chunk is about the queried product.
+
+        Parameters
+        ----------
+        text : str
+            Chunk text.
+        product_text : str
+            Queried product text.
+
+        Returns
+        -------
+        float
+            Direct product relevance score.
+        """
+        product_text = (product_text or "").strip()
+        if not product_text:
+            return 0.0
+
+        text_norm = ChunkRetriever._normalize_text(text)
+        product_norm = ChunkRetriever._normalize_text(product_text)
+        product_tokens = ChunkRetriever._meaningful_tokens(product_text, min_len=3)
+
+        score = 0.0
+
+        if product_norm and product_norm in text_norm:
+            score += 6.0
+
+        token_hits = ChunkRetriever._token_hit_count(text_norm, product_tokens)
+        score += 1.5 * token_hits
+
+        return score
+
+    @staticmethod
+    def _score_direct_function_match(text: str, function_text: str) -> float:
+        """
+        Score direct lexical relevance of a chunk to the function text.
+
+        Parameters
+        ----------
+        text : str
+            Chunk text.
+        function_text : str
+            Queried function text.
+
+        Returns
+        -------
+        float
+            Direct function relevance score.
+        """
+        function_text = (function_text or "").strip()
+        if not function_text:
+            return 0.0
+
+        text_norm = ChunkRetriever._normalize_text(text)
+        function_norm = ChunkRetriever._normalize_text(function_text)
+        function_tokens = ChunkRetriever._meaningful_tokens(function_text, min_len=3)
+
+        score = 0.0
+
+        if function_norm and function_norm in text_norm:
+            score += 8.0
+
+        token_hits = ChunkRetriever._token_hit_count(text_norm, function_tokens)
+        score += 2.0 * token_hits
+
+        if function_tokens:
+            coverage = token_hits / len(function_tokens)
+            score += 4.0 * coverage
+
+        return score
+
+    @staticmethod
+    def _score_context_product_match(
+        expanded_context: Dict[str, Any],
+        product_text: str
+    ) -> float:
+        """
+        Score indirect product relevance using graph-neighbor texts.
+
+        Context sources
+        ---------------
+        - ts_texts
+        - dfs_texts
+        - rationale_texts
+        - tst_texts
+
+        Parameters
+        ----------
+        expanded_context : Dict[str, Any]
+            Expanded context returned by expand_fs_context().
+        product_text : str
+            Queried product text.
+
+        Returns
+        -------
+        float
+            Context-based product relevance score.
+        """
+        product_text = (product_text or "").strip()
+        if not product_text:
+            return 0.0
+
+        product_norm = ChunkRetriever._normalize_text(product_text)
+        product_tokens = ChunkRetriever._meaningful_tokens(product_text, min_len=3)
+
+        candidate_texts = []
+        for key in ["ts_texts", "dfs_texts", "rationale_texts", "tst_texts"]:
+            values = expanded_context.get(key) or []
+            candidate_texts.extend([v for v in values if v])
+
+        merged_context = " ".join(candidate_texts)
+        merged_norm = ChunkRetriever._normalize_text(merged_context)
+
+        score = 0.0
+
+        if product_norm and product_norm in merged_norm:
+            score += 4.0
+
+        token_hits = ChunkRetriever._token_hit_count(merged_norm, product_tokens)
+        score += 1.0 * token_hits
+
+        return score
+
+    @staticmethod
+    def _score_context_function_match(
+        expanded_context: Dict[str, Any],
+        function_text: str
+    ) -> float:
+        """
+        Score indirect function relevance using graph-neighbor texts.
+
+        Context sources
+        ---------------
+        - ts_texts
+        - dfs_texts
+        - rationale_texts
+        - tst_texts
+
+        Parameters
+        ----------
+        expanded_context : Dict[str, Any]
+            Expanded context returned by expand_fs_context().
+        function_text : str
+            Queried function text.
+
+        Returns
+        -------
+        float
+            Context-based function relevance score.
+        """
+        function_text = (function_text or "").strip()
+        if not function_text:
+            return 0.0
+
+        function_norm = ChunkRetriever._normalize_text(function_text)
+        function_tokens = ChunkRetriever._meaningful_tokens(function_text, min_len=3)
+
+        candidate_texts = []
+        for key in ["ts_texts", "dfs_texts", "rationale_texts", "tst_texts"]:
+            values = expanded_context.get(key) or []
+            candidate_texts.extend([v for v in values if v])
+
+        merged_context = " ".join(candidate_texts)
+        merged_norm = ChunkRetriever._normalize_text(merged_context)
+
+        score = 0.0
+
+        if function_norm and function_norm in merged_norm:
+            score += 5.0
+
+        token_hits = ChunkRetriever._token_hit_count(merged_norm, function_tokens)
+        score += 1.2 * token_hits
+
+        if function_tokens:
+            coverage = token_hits / len(function_tokens)
+            score += 2.5 * coverage
+
+        return score
+
+    @staticmethod
+    def _build_product_function_sparse_queries(
+        product_text: str,
+        function_text: str
+    ) -> List[str]:
+        """
+        Build multiple sparse retrieval queries for product + function search.
+
+        Design rationale
+        ----------------
+        Product and function are treated as parallel retrieval signals.
+        We do not force product to be a hard lexical gate, because some useful
+        function-related chunks may not explicitly repeat the product text.
+
+        Parameters
+        ----------
+        product_text : str
+            Queried product text.
+        function_text : str
+            Queried function text.
+
+        Returns
+        -------
+        List[str]
+            Sparse query list.
+        """
+        product_text = (product_text or "").strip()
+        function_text = (function_text or "").strip()
+
+        queries = []
+
+        product_tokens = ChunkRetriever._meaningful_tokens(product_text, min_len=3)
+        function_tokens = ChunkRetriever._meaningful_tokens(function_text, min_len=3)
+
+        product_terms = " OR ".join(product_tokens)
+        function_terms = " OR ".join(function_tokens)
+
+        if product_text and function_text:
+            # Product-only views
+            queries.append(f'"{product_text}"')
+            if product_terms:
+                queries.append(f"({product_terms})")
+
+            # Function-only views
+            queries.append(f'"{function_text}"')
+            if function_terms:
+                queries.append(f"({function_terms})")
+
+            # Combined views
+            if product_text and function_terms:
+                queries.append(f'"{product_text}" AND ({function_terms})')
+            if product_terms and function_terms:
+                queries.append(f"({product_terms}) AND ({function_terms})")
+
+        elif product_text:
+            queries.append(f'"{product_text}"')
+            if product_terms:
+                queries.append(f"({product_terms})")
+
+        elif function_text:
+            queries.append(f'"{function_text}"')
+            if function_terms:
+                queries.append(f"({function_terms})")
+
+        deduped = []
+        seen = set()
+        for q in queries:
+            if q and q not in seen:
+                deduped.append(q)
+                seen.add(q)
+
+        return deduped
 
     def retrieve_function_seeds(
         self,
-        product_name: str,
-        query_text: str,
+        product_text: str,
+        function_text: str = "",
         top_k: int = 8
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve top FSChunk seeds for a function-oriented query.
+        Retrieve FSChunk seeds for:
+        - product-only query
+        - product + function query
+        - function-only query
 
-        The product name is used here as a retrieval constraint, rather than
-        being embedded in the low-level dense/sparse retrieval functions.
+        Retrieval strategy
+        ------------------
+        1. Perform broad dense recall from multiple semantic views.
+        2. Perform broad sparse recall from multiple lexical views.
+        3. Fuse recalled candidates with RRF.
+        4. Expand each FS candidate into graph context.
+        5. Re-rank using:
+           - direct product relevance
+           - direct function relevance
+           - context product relevance
+           - context function relevance
+           - original retrieval score
+
+        Important design choice
+        -----------------------
+        Product and function are treated in parallel as soft signals.
+        We do NOT hard-filter by product name after retrieval.
+
+        Parameters
+        ----------
+        product_text : str
+            Queried product text, e.g. "iPS3".
+        function_text : str
+            Optional function refinement, e.g. "soft start".
+        top_k : int
+            Number of final FSChunk seeds.
+
+        Returns
+        -------
+        List[Dict[str, Any]]
+            Ranked FSChunk seed nodes with detailed score decomposition.
         """
-        dense_results = self.dense_search_chunks(
-            query_text=query_text,
-            label="FSChunk",
-            vector_index_name="fs_embedding_idx",
-            top_k=top_k * 3
+        product_text = (product_text or "").strip()
+        function_text = (function_text or "").strip()
+
+        dense_result_sets: List[List[Dict[str, Any]]] = []
+        sparse_result_sets: List[List[Dict[str, Any]]] = []
+
+        # --------------------------------------------------------------
+        # Step 1. Dense retrieval from multiple semantic query views.
+        # --------------------------------------------------------------
+        dense_queries = []
+
+        if product_text and function_text:
+            dense_queries.append(f"{product_text} {function_text}")
+            dense_queries.append(product_text)
+            dense_queries.append(function_text)
+        elif product_text:
+            dense_queries.append(product_text)
+        elif function_text:
+            dense_queries.append(function_text)
+
+        for query in dense_queries:
+            results = self.dense_search_chunks(
+                query_text=query,
+                label="FSChunk",
+                vector_index_name="fs_embedding_idx",
+                top_k=top_k * 4
+            )
+            dense_result_sets.append(results)
+
+        # --------------------------------------------------------------
+        # Step 2. Sparse retrieval from multiple lexical query views.
+        # --------------------------------------------------------------
+        sparse_queries = self._build_product_function_sparse_queries(
+            product_text=product_text,
+            function_text=function_text
         )
 
-        lucene_query = (
-            f'({query_text} OR shall OR support OR provide OR function '
-            f'OR implement OR may)'
-        )
-        sparse_results = self.sparse_search_chunks(
-            lucene_query=lucene_query,
-            label="FSChunk",
-            fulltext_index_name="fs_text_idx",
-            top_k=top_k * 3
+        for lucene_query in sparse_queries:
+            results = self.sparse_search_chunks(
+                lucene_query=lucene_query,
+                label="FSChunk",
+                fulltext_index_name="fs_text_idx",
+                top_k=top_k * 4
+            )
+            sparse_result_sets.append(results)
+
+        # --------------------------------------------------------------
+        # Step 3. Fusion across all retrieval channels.
+        # --------------------------------------------------------------
+        all_result_sets = dense_result_sets + sparse_result_sets
+        if not all_result_sets:
+            return []
+
+        fused = self.rrf_fusion(all_result_sets)
+
+        # --------------------------------------------------------------
+        # Step 4. Graph-aware reranking.
+        # --------------------------------------------------------------
+        reranked = self.rerank_product_function_candidates(
+            results=fused,
+            product_text=product_text,
+            function_text=function_text
         )
 
-        dense_results = self.filter_by_product_name(dense_results, product_name)
-        sparse_results = self.filter_by_product_name(sparse_results, product_name)
+        return reranked[:top_k]
 
-        fused = self.rrf_fusion([dense_results, sparse_results])
-        return fused[:top_k]
+    def rerank_product_function_candidates(
+        self,
+        results: List[Dict[str, Any]],
+        product_text: str,
+        function_text: str = ""
+    ) -> List[Dict[str, Any]]:
+        """
+        Re-rank FS candidates using local text evidence and graph context.
+
+        Ranking signals
+        ---------------
+        1. Direct product relevance in FS text
+        2. Direct function relevance in FS text
+        3. Product relevance in graph-neighbor texts
+        4. Function relevance in graph-neighbor texts
+        5. Original retrieval score as a weak prior
+
+        Scoring policy
+        --------------
+        - If function_text is provided, function relevance is dominant.
+        - Product relevance is always preserved as a parallel signal.
+        - If function_text is empty, product relevance dominates.
+
+        Parameters
+        ----------
+        results : List[Dict[str, Any]]
+            Fused FSChunk candidates.
+        product_text : str
+            Queried product text.
+        function_text : str
+            Optional function refinement.
+
+        Returns
+        -------
+        List[Dict[str, Any]]
+            Re-ranked candidates with score details and expanded context.
+        """
+        product_text = (product_text or "").strip()
+        function_text = (function_text or "").strip()
+
+        reranked = []
+
+        for item in results:
+            text = item.get("text") or ""
+
+            fs_node_id = (
+                item.get("node_id")
+                or item.get("id")
+                or item.get("fs_node_id")
+            )
+
+            # Direct lexical evidence
+            direct_product_score = self._score_direct_product_match(
+                text=text,
+                product_text=product_text
+            )
+            direct_function_score = self._score_direct_function_match(
+                text=text,
+                function_text=function_text
+            )
+
+            # Context evidence
+            expanded_context = {}
+            context_product_score = 0.0
+            context_function_score = 0.0
+
+            if fs_node_id:
+                expanded_context = self.expand_fs_context(fs_node_id)
+
+                context_product_score = self._score_context_product_match(
+                    expanded_context=expanded_context,
+                    product_text=product_text
+                )
+                context_function_score = self._score_context_function_match(
+                    expanded_context=expanded_context,
+                    function_text=function_text
+                )
+
+            # Retrieval prior from fused recall stage.
+            # After RRF fusion, the upstream retrieval signal is stored under
+            # rrf_score rather than score.
+            base_score = item.get("rrf_score", item.get("score", 0.0))
+            try:
+                base_score = float(base_score)
+            except Exception:
+                base_score = 0.0
+
+            # Final score
+            if function_text:
+                final_score = (
+                    0.20 * direct_product_score +
+                    0.20 * context_product_score +
+                    0.35 * direct_function_score +
+                    0.15 * context_function_score +
+                    0.10 * base_score
+                )
+            else:
+                final_score = (
+                    0.40 * direct_product_score +
+                    0.30 * context_product_score +
+                    0.10 * direct_function_score +
+                    0.10 * context_function_score +
+                    0.10 * base_score
+                )
+
+            new_item = dict(item)
+            new_item["direct_product_score"] = direct_product_score
+            new_item["context_product_score"] = context_product_score
+            new_item["direct_function_score"] = direct_function_score
+            new_item["context_function_score"] = context_function_score
+            new_item["final_score"] = final_score
+            new_item["expanded_context"] = expanded_context
+
+            reranked.append(new_item)
+
+        reranked.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
+        return reranked
 
     def expand_fs_context(self, fs_node_id: str) -> Dict[str, Any]:
         """
-        Expand one FSChunk to technical, rationale, and verification evidence.
+        Expand one FSChunk to technical, related-TS, rationale, and test evidence.
+
+        Graph expansion
+        ---------------
+        (ts:TSChunk)-[:IMPLEMENT]->(fs:FSChunk)
+        (dfs:FSChunk)-[:RELATED]->(fs:FSChunk)
+        (r:RationaleChunk)-[:RATIONALE_FOR]->(fs:FSChunk)
+        (r2:RationaleChunk)-[:RATIONALE_FOR]->(ts:TSChunk)
+        (r3:RationaleChunk)-[:RATIONALE_FOR]->(dfs:TSChunk)
+        (tst: TSTChunk)-[:VERIFIED]->(ts:TSChunk)
+        (tst2:TSTChunk)-[:VERIFIED]->(dfs:TSChunk)
+
+        Notes
+        -----
+        - QD is intentionally excluded as requested.
+        - RELATED-linked TSChunk texts are returned as dfs_texts.
+
+        Parameters
+        ----------
+        fs_node_id : str
+            Neo4j elementId of an FSChunk node.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Expanded multi-view evidence around the FSChunk.
         """
         cypher = """
         MATCH (fs:FSChunk)
         WHERE elementId(fs) = $fs_node_id
 
         OPTIONAL MATCH (ts:TSChunk)-[:IMPLEMENT]->(fs)
-        OPTIONAL MATCH (r:RationaleChunk)-[:RATIONALE_FOR]->(fs)
+        OPTIONAL MATCH (dfs:FSChunk)-[:RELATED]->(fs)
+
+        OPTIONAL MATCH (r: RationaleChunk)-[:RATIONALE_FOR]->(fs)
         OPTIONAL MATCH (r2:RationaleChunk)-[:RATIONALE_FOR]->(ts)
-        OPTIONAL MATCH (qd:QDChunk)-[:VERIFIED]->(ts)
+        OPTIONAL MATCH (r3:RationaleChunk)-[:RATIONALE_FOR]->(dfs)
+
         OPTIONAL MATCH (tst:TSTChunk)-[:VERIFIED]->(ts)
+        OPTIONAL MATCH (tst2:TSTChunk)-[:VERIFIED]->(dfs)
 
         RETURN
             elementId(fs) AS fs_node_id,
             fs.text AS fs_text,
             collect(DISTINCT ts.text) AS ts_texts,
-            collect(DISTINCT qd.text) AS qd_texts,
-            collect(DISTINCT tst.text) AS tst_texts,
-            collect(DISTINCT r.text) + collect(DISTINCT r2.text) AS rationale_texts
+            collect(DISTINCT dfs.text) AS dfs_texts,
+            collect(DISTINCT tst.text) + collect(DISTINCT tst2.text) AS tst_texts,
+            collect(DISTINCT r.text)
+                + collect(DISTINCT r2.text)
+                + collect(DISTINCT r3.text) AS rationale_texts
         """
         results = self.run_query(cypher, fs_node_id=fs_node_id)
         return results[0] if results else {}
@@ -795,8 +1247,10 @@ class ChunkRetriever:
                     element_name=element_name
                 )
 
-            # Original retrieval score is preserved as a weak prior
-            base_score = item.get("score", 0.0)
+            # Original retrieval score is preserved as a weak prior.
+            # After RRF fusion, the upstream retrieval signal is stored under
+            # rrf_score rather than score.
+            base_score = item.get("rrf_score", item.get("score", 0.0))
             try:
                 base_score = float(base_score)
             except Exception:
