@@ -15,7 +15,7 @@ from langchain_chroma import Chroma
 # =========================================================
 # CONFIG
 # =========================================================
-FILE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\TS6303220021R05.pdf"
+FILE_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\TS6303220029R09.pdf"
 
 PERSIST_DIR = r"./DATA/chroma_langchain_db"
 COLLECTION_NAME = "technical_specification"
@@ -233,6 +233,34 @@ def ends_with_hyphen(text_lines: List[str]) -> bool:
         if s:
             return s.endswith("-")
     return False
+
+
+def extract_requirement_only_text(chunk_text: str) -> str:
+    lines = chunk_text.splitlines()
+    req_parts = []
+
+    for line in lines:
+        line = clean_line(line)
+        if not line:
+            continue
+        if line.startswith("Requirement:"):
+            req_parts.append(line[len("Requirement:"):].strip())
+
+    return clean_line(" ".join(req_parts))
+
+
+def extract_rationale_only_text(chunk_text: str) -> str:
+    lines = chunk_text.splitlines()
+    rationale_parts = []
+
+    for line in lines:
+        line = clean_line(line)
+        if not line:
+            continue
+        if line.startswith("Rationale:"):
+            rationale_parts.append(line[len("Rationale:"):].strip())
+
+    return clean_line(" ".join(rationale_parts))
 
 
 # =========================================================

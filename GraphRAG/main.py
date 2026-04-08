@@ -1,4 +1,5 @@
 from rag_pipeline import ChunkGraphRAG
+from fmea_retriever import FMEASentenceRetriever
 
 
 def print_score_breakdown(evidence: dict):
@@ -85,7 +86,7 @@ def print_product_function_result(result: dict):
         else:
             print("  (none)")
 
-        print("RELATED TS:")
+        print("RELATED FS:")
         dfs_texts = e.get("dfs_texts", [])
         if dfs_texts:
             for j, text in enumerate(dfs_texts, start=1):
@@ -163,49 +164,155 @@ def print_element_sentences_result(result):
         print("RATIONALE:", e["rationale_texts"])
 
 
-def main():
-    rag = ChunkGraphRAG()
+def print_fmea_sentence_result(result):
+    """
+    Pretty-print the result of an FMEA sentence linking query.
+    """
+    print("=" * 100)
+    print("Query Type: fmea_sentence_link")
+    print("Fields:", result.get("query_fields", {}))
+    print("=" * 100)
 
-    # ------------------------------------------------------------------
-    # Choose the query type here:
-    #   1. "product_function"
-    #   2. "element_sentences"
-    # ------------------------------------------------------------------
-    query_spec = {
-        "query_type": "product_function",
-        "product_name": "iPS3",
-        "function_text": "Soft starter",
-        "top_k": 15,
-    }
+    print("\nDense Queries:")
+    dense_queries = result.get("dense_queries", [])
+    if dense_queries:
+        for i, text in enumerate(dense_queries, start=1):
+            print(f"{i}. {text}")
+    else:
+        print("  (none)")
 
-    # Example for element query:
-    # query_spec = {
-    #     "query_type": "element_sentences",
-    #     "element_name": "Motor control",
-    #     "function_text": "Soft starter",
-    #     "top_k": 15,
-    # }
+    print("\nSparse Queries:")
+    sparse_queries = result.get("sparse_queries", [])
+    if sparse_queries:
+        for i, text in enumerate(sparse_queries, start=1):
+            print(f"{i}. {text}")
+    else:
+        print("  (none)")
 
-    try:
-        result = rag.query(
-            query_type=query_spec["query_type"],
-            query_text=query_spec.get("function_text", ""),
-            top_k=query_spec.get("top_k", 8),
-            product_text=query_spec.get("product_name"),
-            element_name=query_spec.get("element_name"),
+    print("\nGroups:")
+    groups = result.get("groups", [])
+    if not groups:
+        print("  (none)")
+        return
+
+    for i, group in enumerate(groups, start=1):
+        print("-" * 100)
+        print(
+            f"[{i}] score={group.get('score', 0.0):.4f} "
+            f"node_count={group.get('node_count', 0)}"
         )
 
-        if result["query_type"] == "product_function":
-            print_product_function_result(result)
-
-        elif result["query_type"] == "element_sentences":
-            print_element_sentences_result(result)
-
+        print("RELATIONSHIPS:")
+        relationships = group.get("relationships", [])
+        if relationships:
+            for rel in relationships:
+                print(
+                    f"  {rel.get('source_id', '')} -> {rel.get('target_id', '')} "
+                    f"{rel.get('relationships', [])}"
+                )
         else:
-            raise ValueError(f"Unsupported result query type: {result['query_type']}")
+            print("  (none)")
 
-    finally:
-        rag.close()
+        print("NODES:")
+        for node in group.get("nodes", []):
+            label = node.get("label") or (node.get("labels") or [""])[0]
+            print(
+                f"  label={label} final_score={node.get('final_score', 0.0):.4f} "
+                f"node_id={node.get('node_id', '')}"
+            )
+            weighted_scores = node.get("weighted_scores", {})
+            if weighted_scores:
+                print(
+                    "    weighted="
+                    + " ".join(
+                        f"{name}={value:.4f}"
+                        for name, value in weighted_scores.items()
+                    )
+                )
+            print(f"    text={node.get('text', '')}")
+
+
+def main():
+    # ------------------------------------------------------------------
+    # Choose the demo type here:
+    #   1. "graphrag"
+    #   2. "fmea_sentence_link"
+    # ------------------------------------------------------------------
+    demo_type = "fmea_sentence_link"
+
+    if demo_type == "graphrag":
+        rag = ChunkGraphRAG()
+
+        # ------------------------------------------------------------------
+        # Choose the query type here:
+        #   1. "product_function"
+        #   2. "element_sentences"
+        # ------------------------------------------------------------------
+        # query_spec = {
+        #     "query_type": "product_function",
+        #     "product_name": "",
+        #     "function_text": "compressor vibrations",
+        #     "top_k": 15,
+        # }
+
+        ## Example for element query:
+        # query_spec = {
+        #     "query_type": "element_sentences",
+        #     "element_name": "Relay switching",
+        #     "function_text": "turn on/turn off",
+        #     "top_k": 15,
+        # }
+
+        try:
+            result = rag.query(
+                query_type=query_spec["query_type"],
+                query_text=query_spec.get("function_text", ""),
+                top_k=query_spec.get("top_k", 8),
+                product_text=query_spec.get("product_name"),
+                element_name=query_spec.get("element_name"),
+            )
+
+            if result["query_type"] == "product_function":
+                print_product_function_result(result)
+
+            elif result["query_type"] == "element_sentences":
+                print_element_sentences_result(result)
+
+            else:
+                raise ValueError(f"Unsupported result query type: {result['query_type']}")
+
+        finally:
+            rag.close()
+
+    elif demo_type == "fmea_sentence_link":
+        retriever = FMEASentenceRetriever()
+
+        query_spec = {
+            # "product_text": "iPS3",
+            "element_text": "Motor control",
+            # "function_text": "Relay switching",
+            # "mode_text": "Welded relay",
+            # "effect_text": "current surge",
+            "cause_text": "overvoltage",
+            "top_k": 10,
+        }
+
+        try:
+            result = retriever.query_fmea_sentences(
+                product_text=query_spec.get("product_text", ""),
+                function_text=query_spec.get("function_text", ""),
+                effect_text=query_spec.get("effect_text", ""),
+                element_text=query_spec.get("element_text", ""),
+                mode_text=query_spec.get("mode_text", ""),
+                cause_text=query_spec.get("cause_text", ""),
+                top_k=query_spec.get("top_k", 8),
+            )
+            print_fmea_sentence_result(result)
+        finally:
+            retriever.close()
+
+    else:
+        raise ValueError(f"Unsupported demo type: {demo_type}")
 
 
 if __name__ == "__main__":

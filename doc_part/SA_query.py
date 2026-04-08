@@ -29,6 +29,19 @@ def tokenize(text: str) -> List[str]:
     return [t for t in tokens if t not in stopwords]
 
 
+def has_meaningful_phrase_match(query_text: str, chunk_text: str) -> bool:
+    q_norm = normalize_text(query_text)
+    c_norm = normalize_text(chunk_text)
+
+    if not q_norm or q_norm not in c_norm:
+        return False
+
+    # Single-token phrase hit is already covered by token overlap.
+    # Only keep phrase-level evidence for multi-token queries.
+    unique_tokens = list(dict.fromkeys(tokenize(query_text)))
+    return len(unique_tokens) >= 2
+
+
 # =========================================================
 # Failure signal patterns
 # =========================================================
@@ -138,7 +151,6 @@ def flatten_structure(structure_input: Dict[str, Any]) -> List[Dict[str, str]]:
 
 def lexical_match_score(query_text: str, chunk_text: str) -> Dict[str, Any]:
     q_norm = normalize_text(query_text)
-    c_norm = normalize_text(chunk_text)
 
     q_tokens = tokenize(query_text)
     c_tokens = set(tokenize(chunk_text))
@@ -147,8 +159,9 @@ def lexical_match_score(query_text: str, chunk_text: str) -> Dict[str, Any]:
     base_lexical_score = len(set(matched_terms)) / max(len(set(q_tokens)), 1)
 
     phrase_bonus = 0.0
-    if q_norm in c_norm:
-        phrase_bonus += 0.3
+    if has_meaningful_phrase_match(query_text, chunk_text):
+        # Avoid double counting when token overlap is already high.
+        phrase_bonus = 0.3 * max(0.0, 1.0 - base_lexical_score)
 
     signal_info = failure_signal_bonus(chunk_text)
 
