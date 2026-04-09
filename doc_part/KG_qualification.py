@@ -846,7 +846,7 @@ class QualificationKGBuilder:
         query = """
         UNWIND $rows AS row
         MATCH (t:TSTChunk {name: row.tst_name})
-        MATCH (ts:TSChunk {primary_requirement_id: row.verified_id})
+        MATCH (ts:TSChunk:ESWTSChunk {primary_requirement_id: row.verified_id})
         MERGE (t)-[:VERIFIED]->(ts)
         """
 
@@ -875,7 +875,7 @@ class QualificationKGBuilder:
         query = """
         UNWIND $rows AS row
         MATCH (q:QDChunk {name: row.qd_name})
-        MATCH (ts:TSChunk {primary_requirement_id: row.verified_id})
+        MATCH (ts:TSChunk:ESWTSChunk {primary_requirement_id: row.verified_id})
         MERGE (q)-[:VERIFIED]->(ts)
         """
 

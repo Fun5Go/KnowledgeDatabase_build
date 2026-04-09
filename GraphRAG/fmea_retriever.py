@@ -1,7 +1,7 @@
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from neo4j_retriever import ChunkRetriever
+from .neo4j_retriever import ChunkRetriever
 
 
 class FMEASentenceRetriever(ChunkRetriever):
@@ -133,6 +133,129 @@ class FMEASentenceRetriever(ChunkRetriever):
             "groups": aggregated_groups,
         }
 
+    def query_structure_analysis_support(
+        self,
+        structure_input: Dict[str, Any],
+        top_k_per_query: int = 8,
+        sentence_top_k: int = 6,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve sentence-level evidence for the structure-analysis payload.
+
+        Implemented query shapes:
+        - effect support: product + function + effect
+        - mode support: element + function + mode
+
+        Cause support is intentionally left as TODO.
+        """
+        effect_queries, mode_queries = self.flatten_structure_support_queries(structure_input)
+
+        effect_support = [
+            self._run_structure_support_query(
+                query_spec=query_spec,
+                top_k_per_query=top_k_per_query,
+                sentence_top_k=sentence_top_k,
+            )
+            for query_spec in effect_queries
+        ]
+
+        mode_support = [
+            self._run_structure_support_query(
+                query_spec=query_spec,
+                top_k_per_query=top_k_per_query,
+                sentence_top_k=sentence_top_k,
+            )
+            for query_spec in mode_queries
+        ]
+
+        return {
+            "effect_support": effect_support,
+            "mode_support": mode_support,
+            "cause_support": {
+                "status": "TODO",
+                "message": "Cause sentence retrieval for structure analysis is not implemented yet.",
+            },
+        }
+
+    def query_effect_support(
+        self,
+        product_text: str,
+        function_text: str,
+        effect_texts: List[str],
+        top_k_per_effect: int = 8,
+        sentence_top_k: int = 6,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve support sentences for a list of effects under one function.
+
+        Query strategy:
+        - run one retrieval per effect text
+        - each retrieval uses product + function + effect
+        """
+        support_items = []
+        for effect_text in self._iter_text_list(effect_texts):
+            query_spec = {
+                "query_type": "effect",
+                "query_text": effect_text,
+                "product_text": (product_text or "").strip(),
+                "function_text": (function_text or "").strip(),
+                "effect_text": effect_text,
+            }
+            support_items.append(
+                self._run_structure_support_query(
+                    query_spec=query_spec,
+                    top_k_per_query=top_k_per_effect,
+                    sentence_top_k=sentence_top_k,
+                )
+            )
+
+        return {
+            "product_text": (product_text or "").strip(),
+            "function_text": (function_text or "").strip(),
+            "effect_support": support_items,
+        }
+
+    def query_mode_support(
+        self,
+        element_text: str,
+        function_text: str,
+        mode_texts: List[str],
+        product_text: str = "",
+        top_k_per_mode: int = 8,
+        sentence_top_k: int = 6,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve support sentences for a list of modes under one function.
+
+        Query strategy:
+        - run one retrieval per mode text
+        - each retrieval uses element + function + mode
+        """
+        support_items = []
+        for mode_text in self._iter_text_list(mode_texts):
+            query_spec = {
+                "query_type": "mode",
+                "query_text": mode_text,
+                "product_text": (product_text or "").strip(),
+                "element_text": (element_text or "").strip(),
+                "function_text": (function_text or "").strip(),
+                "mode_text": mode_text,
+            }
+            support_items.append(
+                self._run_structure_support_query(
+                    query_spec=query_spec,
+                    top_k_per_query=top_k_per_mode,
+                    sentence_top_k=sentence_top_k,
+                )
+            )
+
+        return {
+            "product_text": (product_text or "").strip(),
+            "element_text": (element_text or "").strip(),
+            "function_text": (function_text or "").strip(),
+            "mode_support": support_items,
+        }
+
     @staticmethod
     def flatten_structure_queries(structure_input: Dict[str, Any]) -> List[Dict[str, str]]:
         """
@@ -208,6 +331,78 @@ class FMEASentenceRetriever(ChunkRetriever):
                     })
 
         return FMEASentenceRetriever._dedupe_query_specs(queries)
+
+    @staticmethod
+    def flatten_structure_support_queries(
+        structure_input: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        """
+        Convert structure-analysis input into sentence-support queries.
+
+        Expected shapes:
+        - effects: {function_text: [effect_text, ...]}
+        - modes: {function_text: [mode_text, ...]}
+
+        Backward-compatible fallbacks are preserved for list-style inputs, but
+        those cannot attach effects to a specific function.
+        """
+        effect_queries: List[Dict[str, str]] = []
+        mode_queries: List[Dict[str, str]] = []
+        product_text = (structure_input.get("product_domain") or "").strip()
+
+        for node in structure_input.get("nodes", []):
+            element_text = (node.get("failure_element") or "").strip()
+
+            effects = node.get("effects", {})
+            if isinstance(effects, dict):
+                for function_text, effect_list in effects.items():
+                    function_text = (function_text or "").strip()
+                    for effect_text in FMEASentenceRetriever._iter_text_list(effect_list):
+                        effect_queries.append({
+                            "query_type": "effect",
+                            "query_text": effect_text,
+                            "product_text": product_text,
+                            "element_text": element_text,
+                            "function_text": function_text,
+                            "effect_text": effect_text,
+                        })
+            elif isinstance(effects, list):
+                for effect_text in FMEASentenceRetriever._iter_text_list(effects):
+                    effect_queries.append({
+                        "query_type": "effect",
+                        "query_text": effect_text,
+                        "product_text": product_text,
+                        "element_text": element_text,
+                        "effect_text": effect_text,
+                    })
+
+            modes = node.get("modes", {})
+            if isinstance(modes, dict):
+                for function_text, mode_list in modes.items():
+                    function_text = (function_text or "").strip()
+                    for mode_text in FMEASentenceRetriever._iter_text_list(mode_list):
+                        mode_queries.append({
+                            "query_type": "mode",
+                            "query_text": mode_text,
+                            "product_text": product_text,
+                            "element_text": element_text,
+                            "function_text": function_text,
+                            "mode_text": mode_text,
+                        })
+            elif isinstance(modes, list):
+                for mode_text in FMEASentenceRetriever._iter_text_list(modes):
+                    mode_queries.append({
+                        "query_type": "mode",
+                        "query_text": mode_text,
+                        "product_text": product_text,
+                        "element_text": element_text,
+                        "mode_text": mode_text,
+                    })
+
+        return (
+            FMEASentenceRetriever._dedupe_query_specs(effect_queries),
+            FMEASentenceRetriever._dedupe_query_specs(mode_queries),
+        )
 
     @staticmethod
     def aggregate_groups_from_query_results(
@@ -345,6 +540,74 @@ class FMEASentenceRetriever(ChunkRetriever):
                 queries.append(f'"{context_text}" AND "{target_text}"')
 
         return self._dedupe_preserve_order(queries)
+
+    def _run_structure_support_query(
+        self,
+        query_spec: Dict[str, str],
+        top_k_per_query: int,
+        sentence_top_k: int,
+    ) -> Dict[str, Any]:
+        result = self.query_fmea_sentences(
+            product_text=query_spec.get("product_text", ""),
+            function_text=query_spec.get("function_text", ""),
+            effect_text=query_spec.get("effect_text", ""),
+            element_text=query_spec.get("element_text", ""),
+            mode_text=query_spec.get("mode_text", ""),
+            top_k=top_k_per_query,
+        )
+
+        sentences = self._collect_support_sentences(result, top_k=sentence_top_k)
+        return {
+            "query_spec": query_spec,
+            "sentences": sentences,
+            "groups": result.get("groups", []),
+            "query_fields": result.get("query_fields", {}),
+        }
+
+    @staticmethod
+    def _collect_support_sentences(
+        result: Dict[str, Any],
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        sentences: List[Dict[str, Any]] = []
+        seen = set()
+
+        for group in result.get("groups", []):
+            for node in group.get("nodes", []):
+                node_id = node.get("node_id", "")
+                text = (node.get("text", "") or "").strip()
+                if not node_id or not text or node_id in seen:
+                    continue
+
+                seen.add(node_id)
+                sentences.append({
+                    "node_id": node_id,
+                    "label": node.get("label") or (node.get("labels") or [""])[0],
+                    "text": text,
+                    "final_score": float(node.get("final_score", 0.0)),
+                })
+
+                if len(sentences) >= top_k:
+                    return sentences
+
+        for node in result.get("ungrouped_candidates", []):
+            node_id = node.get("node_id", "")
+            text = (node.get("text", "") or "").strip()
+            if not node_id or not text or node_id in seen:
+                continue
+
+            seen.add(node_id)
+            sentences.append({
+                "node_id": node_id,
+                "label": node.get("label") or (node.get("labels") or [""])[0],
+                "text": text,
+                "final_score": float(node.get("final_score", 0.0)),
+            })
+
+            if len(sentences) >= top_k:
+                break
+
+        return sentences
 
     def _rerank_candidates(
         self,
@@ -539,6 +802,16 @@ class FMEASentenceRetriever(ChunkRetriever):
                 output.append(value)
                 seen.add(value)
         return output
+
+    @staticmethod
+    def _iter_text_list(values: Any) -> List[str]:
+        if not isinstance(values, list):
+            return []
+        return [
+            value.strip()
+            for value in values
+            if isinstance(value, str) and value.strip()
+        ]
 
     def _phrase_and_token_queries(self, text: str) -> List[str]:
         text = (text or "").strip()

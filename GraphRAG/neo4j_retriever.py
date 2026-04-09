@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 import re
 from neo4j import GraphDatabase
 
-from config import (
+from .config import (
     NEO4J_URI,
     NEO4J_USER,
     NEO4J_PASSWORD,

@@ -238,7 +238,7 @@ def main():
     #   1. "graphrag"
     #   2. "fmea_sentence_link"
     # ------------------------------------------------------------------
-    demo_type = "fmea_sentence_link"
+    demo_type = "graphrag"
 
     if demo_type == "graphrag":
         rag = ChunkGraphRAG()
@@ -248,12 +248,12 @@ def main():
         #   1. "product_function"
         #   2. "element_sentences"
         # ------------------------------------------------------------------
-        # query_spec = {
-        #     "query_type": "product_function",
-        #     "product_name": "",
-        #     "function_text": "compressor vibrations",
-        #     "top_k": 15,
-        # }
+        query_spec = {
+            "query_type": "product_function",
+            "product_name": "iPS3",
+            "function_text": "Soft starter",
+            "top_k": 15,
+        }
 
         ## Example for element query:
         # query_spec = {
@@ -290,10 +290,10 @@ def main():
         query_spec = {
             # "product_text": "iPS3",
             "element_text": "Motor control",
-            # "function_text": "Relay switching",
-            # "mode_text": "Welded relay",
+            "function_text": "Relay switching",
+            "mode_text": " relay, close, turn on/turn off",
             # "effect_text": "current surge",
-            "cause_text": "overvoltage",
+            # "cause_text": "overvoltage",
             "top_k": 10,
         }
 
