@@ -41,7 +41,7 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
 
     Design goals:
     - retrieve sentence-level evidence for one effect/mode at a time
-    - use hybrid retrieval over FS / TS / QD / Rationale nodes
+    - use hybrid retrieval over FS / TS / Rationale nodes
     - use graph neighbors as context features during reranking
     - bias effect evidence toward FS and mode evidence toward TS
     - keep the original effect/mode wording, while optionally adding
@@ -51,7 +51,6 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
     SEARCH_SPECS = [
         ("FSChunk", "fs_embedding_idx", "fs_text_idx"),
         ("TSChunk", "ts_embedding_idx", "ts_text_idx"),
-        ("QDChunk", "qd_embedding_idx", "qd_text_idx"),
         ("RationaleChunk", "rationale_embedding_idx", "rationale_text_idx"),
     ]
 
@@ -59,13 +58,15 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
         "effect": {
             "FSChunk": 2.5,
             "TSChunk": 1.3,
-            "QDChunk": 0.8,
+            "FSRationaleChunk": 1.1,
+            "TSRationaleChunk": 0.9,
             "RationaleChunk": 1.0,
         },
         "mode": {
             "TSChunk": 2.5,
             "FSChunk": 1.3,
-            "QDChunk": 0.8,
+            "TSRationaleChunk": 1.1,
+            "FSRationaleChunk": 0.9,
             "RationaleChunk": 1.0,
         },
     }
@@ -334,7 +335,7 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
 
         reranked: List[Dict[str, Any]] = []
         for item in candidates:
-            label = item.get("label") or (item.get("labels") or [""])[0]
+            label = self._resolve_candidate_label(item)
             text = item.get("text", "")
             context = neighbor_context.get(item["node_id"], {})
             neighbor_text = context.get("neighbor_text", "")
@@ -439,7 +440,7 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
             evidence.append({
                 "primary_sentence": {
                     "node_id": node_id,
-                    "label": item.get("label", ""),
+                    "label": self._resolve_candidate_label(item),
                     "text": item.get("text", ""),
                     "score": item.get("final_score", 0.0),
                 },
@@ -465,13 +466,12 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
                 (n:FSChunk AND m:TSChunk) OR
                 (n:TSChunk AND m:FSChunk)
             )) OR
-            (type(rel) = "DETAILED_BY" AND (
-                (n:TSChunk AND m:QDChunk) OR
-                (n:QDChunk AND m:TSChunk)
+            (type(rel) = "RELATED" AND (
+                (n:FSChunk AND m:FSChunk)
             )) OR
             (type(rel) = "RATIONALE_FOR" AND (
-                (n:RationaleChunk AND (m:FSChunk OR m:TSChunk OR m:QDChunk)) OR
-                (m:RationaleChunk AND (n:FSChunk OR n:TSChunk OR n:QDChunk))
+                (n:RationaleChunk AND (m:FSChunk OR m:TSChunk)) OR
+                (m:RationaleChunk AND (n:FSChunk OR n:TSChunk))
             ))
         RETURN
             elementId(n) AS node_id,
@@ -501,6 +501,31 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
             }
 
         return output
+
+    @staticmethod
+    def _resolve_candidate_label(candidate: Dict[str, Any]) -> str:
+        labels = candidate.get("labels") or []
+        label_set = set(labels)
+
+        for preferred_label in [
+            "ESWTSChunk",
+            "HWTSChunk",
+            "TSChunk",
+            "FSChunk",
+            "ESWRationaleChunk",
+            "HWRationaleChunk",
+            "TSRationaleChunk",
+            "FSRationaleChunk",
+            "RationaleChunk",
+        ]:
+            if preferred_label in label_set:
+                return preferred_label
+
+        explicit_label = (candidate.get("label") or "").strip()
+        if explicit_label:
+            return explicit_label
+
+        return labels[0] if labels else ""
 
     @staticmethod
     def _build_template_query(

@@ -12,6 +12,7 @@ from .config import (
     embedder,
     _embedding_cache,
 )
+from .index_manager import Neo4jIndexManager
 
 
 def get_query_embedding(text: str) -> List[float]:
@@ -31,9 +32,23 @@ class ChunkRetriever:
         )
         self.driver.verify_connectivity()
         self.database = NEO4J_DATABASE
+        self._ensure_document_indexes()
 
     def close(self):
         self.driver.close()
+
+    def _ensure_document_indexes(self) -> None:
+        """
+        Ensure the current document-KG indexes exist before retrieval.
+
+        The latest KG builder creates labels/constraints but does not create
+        vector/fulltext indexes itself, so retrieval should bootstrap them.
+        """
+        index_manager = Neo4jIndexManager(
+            driver=self.driver,
+            database=self.database,
+        )
+        index_manager.create_document_kg_indexes()
 
     def run_query(self, cypher: str, **params) -> List[Dict[str, Any]]:
         """
@@ -61,7 +76,7 @@ class ChunkRetriever:
         query_text : str
             Retrieval query text.
         label : str
-            Target node label, e.g. 'FSChunk', 'TSChunk', 'QDChunk'.
+            Target node label, e.g. 'FSChunk', 'TSChunk', 'RationaleChunk'.
         vector_index_name : str
             Neo4j vector index name.
         top_k : int
@@ -108,7 +123,7 @@ class ChunkRetriever:
         lucene_query : str
             Lucene-style retrieval query.
         label : str
-            Target node label, e.g. 'FSChunk', 'TSChunk', 'QDChunk'.
+            Target node label, e.g. 'FSChunk', 'TSChunk', 'RationaleChunk'.
         fulltext_index_name : str
             Neo4j fulltext index name.
         top_k : int
@@ -256,7 +271,7 @@ class ChunkRetriever:
         - ts_texts
         - dfs_texts
         - rationale_texts
-        - tst_texts
+        - related_fs_texts
 
         Parameters
         ----------
@@ -278,7 +293,7 @@ class ChunkRetriever:
         product_tokens = ChunkRetriever._meaningful_tokens(product_text, min_len=3)
 
         candidate_texts = []
-        for key in ["ts_texts", "dfs_texts", "rationale_texts", "tst_texts"]:
+        for key in ["ts_texts", "related_fs_texts", "rationale_texts"]:
             values = expanded_context.get(key) or []
             candidate_texts.extend([v for v in values if v])
 
@@ -308,7 +323,7 @@ class ChunkRetriever:
         - ts_texts
         - dfs_texts
         - rationale_texts
-        - tst_texts
+        - related_fs_texts
 
         Parameters
         ----------
@@ -330,7 +345,7 @@ class ChunkRetriever:
         function_tokens = ChunkRetriever._meaningful_tokens(function_text, min_len=3)
 
         candidate_texts = []
-        for key in ["ts_texts", "dfs_texts", "rationale_texts", "tst_texts"]:
+        for key in ["ts_texts", "related_fs_texts", "rationale_texts"]:
             values = expanded_context.get(key) or []
             candidate_texts.extend([v for v in values if v])
 
@@ -654,22 +669,19 @@ class ChunkRetriever:
 
     def expand_fs_context(self, fs_node_id: str) -> Dict[str, Any]:
         """
-        Expand one FSChunk to technical, related-TS, rationale, and test evidence.
+        Expand one FSChunk to technical, related-FS, and rationale evidence.
 
         Graph expansion
         ---------------
         (ts:TSChunk)-[:IMPLEMENT]->(fs:FSChunk)
-        (dfs:FSChunk)-[:RELATED]->(fs:FSChunk)
+        (related_fs:FSChunk)-[:RELATED]->(fs:FSChunk)
         (r:RationaleChunk)-[:RATIONALE_FOR]->(fs:FSChunk)
         (r2:RationaleChunk)-[:RATIONALE_FOR]->(ts:TSChunk)
-        (r3:RationaleChunk)-[:RATIONALE_FOR]->(dfs:TSChunk)
-        (tst: TSTChunk)-[:VERIFIED]->(ts:TSChunk)
-        (tst2:TSTChunk)-[:VERIFIED]->(dfs:TSChunk)
+        (r3:RationaleChunk)-[:RATIONALE_FOR]->(related_fs:FSChunk)
 
         Notes
         -----
-        - QD is intentionally excluded as requested.
-        - RELATED-linked TSChunk texts are returned as dfs_texts.
+        - RELATED-linked FSChunk texts are returned as related_fs_texts.
 
         Parameters
         ----------
@@ -686,21 +698,17 @@ class ChunkRetriever:
         WHERE elementId(fs) = $fs_node_id
 
         OPTIONAL MATCH (ts:TSChunk)-[:IMPLEMENT]->(fs)
-        OPTIONAL MATCH (dfs:FSChunk)-[:RELATED]->(fs)
+        OPTIONAL MATCH (related_fs:FSChunk)-[:RELATED]->(fs)
 
         OPTIONAL MATCH (r: RationaleChunk)-[:RATIONALE_FOR]->(fs)
         OPTIONAL MATCH (r2:RationaleChunk)-[:RATIONALE_FOR]->(ts)
-        OPTIONAL MATCH (r3:RationaleChunk)-[:RATIONALE_FOR]->(dfs)
-
-        OPTIONAL MATCH (tst:TSTChunk)-[:VERIFIED]->(ts)
-        OPTIONAL MATCH (tst2:TSTChunk)-[:VERIFIED]->(dfs)
+        OPTIONAL MATCH (r3:RationaleChunk)-[:RATIONALE_FOR]->(related_fs)
 
         RETURN
             elementId(fs) AS fs_node_id,
             fs.text AS fs_text,
             collect(DISTINCT ts.text) AS ts_texts,
-            collect(DISTINCT dfs.text) AS dfs_texts,
-            collect(DISTINCT tst.text) + collect(DISTINCT tst2.text) AS tst_texts,
+            collect(DISTINCT related_fs.text) AS related_fs_texts,
             collect(DISTINCT r.text)
                 + collect(DISTINCT r2.text)
                 + collect(DISTINCT r3.text) AS rationale_texts
@@ -877,8 +885,8 @@ class ChunkRetriever:
         -------------
         - fs_texts
         - rationale_texts
-        - qd_texts
-        - tst_texts
+        - fs_texts
+        - rationale_texts
 
         Rationale
         ---------
@@ -906,7 +914,7 @@ class ChunkRetriever:
         element_tokens = ChunkRetriever._meaningful_tokens(element_name, min_len=3)
 
         candidate_texts = []
-        for key in ["fs_texts", "rationale_texts", "qd_texts", "tst_texts"]:
+        for key in ["fs_texts", "rationale_texts"]:
             values = expanded_context.get(key) or []
             candidate_texts.extend([v for v in values if v])
 
@@ -936,7 +944,7 @@ class ChunkRetriever:
         Rationale
         ---------
         Sometimes the TSChunk itself does not explicitly state the queried
-        function text, while its linked FS/rationale/test evidence does.
+        function text, while its linked FS/rationale evidence does.
 
         Parameters
         ----------
@@ -958,7 +966,7 @@ class ChunkRetriever:
         function_tokens = ChunkRetriever._meaningful_tokens(function_text, min_len=3)
 
         candidate_texts = []
-        for key in ["fs_texts", "rationale_texts", "qd_texts", "tst_texts"]:
+        for key in ["fs_texts", "rationale_texts"]:
             values = expanded_context.get(key) or []
             candidate_texts.extend([v for v in values if v])
 
@@ -1293,17 +1301,13 @@ class ChunkRetriever:
 
     def expand_ts_context(self, ts_node_id: str) -> Dict[str, Any]:
         """
-        Expand one TSChunk to its related functional, rationale, and
-        verification evidence.
+        Expand one TSChunk to its related functional and rationale evidence.
 
         Graph expansion
         ---------------
         TSChunk -[:IMPLEMENT]-> FSChunk
         RationaleChunk -[:RATIONALE_FOR]-> TSChunk
         RationaleChunk -[:RATIONALE_FOR]-> FSChunk
-        QDChunk -[:VERIFIED]-> TSChunk
-        TSTChunk -[:VERIFIED]-> TSChunk
-
         Parameters
         ----------
         ts_node_id : str
@@ -1321,15 +1325,11 @@ class ChunkRetriever:
         OPTIONAL MATCH (ts)-[:IMPLEMENT]->(fs:FSChunk)
         OPTIONAL MATCH (r_ts:RationaleChunk)-[:RATIONALE_FOR]->(ts)
         OPTIONAL MATCH (r_fs:RationaleChunk)-[:RATIONALE_FOR]->(fs)
-        OPTIONAL MATCH (qd:QDChunk)-[:VERIFIED]->(ts)
-        OPTIONAL MATCH (tst:TSTChunk)-[:VERIFIED]->(ts)
 
         RETURN
             elementId(ts) AS ts_node_id,
             ts.text AS ts_text,
             collect(DISTINCT fs.text) AS fs_texts,
-            collect(DISTINCT qd.text) AS qd_texts,
-            collect(DISTINCT tst.text) AS tst_texts,
             collect(DISTINCT r_ts.text) + collect(DISTINCT r_fs.text) AS rationale_texts
         """
         results = self.run_query(cypher, ts_node_id=ts_node_id)

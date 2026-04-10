@@ -54,16 +54,12 @@ class Neo4jIndexManager:
         vector_indexes = {
             "FSChunk": "fs_embedding_idx",
             "TSChunk": "ts_embedding_idx",
-            "QDChunk": "qd_embedding_idx",
-            "TSTChunk": "tst_embedding_idx",
             "RationaleChunk": "rationale_embedding_idx",
         }
 
         fulltext_indexes = {
             "FSChunk": "fs_text_idx",
             "TSChunk": "ts_text_idx",
-            "QDChunk": "qd_text_idx",
-            "TSTChunk": "tst_text_idx",
             "RationaleChunk": "rationale_text_idx",
         }
 

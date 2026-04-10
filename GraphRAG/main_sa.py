@@ -288,19 +288,18 @@ def main():
         #         "Motor starts without soft start",
         #         "Overcurrent towards motor",
         #     ],
-        #     top_k_per_effect=5,
+        #     top_k_per_effect=4,
         #     expand_positive_variants=True,
         # )
         # print("\n")
         # print_v2_support(effect_support_v2, "effect_support")
 
         mode_support_v2 = retriever_v2.query_mode_support(
-            element_text="Motor control",
-            function_text="Relay switching",
+            element_text="",
+            function_text="",
             mode_texts=[
-                      "Priority zero-crossing interrupt too low",
-                        "Relay cannot close",
-                        # "False turn-on / turn-off",
+                        "Priority zero-crossing interrupt too low",
+                        "Open loop control",
             ],
             top_k_per_mode=5,
             expand_positive_variants=True,
