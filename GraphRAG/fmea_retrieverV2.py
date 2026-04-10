@@ -42,7 +42,8 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
     Design goals:
     - retrieve sentence-level evidence for one effect/mode at a time
     - use hybrid retrieval over FS / TS / Rationale nodes
-    - use graph neighbors as context features during reranking
+    - default ranking uses plain RRF score
+    - optional rerankers can be layered on top of the base ranking
     - bias effect evidence toward FS and mode evidence toward TS
     - keep the original effect/mode wording, while optionally adding
       positive-form query variants for better recall on positive sentences
@@ -53,23 +54,6 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
         ("TSChunk", "ts_embedding_idx", "ts_text_idx"),
         ("RationaleChunk", "rationale_embedding_idx", "rationale_text_idx"),
     ]
-
-    LABEL_PRIORS = {
-        "effect": {
-            "FSChunk": 2.5,
-            "TSChunk": 1.3,
-            "FSRationaleChunk": 1.1,
-            "TSRationaleChunk": 0.9,
-            "RationaleChunk": 1.0,
-        },
-        "mode": {
-            "TSChunk": 2.5,
-            "FSChunk": 1.3,
-            "TSRationaleChunk": 1.1,
-            "FSRationaleChunk": 0.9,
-            "RationaleChunk": 1.0,
-        },
-    }
 
     DEFAULT_CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 
@@ -82,7 +66,10 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
         top_k_per_effect: int = 8,
         per_label_k: Optional[int] = None,
         expand_positive_variants: bool = True,
+        retrieval_mode: str = "hybrid",
+        use_term_bonus_rerank: bool = False,
         cross_encoder_scorer: Optional[CrossEncoderScorer] = None,
+        use_cross_encoder_rerank: bool = False,
         cross_encoder_top_n: int = 20,
     ) -> Dict[str, Any]:
         items = []
@@ -100,7 +87,10 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
                     query_item=query_item,
                     top_k=top_k_per_effect,
                     per_label_k=per_label_k,
+                    retrieval_mode=retrieval_mode,
+                    use_term_bonus_rerank=use_term_bonus_rerank,
                     cross_encoder_scorer=cross_encoder_scorer,
+                    use_cross_encoder_rerank=use_cross_encoder_rerank,
                     cross_encoder_top_n=cross_encoder_top_n,
                 )
             )
@@ -122,7 +112,10 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
         top_k_per_mode: int = 8,
         per_label_k: Optional[int] = None,
         expand_positive_variants: bool = True,
+        retrieval_mode: str = "hybrid",
+        use_term_bonus_rerank: bool = False,
         cross_encoder_scorer: Optional[CrossEncoderScorer] = None,
+        use_cross_encoder_rerank: bool = False,
         cross_encoder_top_n: int = 20,
     ) -> Dict[str, Any]:
         items = []
@@ -140,7 +133,10 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
                     query_item=query_item,
                     top_k=top_k_per_mode,
                     per_label_k=per_label_k,
+                    retrieval_mode=retrieval_mode,
+                    use_term_bonus_rerank=use_term_bonus_rerank,
                     cross_encoder_scorer=cross_encoder_scorer,
+                    use_cross_encoder_rerank=use_cross_encoder_rerank,
                     cross_encoder_top_n=cross_encoder_top_n,
                 )
             )
@@ -158,50 +154,59 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
         query_item: Dict[str, Any],
         top_k: int,
         per_label_k: Optional[int],
+        retrieval_mode: str,
+        use_term_bonus_rerank: bool,
         cross_encoder_scorer: Optional[CrossEncoderScorer],
+        use_cross_encoder_rerank: bool,
         cross_encoder_top_n: int,
     ) -> Dict[str, Any]:
         per_label_k = per_label_k or max(top_k * 4, 16)
+        retrieval_mode = self._normalize_retrieval_mode(retrieval_mode)
+
+        if use_cross_encoder_rerank and cross_encoder_scorer is None:
+            cross_encoder_scorer = self.build_local_cross_encoder()
 
         dense_queries = self._build_dense_queries(query_item)
         sparse_queries = self._build_sparse_queries(query_item)
 
         result_sets: List[List[Dict[str, Any]]] = []
         for label, vector_index_name, fulltext_index_name in self.SEARCH_SPECS:
-            for query_text in dense_queries:
-                rows = self.dense_search_chunks(
-                    query_text=query_text,
-                    label=label,
-                    vector_index_name=vector_index_name,
-                    top_k=per_label_k,
-                )
-                for row in rows:
-                    row["label"] = label
-                result_sets.append(rows)
+            if retrieval_mode in {"dense", "hybrid"}:
+                for query_text in dense_queries:
+                    rows = self.dense_search_chunks(
+                        query_text=query_text,
+                        label=label,
+                        vector_index_name=vector_index_name,
+                        top_k=per_label_k,
+                    )
+                    for row in rows:
+                        row["label"] = label
+                    result_sets.append(rows)
 
-            for lucene_query in sparse_queries:
-                rows = self.sparse_search_chunks(
-                    lucene_query=lucene_query,
-                    label=label,
-                    fulltext_index_name=fulltext_index_name,
-                    top_k=per_label_k,
-                )
-                for row in rows:
-                    row["label"] = label
-                result_sets.append(rows)
+            if retrieval_mode in {"sparse", "hybrid"}:
+                for lucene_query in sparse_queries:
+                    rows = self.sparse_search_chunks(
+                        lucene_query=lucene_query,
+                        label=label,
+                        fulltext_index_name=fulltext_index_name,
+                        top_k=per_label_k,
+                    )
+                    for row in rows:
+                        row["label"] = label
+                    result_sets.append(rows)
 
         fused = self.rrf_fusion(result_sets)
-        candidate_ids = [item["node_id"] for item in fused[: max(top_k * 8, 40)]]
-        neighbor_context = self._fetch_neighbor_context(candidate_ids)
-        reranked = self._rerank_candidates(
-            candidates=fused,
-            query_item=query_item,
-            neighbor_context=neighbor_context,
-        )
+        ranked = self._apply_base_rrf_scores(fused)
 
-        if cross_encoder_scorer:
-            reranked = self._cross_encoder_rerank(
-                candidates=reranked,
+        if use_term_bonus_rerank:
+            ranked = self._term_bonus_rerank(
+                candidates=ranked,
+                query_item=query_item,
+            )
+
+        if use_cross_encoder_rerank and cross_encoder_scorer:
+            ranked = self._cross_encoder_rerank(
+                candidates=ranked,
                 query_item=query_item,
                 cross_encoder_scorer=cross_encoder_scorer,
                 top_n=cross_encoder_top_n,
@@ -209,14 +214,18 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
 
         return {
             "query_item": query_item,
+            "retrieval_mode": retrieval_mode,
+            "rerank_modes": {
+                "term_bonus": use_term_bonus_rerank,
+                "crossencoder": bool(use_cross_encoder_rerank and cross_encoder_scorer),
+            },
             "dense_queries": dense_queries,
             "sparse_queries": sparse_queries,
             "evidence": self._package_evidence(
-                candidates=reranked,
-                neighbor_context=neighbor_context,
+                candidates=ranked,
                 top_k=top_k,
             ),
-            "candidates": reranked[:top_k],
+            "candidates": ranked[:top_k],
         }
 
     def _build_query_item(
@@ -315,11 +324,28 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
 
         return self._dedupe_preserve_order(queries)
 
-    def _rerank_candidates(
+    def _apply_base_rrf_scores(
+        self,
+        candidates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        reranked: List[Dict[str, Any]] = []
+        for item in candidates:
+            new_item = dict(item)
+            new_item["label"] = self._resolve_candidate_label(item)
+            new_item["score_breakdown"] = {
+                "rrf_score": float(item.get("rrf_score", 0.0)),
+            }
+            new_item["base_score"] = float(item.get("rrf_score", 0.0))
+            new_item["final_score"] = float(item.get("rrf_score", 0.0))
+            reranked.append(new_item)
+
+        reranked.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
+        return reranked
+
+    def _term_bonus_rerank(
         self,
         candidates: List[Dict[str, Any]],
         query_item: Dict[str, Any],
-        neighbor_context: Dict[str, Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         query_type = query_item.get("query_type", "")
         product_text = query_item.get("product_text", "")
@@ -335,57 +361,33 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
 
         reranked: List[Dict[str, Any]] = []
         for item in candidates:
-            label = self._resolve_candidate_label(item)
             text = item.get("text", "")
-            context = neighbor_context.get(item["node_id"], {})
-            neighbor_text = context.get("neighbor_text", "")
-
-            direct_target = self._score_target_match(
+            target_bonus = self._score_target_match(
                 text=text,
                 target_text=target_text,
                 positive_variants=positive_variants,
             )
-            direct_function = self._score_function_match(text, function_text)
-            direct_element = self._score_direct_element_match(text, element_text)
-            direct_product = self._score_direct_product_match(text, product_text)
+            function_bonus = self._score_function_match(text, function_text)
+            element_bonus = self._score_direct_element_match(text, element_text)
+            product_bonus = self._score_direct_product_match(text, product_text)
 
-            graph_target = self._score_target_match(
-                text=neighbor_text,
-                target_text=target_text,
-                positive_variants=positive_variants,
-            )
-            graph_function = self._score_function_match(neighbor_text, function_text)
-            graph_element = self._score_direct_element_match(neighbor_text, element_text)
-
-            label_bonus = self.LABEL_PRIORS.get(query_type, {}).get(label, 0.0)
-            stage1_score = (
-                0.38 * direct_target
-                + 0.20 * direct_function
-                + 0.08 * direct_element
-                + 0.04 * direct_product
-                + 0.14 * graph_target
-                + 0.08 * graph_function
-                + 0.03 * graph_element
-                + 0.05 * label_bonus
-                + 0.10 * float(item.get("rrf_score", 0.0))
+            term_bonus_score = (
+                0.55 * target_bonus
+                + 0.20 * function_bonus
+                + 0.15 * element_bonus
+                + 0.10 * product_bonus
             )
 
             new_item = dict(item)
-            new_item["label"] = label
-            new_item["neighbor_context"] = context
             new_item["score_breakdown"] = {
-                "direct_target": direct_target,
-                "direct_function": direct_function,
-                "direct_element": direct_element,
-                "direct_product": direct_product,
-                "graph_target": graph_target,
-                "graph_function": graph_function,
-                "graph_element": graph_element,
-                "label_bonus": label_bonus,
-                "rrf_score": float(item.get("rrf_score", 0.0)),
+                **dict(item.get("score_breakdown", {})),
+                "target_bonus": target_bonus,
+                "function_bonus": function_bonus,
+                "element_bonus": element_bonus,
+                "product_bonus": product_bonus,
+                "term_bonus_score": term_bonus_score,
             }
-            new_item["stage1_score"] = stage1_score
-            new_item["final_score"] = stage1_score
+            new_item["final_score"] = item.get("base_score", item.get("rrf_score", 0.0)) + term_bonus_score
             reranked.append(new_item)
 
         reranked.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
@@ -406,7 +408,11 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
             pair_doc = self._build_cross_encoder_document(item)
             ce_score = float(cross_encoder_scorer(pair_query, pair_doc))
             item["cross_encoder_score"] = ce_score
-            item["final_score"] = 0.65 * item.get("stage1_score", 0.0) + 0.35 * ce_score
+            item["score_breakdown"] = {
+                **dict(item.get("score_breakdown", {})),
+                "cross_encoder_score": ce_score,
+            }
+            item["final_score"] = 0.65 * float(item.get("final_score", 0.0)) + 0.35 * ce_score
 
         kept.sort(key=lambda x: x.get("final_score", 0.0), reverse=True)
         return kept + tail
@@ -423,7 +429,6 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
     def _package_evidence(
         self,
         candidates: List[Dict[str, Any]],
-        neighbor_context: Dict[str, Dict[str, Any]],
         top_k: int,
     ) -> List[Dict[str, Any]]:
         evidence: List[Dict[str, Any]] = []
@@ -435,8 +440,6 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
                 continue
             seen.add(node_id)
 
-            context = neighbor_context.get(node_id, {})
-            supporting_context = context.get("neighbors", [])[:2]
             evidence.append({
                 "primary_sentence": {
                     "node_id": node_id,
@@ -444,7 +447,7 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
                     "text": item.get("text", ""),
                     "score": item.get("final_score", 0.0),
                 },
-                "supporting_context": supporting_context,
+                "supporting_context": [],
                 "score_breakdown": item.get("score_breakdown", {}),
             })
 
@@ -453,54 +456,15 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
 
         return evidence
 
-    def _fetch_neighbor_context(self, node_ids: List[str]) -> Dict[str, Dict[str, Any]]:
-        if not node_ids:
-            return {}
-
-        cypher = """
-        MATCH (n)
-        WHERE elementId(n) IN $node_ids
-        OPTIONAL MATCH (n)-[rel]-(m)
-        WHERE
-            (type(rel) = "IMPLEMENT" AND (
-                (n:FSChunk AND m:TSChunk) OR
-                (n:TSChunk AND m:FSChunk)
-            )) OR
-            (type(rel) = "RELATED" AND (
-                (n:FSChunk AND m:FSChunk)
-            )) OR
-            (type(rel) = "RATIONALE_FOR" AND (
-                (n:RationaleChunk AND (m:FSChunk OR m:TSChunk)) OR
-                (m:RationaleChunk AND (n:FSChunk OR n:TSChunk))
-            ))
-        RETURN
-            elementId(n) AS node_id,
-            collect(
-                CASE
-                    WHEN m IS NULL THEN NULL
-                    ELSE {
-                        node_id: elementId(m),
-                        label: labels(m)[0],
-                        text: coalesce(m.text, ""),
-                        relationship: type(rel)
-                    }
-                END
-            ) AS neighbors
-        """
-        rows = self.run_query(cypher, node_ids=node_ids)
-        output: Dict[str, Dict[str, Any]] = {}
-
-        for row in rows:
-            neighbors = [
-                item for item in row.get("neighbors", [])
-                if item and (item.get("text", "") or "").strip()
-            ]
-            output[row["node_id"]] = {
-                "neighbors": neighbors,
-                "neighbor_text": " ".join(item.get("text", "") for item in neighbors),
-            }
-
-        return output
+    @staticmethod
+    def _normalize_retrieval_mode(retrieval_mode: str) -> str:
+        mode = (retrieval_mode or "hybrid").strip().lower()
+        if mode not in {"dense", "sparse", "hybrid"}:
+            raise ValueError(
+                f"Unsupported retrieval_mode: {retrieval_mode}. "
+                "Expected one of: dense, sparse, hybrid."
+            )
+        return mode
 
     @staticmethod
     def _resolve_candidate_label(candidate: Dict[str, Any]) -> str:
@@ -631,14 +595,6 @@ class FMEASentenceRetrieverV2(ChunkRetriever):
             f"Label: {candidate.get('label', '')}",
             f"Sentence: {candidate.get('text', '')}",
         ]
-        neighbors = candidate.get("neighbor_context", {}).get("neighbors", [])[:3]
-        if neighbors:
-            lines.append(
-                "Linked context: " + " | ".join(
-                    f"{item.get('label', '')}: {item.get('text', '')}"
-                    for item in neighbors
-                )
-            )
         return "\n".join(lines)
 
     def _phrase_and_token_queries(self, text: str) -> List[str]:
