@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -18,7 +19,10 @@ def fetch_chunks(label: str) -> List[Dict[str, Any]]:
         from neo4j import GraphDatabase
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
-            "Missing dependency 'neo4j'. Install it in the active Python environment before exporting chunks."
+            "Missing dependency 'neo4j'.\n"
+            f"Current Python executable: {sys.executable}\n"
+            "Install it into this exact interpreter, for example:\n"
+            f'  "{sys.executable}" -m pip install neo4j'
         ) from exc
 
     query = f"""

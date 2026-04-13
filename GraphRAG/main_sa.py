@@ -282,11 +282,11 @@ def main():
     try:
         effect_support_v2 = retriever_v2.query_effect_support(
             product_text="",
-            function_text="Soft starter",
+            function_text="Relay switching",
             effect_texts=[
-                "Motor cannot start",
-                "Motor starts without soft start",
-                "Overcurrent towards motor",
+                        "Welded relay",
+                        "Relay cannot close",
+                        "False turn-on / turn-off",
             ],
             top_k_per_effect=6,
             per_label_k=50,

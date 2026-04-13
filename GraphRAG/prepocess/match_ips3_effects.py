@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Set, Tuple
 
 CURRENT_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = CURRENT_DIR / "output"
-DEFAULT_OUTPUT_FILE = CURRENT_DIR / "output" / "ips3_sentence_effect_matches.json"
+DEFAULT_OUTPUT_FILE = CURRENT_DIR / "output" / "ips3_fs_node_function_matches.json"
 DEFAULT_TAXONOMY_FILE = CURRENT_DIR / "ips3_effect_taxonomy.json"
 
 STOPWORDS = {
@@ -43,17 +43,17 @@ STOPWORDS = {
 FUNCTION_ALIAS_MAP = {
     "wi fi": ["wifi", "wi fi", "wireless"],
     "azure": ["cloud", "backend"],
-    "ble": ["bluetooth"],
+    "ble": ["bluetooth","bluetooth low energy"],
     "user interface": ["ui", "display", "led", "button"],
-    "power outputs": ["power output", "output", "outputs", "relay"],
+    "power outputs": ["power output", "output", "outputs"],
     "digital inputs": ["digital input", "input", "inputs"],
     "soft starter": ["soft start", "starter", "motor start"],
     "pressure switch": ["pressure", "switch", "setpoint"],
     "internal logging": ["logging", "logs", "log", "timestamp"],
-    "data collection": ["statistics", "data", "measurement"],
+    "data collection": ["statistics", "data"],
     "pneumatic connection": ["pneumatic", "pressure", "hose", "tube"],
     "panel mounting": ["mount", "mounting", "panel", "bracket"],
-    "cable cable connector": ["cable", "connector", "connection", "plug"],
+    "cable cable connector": ["cable", "plug"],
     "electrical failure": ["electrical", "short", "voltage", "current"],
     "aesthetics": ["housing", "appearance", "cosmetic"],
 }
@@ -89,40 +89,34 @@ def expand_function_tokens(product_function: str) -> Set[str]:
     return expanded
 
 
-def split_into_sentences(text: str) -> List[str]:
-    if not text or not text.strip():
-        return []
-
-    parts = re.split(r"[\n\r]+|(?<=[.!?;])\s+", text.strip())
-    sentences: List[str] = []
-    for part in parts:
-        cleaned = part.strip(" -\t")
-        if cleaned:
-            sentences.append(cleaned)
-    return sentences
-
-
 def load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def load_chunks(input_dir: Path) -> List[Dict[str, Any]]:
-    datasets: List[Tuple[str, Path]] = [
-        ("FSChunk", input_dir / "fs_chunks.json"),
-        ("TSChunk", input_dir / "ts_chunks.json"),
-    ]
-    merged: List[Dict[str, Any]] = []
+    path = input_dir / "fs_chunks.json"
+    if not path.exists():
+        return []
 
-    for chunk_type, path in datasets:
-        if not path.exists():
-            continue
+    rows = load_json(path)
+    for row in rows:
+        row["chunk_type"] = "FSChunk"
+    return rows
 
-        rows = load_json(path)
-        for row in rows:
-            row["chunk_type"] = chunk_type
-            merged.append(row)
 
-    return merged
+def build_match_text(node: Dict[str, Any]) -> str:
+    parts: List[str] = []
+
+    node_text = (node.get("text") or "").strip()
+    if node_text:
+        parts.append(node_text)
+
+    for rationale in node.get("rationales", []) or []:
+        rationale_text = (rationale.get("text") or "").strip()
+        if rationale_text:
+            parts.append(rationale_text)
+
+    return "\n".join(parts)
 
 
 def unique_preserve_order(items: Iterable[str]) -> List[str]:
@@ -155,31 +149,6 @@ def compute_overlap(
     }
 
 
-def is_effect_match(
-    sentence: str,
-    effect: str,
-    sentence_tokens: Set[str],
-    effect_tokens: Set[str],
-) -> bool:
-    if not effect_tokens:
-        return False
-
-    normalized_sentence = normalize_text(sentence)
-    normalized_effect = normalize_text(effect)
-    if normalized_effect and normalized_effect in normalized_sentence:
-        return True
-
-    overlap = sentence_tokens & effect_tokens
-    if not overlap:
-        return False
-
-    if len(effect_tokens) == 1:
-        return True
-
-    coverage = len(overlap) / len(effect_tokens)
-    return coverage >= 0.4
-
-
 def is_function_match(
     sentence: str,
     product_function: str,
@@ -205,76 +174,36 @@ def is_function_match(
     return coverage >= 0.25
 
 
-def collect_text_sources(node: Dict[str, Any]) -> List[Dict[str, str]]:
-    sources: List[Dict[str, str]] = []
-
-    if node.get("text"):
-        sources.append(
-            {
-                "source_type": "node_text",
-                "source_name": node.get("name", ""),
-                "text": node["text"],
-            }
-        )
-
-    for rationale in node.get("rationales", []) or []:
-        if rationale.get("text"):
-            sources.append(
-                {
-                    "source_type": "rationale",
-                    "source_name": rationale.get("name", ""),
-                    "text": rationale["text"],
-                }
-            )
-
-    return sources
-
-
-def match_sentence(sentence: str, taxonomy: Dict[str, Any]) -> List[Dict[str, Any]]:
+def match_text(text: str, taxonomy: Dict[str, Any]) -> List[Dict[str, Any]]:
     matches: List[Dict[str, Any]] = []
-    sentence_tokens = token_set(sentence)
+    text_tokens = token_set(text)
 
     for function_item in taxonomy.get("functions", []):
         product_function = function_item.get("product_function", "")
         function_tokens = expand_function_tokens(product_function)
         if not is_function_match(
-            sentence=sentence,
+            sentence=text,
             product_function=product_function,
             function_tokens=function_tokens,
         ):
             continue
 
-        function_overlap = compute_overlap(sentence_tokens, function_tokens)
-
-        for effect in function_item.get("effects", []):
-            effect_tokens = token_set(effect)
-            if not is_effect_match(
-                sentence=sentence,
-                effect=effect,
-                sentence_tokens=sentence_tokens,
-                effect_tokens=effect_tokens,
-            ):
-                continue
-
-            effect_overlap = compute_overlap(sentence_tokens, effect_tokens)
-            matches.append(
-                {
-                    "product": taxonomy.get("product", ""),
-                    "product_function": product_function,
-                    "matched_function_terms": function_overlap["matched_tokens"],
-                    "effect": effect,
-                    "matched_effect_terms": effect_overlap["matched_tokens"],
-                    "matched_terms": unique_preserve_order(
-                        function_overlap["matched_tokens"] + effect_overlap["matched_tokens"]
-                    ),
-                    "effect_match_coverage": effect_overlap["coverage"],
-                }
-            )
+        function_overlap = compute_overlap(text_tokens, function_tokens)
+        matches.append(
+            {
+                "product": taxonomy.get("product", ""),
+                "product_function": product_function,
+                "matched_function_terms": function_overlap["matched_tokens"],
+                "matched_terms": function_overlap["matched_tokens"],
+                "function_match_coverage": function_overlap["coverage"],
+                "candidate_effects": function_item.get("effects", []),
+            }
+        )
 
     return matches
 
 
-def build_sentence_records(
+def build_node_records(
     chunks: List[Dict[str, Any]],
     taxonomy: Dict[str, Any],
     keep_unmatched: bool,
@@ -282,23 +211,23 @@ def build_sentence_records(
     records: List[Dict[str, Any]] = []
 
     for node in chunks:
-        for source in collect_text_sources(node):
-            for sentence in split_into_sentences(source["text"]):
-                matches = match_sentence(sentence, taxonomy)
-                if not matches and not keep_unmatched:
-                    continue
+        node_text = node.get("text", "")
+        match_text_value = build_match_text(node)
+        matches = match_text(match_text_value, taxonomy)
+        if not matches and not keep_unmatched:
+            continue
 
-                records.append(
-                    {
-                        "product": taxonomy.get("product", ""),
-                        "chunk_type": node.get("chunk_type", ""),
-                        "node_name": node.get("name", ""),
-                        "source_type": source["source_type"],
-                        "source_name": source["source_name"],
-                        "sentence": sentence,
-                        "matches": matches,
-                    }
-                )
+        records.append(
+            {
+                "product": taxonomy.get("product", ""),
+                "chunk_type": node.get("chunk_type", ""),
+                "node_name": node.get("name", ""),
+                "node_text": node_text,
+                "match_text": match_text_value,
+                "rationales": node.get("rationales", []),
+                "matches": matches,
+            }
+        )
 
     return records
 
@@ -313,13 +242,13 @@ def write_json(data: Any, output_path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Match effect lists against exported FSChunk and TSChunk sentences using general text preprocessing."
+        description="Match product function text against complete FSChunk node text using general text preprocessing."
     )
     parser.add_argument(
         "--input-dir",
         type=Path,
         default=DEFAULT_INPUT_DIR,
-        help="Directory containing fs_chunks.json and ts_chunks.json.",
+        help="Directory containing fs_chunks.json.",
     )
     parser.add_argument(
         "--taxonomy-file",
@@ -331,12 +260,12 @@ def parse_args() -> argparse.Namespace:
         "--output-file",
         type=Path,
         default=DEFAULT_OUTPUT_FILE,
-        help="Where to write sentence-level effect matching results.",
+        help="Where to write FSChunk node-level function matching results.",
     )
     parser.add_argument(
         "--keep-unmatched",
         action="store_true",
-        help="Keep sentences without any matched effect.",
+        help="Keep FSChunk nodes without any matched function.",
     )
     return parser.parse_args()
 
@@ -346,15 +275,15 @@ def main() -> None:
 
     chunks = load_chunks(args.input_dir.resolve())
     taxonomy = load_json(args.taxonomy_file.resolve())
-    records = build_sentence_records(
+    records = build_node_records(
         chunks=chunks,
         taxonomy=taxonomy,
         keep_unmatched=args.keep_unmatched,
     )
 
     write_json(records, args.output_file.resolve())
-    print(f"Loaded {len(chunks)} chunk nodes")
-    print(f"Wrote {len(records)} sentence records to {args.output_file.resolve()}")
+    print(f"Loaded {len(chunks)} FSChunk nodes")
+    print(f"Wrote {len(records)} node records to {args.output_file.resolve()}")
 
 
 if __name__ == "__main__":
