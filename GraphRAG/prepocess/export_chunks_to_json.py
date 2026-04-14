@@ -25,12 +25,20 @@ def fetch_chunks(label: str) -> List[Dict[str, Any]]:
             f'  "{sys.executable}" -m pip install neo4j'
         ) from exc
 
+    discipline_return = (
+        'coalesce(n.discipline, "") AS discipline,'
+        if label == "TSChunk"
+        else ""
+    )
+
     query = f"""
     MATCH (n:{label})
     OPTIONAL MATCH (r:RationaleChunk)-[:RATIONALE_FOR]->(n)
     RETURN
         coalesce(n.name, "") AS name,
         coalesce(n.text, "") AS text,
+        coalesce(n.section_tag, "") AS section_tag,
+        {discipline_return}
         [
             item IN collect(
                 DISTINCT CASE

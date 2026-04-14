@@ -39,6 +39,9 @@ TOP_LEVEL_SECTION_HEADING_PATTERN = re.compile(
 SUBSECTION_HEADING_PATTERN = re.compile(
     r"^\s*\d+(?:\.\d+)+\s+[A-Z][^\n]*$"
 )
+TOC_ENTRY_PATTERN = re.compile(
+    r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\.{2,}\s*(\d+)\s*$"
+)
 
 
 # ---- normal text chunking ----
@@ -100,6 +103,13 @@ def normalize_spaces(text: str) -> str:
 
 def clean_line(text: str) -> str:
     return normalize_spaces(text)
+
+
+def normalize_section_key(text: str) -> str:
+    text = clean_line(text)
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip().lower()
 
 
 def is_noise_line(text: str) -> bool:
@@ -262,15 +272,23 @@ def looks_like_continuation(text: str) -> bool:
 
     return False
 
-def looks_like_section_heading(text: str) -> bool:
-    return get_section_heading_level(text) is not None
+def looks_like_section_heading(text: str, toc_entries: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+    return get_section_heading_level(text, toc_entries=toc_entries) is not None
 
 
-def get_section_heading_level(text: str) -> Optional[int]:
+def get_section_heading_level(
+    text: str,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[int]:
     if not text:
         return None
 
     t = clean_line(text)
+    toc_entry = find_toc_entry_for_heading(t, toc_entries)
+    if toc_entry is not None:
+        return toc_entry["level"]
+    if toc_entries:
+        return None
 
     # avoid matching requirement ids accidentally
     if parse_requirement_ids(t):
@@ -340,6 +358,11 @@ def extract_rationale_only_text(chunk_text: str) -> str:
 def make_chunk_name(file_name: str, requirement_id: str) -> str:
     return f"{file_name}_{requirement_id}"
 
+
+def make_section_chunk_name(file_name: str, section_name: str) -> str:
+    base_name = os.path.splitext(file_name)[0]
+    return f"{base_name}_{clean_line(section_name)}"
+
 def infer_spec_type(file_path: str) -> str:
     file_name = os.path.basename(file_path).upper()
 
@@ -397,6 +420,105 @@ def get_rationale_discipline_label(spec_kind: str, discipline: Optional[str]) ->
     if spec_kind != "TS" or not discipline:
         return None
     return f"{discipline}RationaleChunk"
+
+
+def parse_toc_line(text: str) -> Optional[Dict[str, Any]]:
+    match = TOC_ENTRY_PATTERN.match(clean_line(text))
+    if not match:
+        return None
+
+    number = match.group(1)
+    title = clean_line(match.group(2))
+    page = int(match.group(3))
+
+    return {
+        "number": number,
+        "title": title,
+        "page": page,
+        "level": number.count(".") + 1,
+        "full_text": clean_line(f"{number} {title}"),
+    }
+
+
+def extract_toc_entries_from_pdf(pdf) -> Dict[str, Dict[str, Any]]:
+    entries: Dict[str, Dict[str, Any]] = {}
+    in_toc = False
+    started_collecting = False
+    non_match_streak = 0
+
+    for page_idx, page in enumerate(pdf.pages[:10]):
+        cropped = page.crop((0, HEADER_CROP, page.width, page.height - FOOTER_CROP))
+        page_text = cropped.extract_text() or ""
+        if not page_text:
+            continue
+
+        lines = [clean_line(line) for line in page_text.splitlines() if clean_line(line)]
+        for line in lines:
+            low = line.lower()
+            if "table of contents" in low:
+                in_toc = True
+                non_match_streak = 0
+                continue
+
+            if not in_toc:
+                continue
+
+            entry = parse_toc_line(line)
+            if entry:
+                key = normalize_section_key(entry["full_text"])
+                entries[key] = entry
+                started_collecting = True
+                non_match_streak = 0
+                continue
+
+            if started_collecting:
+                non_match_streak += 1
+                if START_HEADING_PATTERN.match(line) or non_match_streak >= 8:
+                    return entries
+
+    return entries
+
+
+def find_toc_entry_for_heading(
+    text: str,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    if not toc_entries:
+        return None
+
+    normalized = normalize_section_key(text)
+    return toc_entries.get(normalized)
+
+
+def is_introduction_section(section_tag: Optional[str]) -> bool:
+    section_tag = clean_line(section_tag or "")
+    if not section_tag:
+        return False
+    return bool(re.match(r"^1(?:\.\d+)*\s+", section_tag))
+
+
+def should_start_from_section(
+    section_tag: Optional[str],
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> bool:
+    section_tag = clean_line(section_tag or "")
+    if not section_tag:
+        return False
+
+    if parse_toc_line(section_tag):
+        return False
+
+    toc_entry = find_toc_entry_for_heading(section_tag, toc_entries)
+    if toc_entries:
+        if toc_entry is None:
+            return False
+        return not safe_text(toc_entry.get("number")).startswith("1")
+
+    match = re.match(r"^(\d+(?:\.\d+)*)\s+", section_tag)
+    if not match:
+        return False
+
+    return not match.group(1).startswith("1")
 
 
 # =========================================================
@@ -535,32 +657,36 @@ def flush_normal_buffer(
     file_path: str,
     pages: List[int],
     discipline: Optional[str] = None,
+    spec_type: Optional[str] = None,
+    section_tag: Optional[str] = None,
 ):
     text = clean_chunk_text("\n".join(normal_lines))
     if not text:
         return
 
-    split_parts = split_text_with_overlap(
-        text,
-        chunk_size=NORMAL_CHUNK_SIZE,
-        overlap=NORMAL_CHUNK_OVERLAP,
-    )
+    section_tag = safe_text(section_tag)
+    if not section_tag or is_introduction_section(section_tag):
+        return
 
-    for idx, part in enumerate(split_parts, start=1):
-        chunks.append(
-            ChunkDoc(
-                page_content=part,
-                metadata={
-                    "source": file_path,
-                    "file_name": os.path.basename(file_path),
-                    "pages": pages[:],
-                    "type": "FS_section",
-                    "discipline": normalize_discipline(discipline),
-                    "chunk_mode": "normal",
-                    "chunk_index": idx,
-                },
-            )
+    chunk_spec_type = spec_type or infer_spec_type(file_path)
+    file_name = os.path.basename(file_path)
+    chunks.append(
+        ChunkDoc(
+            page_content=text,
+            metadata={
+                "source": file_path,
+                "file_name": file_name,
+                "pages": pages[:],
+                "type": f"{chunk_spec_type}_section",
+                "spec_type": chunk_spec_type,
+                "discipline": normalize_discipline(discipline),
+                "chunk_mode": "section",
+                "chunk_index": 1,
+                "section_tag": section_tag,
+                "name": make_section_chunk_name(file_name, section_tag),
+            },
         )
+    )
 
 
 def flush_req_buffer(
@@ -642,6 +768,7 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
 
     started = False
     in_requirement_mode = False
+    toc_entries: Dict[str, Dict[str, Any]] = {}
 
     normal_lines: List[str] = []
     normal_pages: List[int] = []
@@ -653,6 +780,8 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
     current_major_section_tag: Optional[str] = None
 
     with pdfplumber.open(file_path) as pdf:
+        toc_entries = extract_toc_entries_from_pdf(pdf)
+
         for page_idx, page in enumerate(pdf.pages):
             page_no = page_idx + 1
 
@@ -680,14 +809,17 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
                     prev_line_info = line_info
                     continue
 
+                if parse_toc_line(full_text):
+                    prev_line_info = line_info
+                    continue
+
                 if not started:
-                    if START_HEADING_PATTERN.match(full_text):
+                    toc_entry = find_toc_entry_for_heading(full_text, toc_entries=toc_entries)
+                    if should_start_from_section(full_text, toc_entries=toc_entries) and toc_entry is not None:
                         started = True
-                        current_major_section_tag = full_text
-                        current_section_tag = full_text
-                        normal_lines.append(full_text)
-                        if page_no not in normal_pages:
-                            normal_pages.append(page_no)
+                        canonical_section_tag = safe_text(toc_entry.get("full_text")) or full_text
+                        current_major_section_tag = canonical_section_tag
+                        current_section_tag = canonical_section_tag
                     prev_line_info = line_info
                     continue
 
@@ -723,7 +855,15 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
 
                     # 新 requirement
                     if not in_requirement_mode:
-                        flush_normal_buffer(chunks, normal_lines, file_path, normal_pages, discipline=discipline)
+                        flush_normal_buffer(
+                            chunks,
+                            normal_lines,
+                            file_path,
+                            normal_pages,
+                            discipline=discipline,
+                            spec_type=spec_type,
+                            section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
+                        )
                         normal_lines = []
                         normal_pages = []
                         in_requirement_mode = True
@@ -772,8 +912,24 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
                 # -------------------------------------------------
                 # Case 3: section heading -> end current requirement block
                 # -------------------------------------------------
-                heading_level = get_section_heading_level(full_text)
+                toc_entry = find_toc_entry_for_heading(full_text, toc_entries=toc_entries)
+                heading_level = get_section_heading_level(full_text, toc_entries=toc_entries)
                 if heading_level is not None:
+                    canonical_section_tag = safe_text(toc_entry.get("full_text")) if toc_entry else full_text
+
+                    if not in_requirement_mode:
+                        flush_normal_buffer(
+                            chunks,
+                            normal_lines,
+                            file_path,
+                            normal_pages,
+                            discipline=discipline,
+                            spec_type=spec_type,
+                            section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
+                        )
+                        normal_lines = []
+                        normal_pages = []
+
                     if in_requirement_mode and current_ids:
                         flush_req_buffer(
                             chunks,
@@ -791,12 +947,9 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
                         current_req_pages = []
                         in_requirement_mode = False
 
-                    current_section_tag = full_text
+                    current_section_tag = canonical_section_tag
                     if heading_level == 1:
-                        current_major_section_tag = full_text
-                    normal_lines.append(full_text)
-                    if page_no not in normal_pages:
-                        normal_pages.append(page_no)
+                        current_major_section_tag = canonical_section_tag
 
                     prev_line_info = line_info
                     continue
@@ -819,6 +972,10 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
                     prev_line_info = line_info
                     continue
 
+                normal_lines.append(full_text)
+                if page_no not in normal_pages:
+                    normal_pages.append(page_no)
+
                 prev_line_info = line_info
 
         if in_requirement_mode:
@@ -833,7 +990,15 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
                 section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
             )
         else:
-            flush_normal_buffer(chunks, normal_lines, file_path, normal_pages, discipline=discipline)
+            flush_normal_buffer(
+                chunks,
+                normal_lines,
+                file_path,
+                normal_pages,
+                discipline=discipline,
+                spec_type=spec_type,
+                section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
+            )
 
     print(f"[INFO] Extracted {len(chunks)} chunks from PDF ({spec_type})")
     return chunks
@@ -864,11 +1029,10 @@ def extract_spec_chunks_from_docx(file_path: str, discipline: Optional[str] = No
             continue
 
         if not started:
-            if START_HEADING_PATTERN.match(text):
+            if should_start_from_section(text):
                 started = True
                 current_major_section_tag = text
                 current_section_tag = text
-                normal_lines.append(text)
             continue
 
         parsed = parse_requirement_line(text)
@@ -877,26 +1041,15 @@ def extract_spec_chunks_from_docx(file_path: str, discipline: Optional[str] = No
             if not in_requirement_mode:
                 txt = clean_chunk_text("\n".join(normal_lines))
                 if txt:
-                    split_parts = split_text_with_overlap(
-                        txt,
-                        chunk_size=NORMAL_CHUNK_SIZE,
-                        overlap=NORMAL_CHUNK_OVERLAP,
+                    flush_normal_buffer(
+                        chunks,
+                        normal_lines,
+                        file_path,
+                        [],
+                        discipline=discipline,
+                        spec_type=spec_type,
+                        section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
                     )
-                    for idx, part in enumerate(split_parts, start=1):
-                        chunks.append(
-                            ChunkDoc(
-                                page_content=part,
-                                metadata={
-                                    "source": file_path,
-                                    "file_name": os.path.basename(file_path),
-                                    "type": f"{spec_type}_section",
-                                    "spec_type": spec_type,
-                                    "discipline": discipline,
-                                    "chunk_mode": "normal",
-                                    "chunk_index": idx,
-                                },
-                            )
-                        )
                 normal_lines = []
                 in_requirement_mode = True
 
@@ -929,10 +1082,21 @@ def extract_spec_chunks_from_docx(file_path: str, discipline: Optional[str] = No
             else:
                 heading_level = get_section_heading_level(text)
                 if heading_level is not None:
+                    flush_normal_buffer(
+                        chunks,
+                        normal_lines,
+                        file_path,
+                        [],
+                        discipline=discipline,
+                        spec_type=spec_type,
+                        section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
+                    )
+                    normal_lines = []
                     current_section_tag = text
                     if heading_level == 1:
                         current_major_section_tag = text
-                normal_lines.append(text)
+                else:
+                    normal_lines.append(text)
 
     if in_requirement_mode:
         flush_req_buffer(
@@ -946,28 +1110,15 @@ def extract_spec_chunks_from_docx(file_path: str, discipline: Optional[str] = No
             section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
         )
     else:
-        txt = clean_chunk_text("\n".join(normal_lines))
-        if txt:
-            split_parts = split_text_with_overlap(
-                txt,
-                chunk_size=NORMAL_CHUNK_SIZE,
-                overlap=NORMAL_CHUNK_OVERLAP,
-            )
-            for idx, part in enumerate(split_parts, start=1):
-                chunks.append(
-                    ChunkDoc(
-                        page_content=part,
-                        metadata={
-                            "source": file_path,
-                            "file_name": os.path.basename(file_path),
-                            "type": f"{spec_type}_section",
-                            "spec_type": spec_type,
-                            "discipline": discipline,
-                            "chunk_mode": "normal",
-                            "chunk_index": idx,
-                        },
-                    )
-                )
+        flush_normal_buffer(
+            chunks,
+            normal_lines,
+            file_path,
+            [],
+            discipline=discipline,
+            spec_type=spec_type,
+            section_tag=get_effective_section_tag(current_section_tag, current_major_section_tag),
+        )
 
     print(f"[INFO] Extracted {len(chunks)} chunks from DOCX ({spec_type})")
     return chunks
@@ -992,10 +1143,15 @@ def prepare_spec_chunks(file_path: str, discipline: Optional[str] = None) -> Lis
         ch for ch in chunks
         if ch.metadata.get("chunk_mode") == "requirement"
     ]
+    section_chunks = [
+        ch for ch in chunks
+        if ch.metadata.get("chunk_mode") == "section"
+    ]
 
     spec_type = infer_spec_type(file_path)
     print(f"[INFO] Total requirement chunks ready for KG import ({spec_type}): {len(requirement_chunks)}")
-    return requirement_chunks
+    print(f"[INFO] Total section chunks ready for KG import ({spec_type}): {len(section_chunks)}")
+    return chunks
 
 
 def print_section_tag_debug(chunks: List[ChunkDoc], label: str):
@@ -1147,18 +1303,39 @@ class VectorKGBuilder:
 
     def _build_fschunk_row(self, chunk) -> Optional[Dict[str, Any]]:
         file_name = safe_text(chunk.metadata.get("file_name"))
+        chunk_mode = safe_text(chunk.metadata.get("chunk_mode"))
         primary_requirement_id = safe_text(chunk.metadata.get("primary_requirement_id"))
         related_requirement_ids = chunk.metadata.get("related_requirement_ids", [])
         pages = chunk.metadata.get("pages", [])
         chunk_type = safe_text(chunk.metadata.get("type", "FS"))
         discipline = normalize_discipline(chunk.metadata.get("discipline"))
         section_tag = safe_text(chunk.metadata.get("section_tag"))
+        chunk_name = safe_text(chunk.metadata.get("name"))
 
         if not isinstance(pages, list):
             pages = []
 
         if not isinstance(related_requirement_ids, list):
             related_requirement_ids = []
+
+        if chunk_mode == "section":
+            section_text = clean_chunk_text(chunk.page_content)
+            if not file_name or not section_tag or not section_text:
+                return None
+
+            return {
+                "name": chunk_name or make_section_chunk_name(file_name, section_tag),
+                "primary_requirement_id": None,
+                "related_requirement_ids": [],
+                "related_fschunk_names": [],
+                "embedding": embed(section_text),
+                "text": section_text,
+                "pages": pages,
+                "type": chunk_type,
+                "discipline": discipline,
+                "section_tag": section_tag,
+                "chunk_mode": "section",
+            }
 
         if not file_name or not primary_requirement_id:
             return None
@@ -1186,22 +1363,43 @@ class VectorKGBuilder:
             "type": chunk_type,
             "discipline": discipline,
             "section_tag": section_tag,
+            "chunk_mode": "requirement",
         }
     
     def _build_tschunk_row(self, chunk, seq: int) -> Optional[Dict[str, Any]]:
         file_name = safe_text(chunk.metadata.get("file_name"))
+        chunk_mode = safe_text(chunk.metadata.get("chunk_mode"))
         primary_requirement_id = safe_text(chunk.metadata.get("primary_requirement_id"))
         raw_ids = chunk.metadata.get("requirement_ids", [])
         pages = chunk.metadata.get("pages", [])
         chunk_type = safe_text(chunk.metadata.get("type", "TS"))
         discipline = normalize_discipline(chunk.metadata.get("discipline"))
         section_tag = safe_text(chunk.metadata.get("section_tag"))
+        chunk_name = safe_text(chunk.metadata.get("name"))
 
         if not isinstance(pages, list):
             pages = []
 
         if not isinstance(raw_ids, list):
             raw_ids = []
+
+        if chunk_mode == "section":
+            section_text = clean_chunk_text(chunk.page_content)
+            if not file_name or not section_tag or not section_text:
+                return None
+
+            return {
+                "name": chunk_name or make_section_chunk_name(file_name, section_tag),
+                "primary_requirement_id": None,
+                "referred_fs_ids": [],
+                "embedding": embed(section_text),
+                "text": section_text,
+                "pages": pages,
+                "type": chunk_type,
+                "discipline": discipline,
+                "section_tag": section_tag,
+                "chunk_mode": "section",
+            }
 
         if not file_name or not primary_requirement_id:
             return None
@@ -1237,6 +1435,7 @@ class VectorKGBuilder:
             "type": chunk_type,
             "discipline": discipline,
             "section_tag": section_tag,
+            "chunk_mode": "requirement",
         }
 
     def _build_rationale_row(self, chunk, spec_kind: str, seq: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -1305,7 +1504,8 @@ class VectorKGBuilder:
             pages: row.pages,
             type: row.type,
             discipline: row.discipline,
-            section_tag: row.section_tag
+            section_tag: row.section_tag,
+            chunk_mode: row.chunk_mode
         }
         WITH c
         MATCH (d {semantic_id: $document_id})
@@ -1353,7 +1553,8 @@ class VectorKGBuilder:
                     pages: row.pages,
                     type: row.type,
                     discipline: row.discipline,
-                    section_tag: row.section_tag
+                    section_tag: row.section_tag,
+                    chunk_mode: row.chunk_mode
                 }}
                 WITH c
                 MATCH (d {{semantic_id: $document_id}})
@@ -1463,6 +1664,8 @@ class VectorKGBuilder:
         rows = []
 
         for ch in chunks:
+            if safe_text(ch.metadata.get("chunk_mode")) != "requirement":
+                continue
             row = self._build_fschunk_row(ch)
             if row is None:
                 continue
@@ -1500,6 +1703,8 @@ class VectorKGBuilder:
         seq = 1
 
         for ch in ts_chunks:
+            if safe_text(ch.metadata.get("chunk_mode")) != "requirement":
+                continue
             row = self._build_tschunk_row(ch, seq=seq)
             if row is None:
                 continue
