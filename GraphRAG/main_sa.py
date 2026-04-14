@@ -280,39 +280,39 @@ def main():
 
     retriever_v2 = FMEASentenceRetrieverV2()
     try:
-        effect_support_v2 = retriever_v2.query_effect_support(
-            product_text="",
-            function_text="Relay switching",
-            effect_texts=[
-                        "Welded relay",
-                        "Relay cannot close",
-                        "False turn-on / turn-off",
-            ],
-            top_k_per_effect=6,
-            per_label_k=50,
-            retrieval_mode="hybrid",
-            expand_positive_variants=True,
-            
-        )
-        print("\n")
-        print_v2_support(effect_support_v2, "effect_support")
-
-        # mode_support_v2 = retriever_v2.query_mode_support(
-        #     element_text="Motor control",
-        #     function_text= "Soft starter",
-        #     mode_texts=[
-        #                 "Component break-down",
-        #                 "Unbalanced motor currents",
+        # effect_support_v2 = retriever_v2.query_effect_support(
+        #     product_text="",
+        #     function_text="Soft starter",
+        #     effect_texts=[
+        #         "Motor cannot start",
+        #         "Motor starts without soft start",
+        #         "Overcurrent towards motor",
         #     ],
-        #     top_k_per_mode=10,
+        #     top_k_per_effect=6,
         #     per_label_k=50,
         #     retrieval_mode="hybrid",
-        #     use_term_bonus_rerank=False,
-        #     use_cross_encoder_rerank=False,
         #     expand_positive_variants=True,
+            
         # )
         # print("\n")
-        # print_v2_support(mode_support_v2, "mode_support")
+        # print_v2_support(effect_support_v2, "effect_support")
+
+        mode_support_v2 = retriever_v2.query_mode_support(
+            element_text="Motor control",
+            function_text= "Soft starter",
+            mode_texts=[
+                        "Component break-down",
+                        "Unbalanced motor currents",
+            ],
+            top_k_per_mode=10,
+            per_label_k=50,
+            retrieval_mode="hybrid",
+            use_term_bonus_rerank=False,
+            use_cross_encoder_rerank=False,
+            expand_positive_variants=True,
+        )
+        print("\n")
+        print_v2_support(mode_support_v2, "mode_support")
     finally:
         retriever_v2.close()
 

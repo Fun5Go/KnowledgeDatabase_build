@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List, Set
 CURRENT_DIR = Path(__file__).resolve().parent
 DEFAULT_INPUT_DIR = CURRENT_DIR / "output"
 DEFAULT_TAXONOMY_FILE = CURRENT_DIR / "fmea_mode_cause_taxonomy.json"
-DEFAULT_ELEMENT_NAME = "Power Supply"
+DEFAULT_ELEMENT_NAME = "Motor control"
 
 STOPWORDS = {
     "a",
