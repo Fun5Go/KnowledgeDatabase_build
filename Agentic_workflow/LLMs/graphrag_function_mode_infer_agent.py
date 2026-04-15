@@ -44,6 +44,7 @@ class GraphRAGFunctionModeInferenceAgent:
                 {
                     "function_text": "string",
                     "mode_text": "string",
+                    "supporting_sentence_ids": [1],
                     "selected": True,
                     "confidence": "high",
                     "reason": "short engineering explanation grounded in the text",
@@ -59,26 +60,31 @@ class GraphRAGFunctionModeInferenceAgent:
 You are an FMEA reasoning agent for technical specification text.
 
 Task:
-1. Read one technical specification entry for a failure element.
+1. Read one grouped technical specification entry for a failure element.
 2. The entry contains:
    - "TechnicalSpecification Choice of Motor control": the specification topic
-   - "Choice": the original technical requirement text
-   - "Rationale": the supporting explanation text, if available
-3. Use "Choice" as the primary evidence.
-4. Use "Rationale" as supporting context only when it helps clarify the intended failure implication.
-5. The input contains several matched functions, and each function has its own candidate failure modes.
-6. Infer the potential failure mode or modes implied by the technical specification entry.
+   - "sentences": a grouped list of sentence entries
+   - each sentence entry contains "Choice" and "Rationale"
+   - "cause_candidates": possible causes grouped under Hardware and Software
+3. Read all sentence entries together.
+4. Use both "Choice" and "Rationale" as important evidence.
+5. The input contains the matched functions once, and each function has its own candidate failure modes.
+6. Infer the potential failure mode or modes implied by the grouped sentences due to function malfunction.
 7. You must ONLY choose from the provided candidates under the provided matched functions.
 8. Return every clearly supported mode. Several modes may be valid.
-9. For every selected mode, you must attach the function_text it belongs to.
-10. For every selected mode, attach evidence_sentences copied from the original Choice or Rationale text.
-11. Evidence must be verbatim text spans from the source text, not paraphrases.
-12. Use engineering logic, but keep every decision grounded in the source text.
-13. Do not invent new functions or new failure modes.
+9. Do not repeat the same function-mode pair more than once.
+10. For every selected mode, you must attach the function_text it belongs to.
+11. For every selected mode, include supporting_sentence_ids from the grouped sentence list.
+12. For every selected mode, attach evidence_sentences copied from the original Choice and/or Rationale text.
+13. Evidence must be verbatim text spans from the source text, not paraphrases.
+14. Use engineering logic, but keep every decision grounded in the grouped source text.
+15. Do not invent new functions or new failure modes.
 
 Decision guidance:
-- One source text can support several failure modes across different functions.
+- One grouped sentence set can support several failure modes across different functions.
+- Treat rationale statements such as "to avoid noise", "to avoid jitter", "to avoid unstable transitions", "to protect hardware", or similar intent explanations as strong evidence of the underlying failure risk.
 - Prefer candidates that are directly implied by timing checks, detection logic, error reporting, startup behavior, unstable transitions, current behavior, or relay behavior in the text.
+- Use cause_candidates only as auxiliary engineering hints. Do not invent new causes.
 - If a function has no well-supported candidate mode, do not select any mode from that function.
 - Keep reasons concise and practical.
 
@@ -114,9 +120,15 @@ Return ONLY valid JSON matching this schema:
     def _clean_result(self, parsed: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
         valid_pairs = self._valid_function_mode_pairs(payload)
         valid_confidence = {"high", "medium", "low"}
-        choice_text = _normalize_text(payload.get("Choice", ""))
-        rationale_text = _normalize_text(payload.get("Rationale", ""))
-        source_text = f"{choice_text} {rationale_text}".strip()
+        sentence_id_lookup = {
+            sentence.get("sentence_id"): sentence
+            for sentence in payload.get("sentences", [])
+        }
+        source_text_parts: List[str] = []
+        for sentence in payload.get("sentences", []):
+            source_text_parts.append(_normalize_text(sentence.get("Choice", "")))
+            source_text_parts.append(_normalize_text(sentence.get("Rationale", "")))
+        source_text = " ".join(part for part in source_text_parts if part).strip()
 
         cleaned_modes: List[Dict[str, Any]] = []
         seen_pairs = set()
@@ -132,6 +144,11 @@ Return ONLY valid JSON matching this schema:
             if confidence not in valid_confidence:
                 confidence = "low"
 
+            supporting_sentence_ids: List[int] = []
+            for sentence_id in item.get("supporting_sentence_ids", []):
+                if sentence_id in sentence_id_lookup and sentence_id not in supporting_sentence_ids:
+                    supporting_sentence_ids.append(sentence_id)
+
             evidence_sentences: List[str] = []
             for evidence in item.get("evidence_sentences", []):
                 evidence_text = (evidence or "").strip()
@@ -143,6 +160,7 @@ Return ONLY valid JSON matching this schema:
             cleaned_modes.append({
                 "function_text": function_text,
                 "mode_text": mode_text,
+                "supporting_sentence_ids": supporting_sentence_ids,
                 "selected": bool(item.get("selected", True)),
                 "confidence": confidence,
                 "reason": (item.get("reason") or "").strip(),
@@ -187,11 +205,12 @@ def pretty_print_function_mode_results(results: List[Dict[str, Any]]) -> None:
     print("=" * 80)
 
     for item in results:
-        print(f"\nChunk: {item.get('chunk_name', '')}")
         print(f"Failure Element: {item.get('failure_element', '')}")
+        print(f"Grouped Sentences: {len(item.get('sentences', []))}")
         for mode in item.get("inferred_modes", []):
             print(f"  - Function  : {mode.get('function_text', '')}")
             print(f"    Mode      : {mode.get('mode_text', '')}")
+            print(f"    Sentences : {mode.get('supporting_sentence_ids', [])}")
             print(f"    Confidence: {mode.get('confidence', '')}")
             print(f"    Reason    : {mode.get('reason', '')}")
             print(f"    Evidence  : {mode.get('evidence_sentences', [])}")

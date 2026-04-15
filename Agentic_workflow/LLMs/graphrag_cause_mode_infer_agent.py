@@ -27,7 +27,7 @@ class GraphRAGCauseModeInferenceAgent:
         self.llm = get_llm_backend(
             backend=backend,
             model=model,
-            temperature=0.0,
+            temperature=0.4,
             json_mode=True,
         )
 

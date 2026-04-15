@@ -46,11 +46,11 @@ ELEMENT_ALIAS_MAP = {
 }
 
 FUNCTION_ALIAS_MAP = {
-    "soft starter": ["soft start", "starter", "motor start"],
-    "zero crossing detection": ["zero crossing", "zero cross", "zcd", "detection"],
-    "zero-crossing detection": ["zero crossing", "zero cross", "zcd", "detection"],
-    "relay switching": ["relay", "switching", "switch", "relay control", "solid state relay", "ssr"],
 }
+
+# FUNCTION_TOKEN_EXCLUDE_MAP = {
+#     "soft starter": {"start", "motor"},
+# }
 
 
 def normalize_text(text: str) -> str:
@@ -156,6 +156,15 @@ def is_label_match(text: str, label: str, label_tokens: Set[str], threshold: flo
     return overlap["coverage"] >= threshold
 
 
+def contains_alias_phrase(normalized_text: str, alias: str) -> bool:
+    normalized_alias = normalize_text(alias)
+    if not normalized_alias:
+        return False
+
+    pattern = r"(?<![a-z0-9])" + re.escape(normalized_alias) + r"(?![a-z0-9])"
+    return re.search(pattern, normalized_text) is not None
+
+
 def is_function_text_match(
     text: str,
     function_aliases: List[str],
@@ -171,8 +180,7 @@ def is_function_text_match(
     text_tokens = token_set(text)
 
     for alias in function_aliases:
-        normalized_alias = normalize_text(alias)
-        if normalized_alias and normalized_alias in normalized_text:
+        if contains_alias_phrase(normalized_text, alias):
             alias_tokens = token_set(alias)
             overlap = compute_overlap(text_tokens, alias_tokens or function_tokens)
             return {
@@ -202,10 +210,13 @@ def is_function_text_match(
 def build_function_definitions(taxonomy: Dict[str, Any]) -> List[Dict[str, Any]]:
     function_defs: List[Dict[str, Any]] = []
     for function_name in taxonomy.get("functions", {}).keys():
+        normalized_function = normalize_text(function_name)
+        function_tokens = expand_tokens(function_name, FUNCTION_ALIAS_MAP)
+    
         function_defs.append(
             {
                 "function": function_name,
-                "tokens": expand_tokens(function_name, FUNCTION_ALIAS_MAP),
+                "tokens": function_tokens,
                 "aliases": get_aliases(function_name, FUNCTION_ALIAS_MAP),
             }
         )
@@ -296,27 +307,44 @@ def match_sections_to_element(
     section_records: List[Dict[str, Any]],
     chunk_records: List[Dict[str, Any]],
     taxonomy: Dict[str, Any],
+    use_section_match: bool = True,
 ) -> List[Dict[str, Any]]:
     element_name = taxonomy.get("failure_element", "")
     element_tokens = expand_tokens(element_name, ELEMENT_ALIAS_MAP)
     function_defs = build_function_definitions(taxonomy)
     candidate_sections: Set[Tuple[str, str]] = set()
 
-    for section in section_records:
-        section_tag = section.get("section_tag", "")
-        discipline = section.get("discipline", "")
-        if not section_tag:
-            continue
+    if use_section_match:
+        for section in section_records:
+            section_tag = section.get("section_tag", "")
+            discipline = section.get("discipline", "")
+            if not section_tag:
+                continue
 
-        for function_def in function_defs:
             if is_label_match(
                 section_tag,
-                function_def["function"],
-                function_def["tokens"],
+                element_name,
+                element_tokens,
                 threshold=0.25,
             ):
                 candidate_sections.add((section_tag, discipline))
-                break
+                continue
+
+            for function_def in function_defs:
+                if is_label_match(
+                    section_tag,
+                    function_def["function"],
+                    function_def["tokens"],
+                    threshold=0.25,
+                ):
+                    candidate_sections.add((section_tag, discipline))
+                    break
+    else:
+        candidate_sections = {
+            (chunk.get("section_tag", ""), chunk.get("discipline", ""))
+            for chunk in chunk_records
+            if chunk.get("section_tag", "")
+        }
 
     results: List[Dict[str, Any]] = []
 
@@ -375,7 +403,7 @@ def write_json(data: Any, output_path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Match candidate TS sections first by section_tag, then output chunk_name with matched functions based on full chunk text."
+        description="Optionally filter TS chunks by section_tag first, then output chunk_name with matched functions based on full chunk text."
     )
     parser.add_argument(
         "--input-dir",
@@ -400,6 +428,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Where to write chunk matching results. Defaults to <element>_ts_chunk_function_matches.json.",
     )
+    parser.add_argument(
+        "--disable-section-match",
+        action="store_true",
+        help="Disable section_tag pre-filtering and traverse all TS nodes instead.",
+    )
     return parser.parse_args()
 
 
@@ -413,7 +446,12 @@ def main() -> None:
     )
     section_records = build_section_records(chunks)
     chunk_records = build_chunk_records(chunks)
-    results = match_sections_to_element(section_records, chunk_records, taxonomy)
+    results = match_sections_to_element(
+        section_records,
+        chunk_records,
+        taxonomy,
+        use_section_match=not args.disable_section_match,
+    )
 
     if args.output_file is None:
         safe_element = normalize_text(args.element_name).replace(" ", "_")
@@ -424,6 +462,7 @@ def main() -> None:
     write_json(results, output_file)
     print(f"Loaded {len(chunks)} TSChunk rows")
     print(f"Built {len(section_records)} unique TS sections")
+    print(f"Section match enabled: {not args.disable_section_match}")
     print(f"Wrote {len(results)} chunk match records to {output_file}")
 
 
