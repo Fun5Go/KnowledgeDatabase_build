@@ -33,11 +33,13 @@ DEFAULT_OUTPUT_FILE = (
     / "motor_control_ts_function_mode_inference.json"
 )
 
-# Set this in main when you want to group by one exact matched-function set.
+# Set this in main when you want to query one or more functions.
+# The script will collect every record whose matched_functions contains
+# any queried function, even if the record also contains other functions.
 # Examples:
-# ["Soft Starter", "Relay switching"]
+# ["Soft Starter"]
 # ["Zero-crossing detection"]
-DEFAULT_TARGET_MATCHED_FUNCTIONS: Optional[List[str]] = ["Soft starter"]
+DEFAULT_QUERY_FUNCTIONS: Optional[List[str]] = ["Relay Switching"]
 
 
 MOTOR_CONTROL_STRUCTURE = {
@@ -89,6 +91,17 @@ def write_json(data: Any, path: Path) -> None:
         json.dumps(data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def unique_preserve_order(items: List[str]) -> List[str]:
+    ordered: List[str] = []
+    seen = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
 
 
 def build_function_mode_lookup(structure_input: Dict[str, Any]) -> Dict[str, List[str]]:
@@ -151,17 +164,17 @@ def find_node_record(
     return records
 
 
-def filter_records_by_matched_functions(
+def filter_records_by_query_functions(
     records: List[Dict[str, Any]],
-    target_functions: Optional[List[str]] = None,
+    query_functions: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    if not target_functions:
+    if not query_functions:
         return records
 
-    target_key = normalize_function_list(target_functions)
+    query_set = set(normalize_function_list(query_functions))
     return [
         record for record in records
-        if normalize_function_list(record.get("matched_functions", [])) == target_key
+        if query_set.intersection(normalize_function_list(record.get("matched_functions", [])))
     ]
 
 
@@ -169,11 +182,13 @@ def build_payloads_for_record(
     record: Dict[str, Any],
     function_mode_lookup: Dict[str, List[str]],
     cause_lookup: Dict[str, List[str]],
+    selected_functions: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     matched_functions: List[Dict[str, Any]] = []
     seen_functions = set()
+    function_source = selected_functions or record.get("matched_functions", [])
 
-    for function_text in record.get("matched_functions", []):
+    for function_text in function_source:
         normalized_function = (function_text or "").strip().lower()
         if not normalized_function or normalized_function in seen_functions:
             continue
@@ -208,12 +223,27 @@ def group_records_for_inference(
     records: List[Dict[str, Any]],
     function_mode_lookup: Dict[str, List[str]],
     cause_lookup: Dict[str, List[str]],
+    query_functions: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     grouped: Dict[Tuple[str, str, Tuple[str, ...]], Dict[str, Any]] = {}
+    group_functions = query_functions or []
 
     for record in records:
-        payload = build_payloads_for_record(record, function_mode_lookup, cause_lookup)
-        group_key = build_group_key(record)
+        selected_functions = query_functions or record.get("matched_functions", [])
+        payload = build_payloads_for_record(
+            record,
+            function_mode_lookup,
+            cause_lookup,
+            selected_functions=selected_functions,
+        )
+        if query_functions:
+            group_key = (
+                (record.get("failure_element") or "").strip(),
+                "Motor control",
+                normalize_function_list(query_functions),
+            )
+        else:
+            group_key = build_group_key(record)
 
         if group_key not in grouped:
             grouped[group_key] = {
@@ -223,6 +253,7 @@ def group_records_for_inference(
                     "TechnicalSpecification Choice of Motor control", ""
                 ),
                 "cause_candidates": payload.get("cause_candidates", {}),
+                "query_functions": list(group_functions),
                 "matched_functions": payload.get("matched_functions", []),
                 "sentences": [],
             }
@@ -234,6 +265,7 @@ def group_records_for_inference(
             "section_tag": payload.get("section_tag", ""),
             "Choice": payload.get("Choice", ""),
             "Rationale": payload.get("Rationale", ""),
+            "original_matched_functions": record.get("matched_functions", []),
         })
 
     return list(grouped.values())
@@ -247,10 +279,16 @@ def group_records_for_inference(
 def build_inference_payloads(
     records: List[Dict[str, Any]],
     structure_input: Dict[str, Any],
+    query_functions: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     function_mode_lookup = build_function_mode_lookup(structure_input)
     cause_lookup = build_cause_lookup(structure_input)
-    return group_records_for_inference(records, function_mode_lookup, cause_lookup)
+    return group_records_for_inference(
+        records,
+        function_mode_lookup,
+        cause_lookup,
+        query_functions=query_functions,
+    )
 
 
 @traceable(
@@ -276,12 +314,29 @@ def run_function_mode_inference(
         inferred["TechnicalSpecification Choice of Motor control"] = payload.get(
             "TechnicalSpecification Choice of Motor control", ""
         )
+        inferred["query_functions"] = payload.get("query_functions", [])
         inferred["sentences"] = payload.get("sentences", [])
         inferred["cause_candidates"] = payload.get("cause_candidates", {})
         inferred["matched_functions"] = payload.get("matched_functions", [])
         results.append(inferred)
 
     return results
+
+
+def print_group_summary(payloads: List[Dict[str, Any]]) -> None:
+    for payload in payloads:
+        query_functions = payload.get("query_functions", [])
+        sentences = payload.get("sentences", [])
+        sections = unique_preserve_order([
+            (sentence.get("section_tag") or "").strip()
+            for sentence in sentences
+            if (sentence.get("section_tag") or "").strip()
+        ])
+
+        print(f"query_functions = {query_functions}")
+        print(f"matched sentence count = {len(sentences)}")
+        print(f"sections covered = {json.dumps(sections, ensure_ascii=False)}")
+        print()
 
 
 def parse_args() -> argparse.Namespace:
@@ -325,8 +380,8 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help=(
-            "Exact matched_functions group to run, for example "
-            "--matched-functions 'Soft Starter' 'Relay switching'"
+            "Query one or more functions, for example "
+            "--matched-functions 'Soft Starter'"
         ),
     )
     return parser.parse_args()
@@ -336,13 +391,13 @@ def main() -> None:
     args = parse_args()
     input_records = load_json(args.input_file)
 
-    target_matched_functions = (
+    query_functions = (
         args.matched_functions
         if args.matched_functions is not None
-        else DEFAULT_TARGET_MATCHED_FUNCTIONS
+        else DEFAULT_QUERY_FUNCTIONS
     )
 
-    if args.all or target_matched_functions:
+    if args.all or query_functions:
         selected_records = input_records
     else:
         selected_records = find_node_record(
@@ -351,21 +406,24 @@ def main() -> None:
             chunk_name=args.chunk_name,
         )
 
-    selected_records = filter_records_by_matched_functions(
+    selected_records = filter_records_by_query_functions(
         records=selected_records,
-        target_functions=target_matched_functions,
+        query_functions=query_functions,
     )
 
     if not selected_records:
         raise ValueError(
-            "No records matched the requested matched_functions group: "
-            f"{target_matched_functions}"
+            "No records matched the requested query_functions: "
+            f"{query_functions}"
         )
 
     payloads = build_inference_payloads(
         records=selected_records,
         structure_input=MOTOR_CONTROL_STRUCTURE,
+        query_functions=query_functions,
     )
+
+    print_group_summary(payloads)
 
     results = run_function_mode_inference(
         payloads=payloads,
