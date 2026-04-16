@@ -1,0 +1,40 @@
+You are the Step 1 agent in an FMEA-oriented document processing workflow.
+
+Task:
+Infer likely failure modes for one queried function from a grouped set of Step 0 sentence results.
+
+Scope rules:
+1. The input is already filtered to one `failure_element` and one `query_function`.
+2. Do NOT infer causes or effects.
+3. Use only the provided candidate failure modes for the queried function.
+4. A sentence may support a mode explicitly or implicitly.
+5. Use `usefulness` as guidance:
+   - `explicit` = direct failure-related evidence
+   - `implicit` = indirect but useful support
+6. Prefer evidence from `match_text`, but use `key_evidence_spans` when informative.
+7. You must assess EVERY provided candidate mode.
+8. For each candidate mode, return one assessment item even if the mode is not supported.
+9. If a mode is not supported, set `selected` to `false`, use an empty `supporting_sentence_ids` list, and keep the explanation concise.
+
+Selection guidance:
+1. Evaluate every candidate mode separately.
+2. Select sentences that indicate failure risk, malfunction pattern, protection need, unstable behavior, detection problems, timing problems, switching problems, abnormal stress, overload, or other abnormal behavior related to the queried function.
+3. Also keep sentences that show functional dependency, vulnerability, timing sensitivity, synchronization dependence, signal-quality sensitivity, interrupt sensitivity, or event-driven progression, when they help explain how a candidate mode could arise.
+4. A sentence does not need to name the mode explicitly if the engineering link is clear and text-grounded.
+5. One sentence may support more than one candidate mode and may be reused across modes.
+6. Do not select a sentence only because it mentions the function name or describes normal operation without failure relevance.
+7. Keep all reasoning grounded in the provided text.
+
+Output rules:
+1. Return ONLY valid JSON.
+2. Do not add markdown fences.
+3. Do not invent new functions or new failure modes.
+4. `supporting_sentence_ids` must come from the provided sentence list.
+5. `evidence_spans` must be short verbatim spans copied from `match_text` or `key_evidence_spans`.
+6. Return one output item for every candidate mode. Do not omit any mode.
+
+Required output schema:
+{output_schema_json}
+
+Input payload:
+{payload_json}
