@@ -8,6 +8,7 @@ from collections import defaultdict
 from dotenv import load_dotenv
 from tqdm import tqdm
 from neo4j import GraphDatabase
+from neo4j.exceptions import ServiceUnavailable, AuthError
 from chromadb.utils import embedding_functions
 import numpy as np
 
@@ -19,15 +20,15 @@ import numpy as np
 load_dotenv()
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_USER = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
 # failure/entity json
-JSON_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_expand\failure_kb\entity_store.json"
+JSON_FILE = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\failure_kb\entity_store.json"
 
 # sentence json
-SENTENCE_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_expand\sentence_kb\sentence_store.json"
+SENTENCE_JSON = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\KB_motor_drives_complete\sentence_kb\sentence_store.json"
 
 CAUSE_GROUP = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\cause_groups_refined_v2.json"
 EFFECT_GROUP = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\process_KB\effect_groups_refined_v2.json"
@@ -117,6 +118,18 @@ class FMEAVectorKGBuilder:
             """
             CREATE CONSTRAINT effect_id IF NOT EXISTS
             FOR (n:Effect) REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT prevention_id IF NOT EXISTS
+            FOR (n:Prevention) REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT detection_method_id IF NOT EXISTS
+            FOR (n:DetectionMethod) REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT recommendation_id IF NOT EXISTS
+            FOR (n:Recommendation) REQUIRE n.semantic_id IS UNIQUE
             """,
             """
             CREATE CONSTRAINT failure_id IF NOT EXISTS
@@ -333,6 +346,7 @@ class FMEAVectorKGBuilder:
             MERGE (e:Effect {semantic_id:$id})
             SET e.text=$text,
                 e.embedding=$embedding,
+                e.severity=$severity,
                 e.source_type=$source_type,
                 e.fmea_type=$fmea_type,
                 e.name=$text
@@ -340,10 +354,81 @@ class FMEAVectorKGBuilder:
             id=effect_id,
             text=text,
             embedding=embedding,
+            severity=item.get("severity"),
             source_type=safe_text(item.get("source_type")),
             fmea_type=safe_text(item.get("fmea_type")),
         )
         return effect_id
+
+    def merge_prevention(self, session, item) -> Optional[str]:
+        text = safe_text(item.get("prevention"))
+        if not text:
+            return None
+
+        prevention_id = f"prevention:{stable_id(text)}"
+
+        session.run(
+            """
+            MERGE (p:Prevention {semantic_id:$id})
+            SET p.text=$text,
+                p.occurrence=$occurrence,
+                p.source_type=$source_type,
+                p.fmea_type=$fmea_type,
+                p.name=$text
+            """,
+            id=prevention_id,
+            text=text,
+            occurrence=item.get("occurrence"),
+            source_type=safe_text(item.get("source_type")),
+            fmea_type=safe_text(item.get("fmea_type")),
+        )
+        return prevention_id
+
+    def merge_detection_method(self, session, item) -> Optional[str]:
+        text = safe_text(item.get("detection_method"))
+        if not text:
+            return None
+
+        detection_id = f"detection:{stable_id(text)}"
+
+        session.run(
+            """
+            MERGE (d:DetectionMethod {semantic_id:$id})
+            SET d.text=$text,
+                d.detection=$detection,
+                d.source_type=$source_type,
+                d.fmea_type=$fmea_type,
+                d.name=$text
+            """,
+            id=detection_id,
+            text=text,
+            detection=item.get("detection"),
+            source_type=safe_text(item.get("source_type")),
+            fmea_type=safe_text(item.get("fmea_type")),
+        )
+        return detection_id
+
+    def merge_recommendation(self, session, item) -> Optional[str]:
+        text = safe_text(item.get("recommended_action"))
+        if not text:
+            return None
+
+        recommendation_id = f"recommendation:{stable_id(text)}"
+
+        session.run(
+            """
+            MERGE (r:Recommendation {semantic_id:$id})
+            SET r.text=$text,
+                r.source_type=$source_type,
+                r.fmea_type=$fmea_type,
+                r.name=$text
+            """,
+            id=recommendation_id,
+            text=text,
+            source_type=safe_text(item.get("source_type")),
+            fmea_type=safe_text(item.get("fmea_type")),
+        )
+        return recommendation_id
 
     def merge_failure(self, session, item) -> Optional[str]:
         failure_id = item.get("failure_id")
@@ -444,6 +529,9 @@ class FMEAVectorKGBuilder:
         mode_id: Optional[str],
         cause_id: Optional[str],
         effect_id: Optional[str],
+        prevention_id: Optional[str],
+        detection_method_id: Optional[str],
+        recommendation_id: Optional[str],
     ):
         if element_id and function_id:
             session.run(
@@ -492,6 +580,39 @@ class FMEAVectorKGBuilder:
                 """,
                 mode=mode_id,
                 effect=effect_id,
+            )
+
+        if prevention_id and cause_id:
+            session.run(
+                """
+                MATCH (p:Prevention {semantic_id:$prevention})
+                MATCH (c:Cause {semantic_id:$cause})
+                MERGE (p)-[:PREVENT]->(c)
+                """,
+                prevention=prevention_id,
+                cause=cause_id,
+            )
+
+        if detection_method_id and cause_id:
+            session.run(
+                """
+                MATCH (d:DetectionMethod {semantic_id:$detection_method})
+                MATCH (c:Cause {semantic_id:$cause})
+                MERGE (d)-[:DETECT]->(c)
+                """,
+                detection_method=detection_method_id,
+                cause=cause_id,
+            )
+
+        if recommendation_id and cause_id:
+            session.run(
+                """
+                MATCH (r:Recommendation {semantic_id:$recommendation})
+                MATCH (c:Cause {semantic_id:$cause})
+                MERGE (r)-[:ACTION]->(c)
+                """,
+                recommendation=recommendation_id,
+                cause=cause_id,
             )
 
     # ----------------------------------------
@@ -615,6 +736,9 @@ class FMEAVectorKGBuilder:
             "mode": 0,
             "cause": 0,
             "effect": 0,
+            "prevention": 0,
+            "detection_method": 0,
+            "recommendation": 0,
             "failure": 0,
             "product": 0,
         }
@@ -641,6 +765,18 @@ class FMEAVectorKGBuilder:
                 if not effect_id:
                     skipped["effect"] += 1
 
+                prevention_id = self.merge_prevention(session, item)
+                if not prevention_id:
+                    skipped["prevention"] += 1
+
+                detection_method_id = self.merge_detection_method(session, item)
+                if not detection_method_id:
+                    skipped["detection_method"] += 1
+
+                recommendation_id = self.merge_recommendation(session, item)
+                if not recommendation_id:
+                    skipped["recommendation"] += 1
+
                 failure_id = self.merge_failure(session, item)
                 if not failure_id:
                     skipped["failure"] += 1
@@ -657,6 +793,9 @@ class FMEAVectorKGBuilder:
                     mode_id=mode_id,
                     cause_id=cause_id,
                     effect_id=effect_id,
+                    prevention_id=prevention_id,
+                    detection_method_id=detection_method_id,
+                    recommendation_id=recommendation_id,
                 )
 
                 # Failure 实例层
@@ -1102,35 +1241,45 @@ def main():
     )
 
     try:
-        # print("Creating constraints...")
-        # builder.create_constraints()
+        print("Creating constraints...")
+        builder.create_constraints()
 
-        # print("Creating vector indexes...")
-        # builder.create_vector_indexes()
+        print("Creating vector indexes...")
+        builder.create_vector_indexes()
 
-        # print("Building main graph...")
-        # builder.build_graph(JSON_FILE)
+        print("Building main graph...")
+        builder.build_graph(JSON_FILE)
 
-        # print("Building cause sentence groups...")
-        # builder.build_cause_sentence_groups(SENTENCE_JSON)
+        print("Building cause sentence groups...")
+        builder.build_cause_sentence_groups(SENTENCE_JSON)
 
-        # print("Building 8D failure sentence groups...")
-        # builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
+        print("Building 8D failure sentence groups...")
+        builder.build_failure_sentence_groups(JSON_FILE, SENTENCE_JSON)
 
-        # print("Vector KG build complete.")
+        print("Vector KG build complete.")
 
-        print("Merge mode groups (pass1):")
-        builder.merge_all_groups(MODE_GROUP)
+        # print("Merge mode groups (pass1):")
+        # builder.merge_all_groups(MODE_GROUP)
 
-        print("\nMerge effect groups:")
-        builder.merge_all_groups(EFFECT_GROUP)
+        # print("\nMerge effect groups:")
+        # builder.merge_all_groups(EFFECT_GROUP)
 
-        print("\nMerge cause groups:")
-        builder.merge_all_groups(CAUSE_GROUP)   # 你这里原来写 e，是 bug
+        # print("\nMerge cause groups:")
+        # builder.merge_all_groups(CAUSE_GROUP)   # 你这里原来写 e，是 bug
 
-        print("\nMerge mode groups (pass2, fix Cause->GroupMode to GroupCause->GroupMode):")
-        builder.merge_all_groups(MODE_GROUP)
+        # print("\nMerge mode groups (pass2, fix Cause->GroupMode to GroupCause->GroupMode):")
+        # builder.merge_all_groups(MODE_GROUP)
 
+    except ServiceUnavailable as exc:
+        print(f"Neo4j connection failed: {exc}")
+        print(f"Configured URI: {NEO4J_URI}")
+        print("Please start the Neo4j server, or update .env to a reachable Neo4j instance.")
+        print("If you are using Neo4j Aura, set NEO4J_URI / NEO4J_USER (or NEO4J_USERNAME) / NEO4J_PASSWORD / NEO4J_DATABASE.")
+    except AuthError as exc:
+        print(f"Neo4j authentication failed: {exc}")
+        print(f"Configured URI: {NEO4J_URI}")
+        print(f"Configured user: {NEO4J_USER}")
+        print("Please verify the Neo4j username and password in .env.")
     finally:
         builder.close()
 
