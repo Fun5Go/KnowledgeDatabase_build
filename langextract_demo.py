@@ -39,9 +39,17 @@ def configure_langsmith(project_name: str | None = None) -> str:
 LANGSMITH_PROJECT_NAME = configure_langsmith()
 
 prompt = textwrap.dedent("""\
-Extract characters, emotions, and relationships in order of appearance.
-Use exact text for extractions. Do not paraphrase or overlap entities.
-Provide meaningful attributes for each entity to add context.
+Extract the specification sentence into six exact spans:
+1. element: the equipment, system, or subject being specified
+2. action: the governing modal/action verb phrase
+3. function: the capability, requirement, or performance phrase
+4. condition: the triggering condition, constraint, or context introduced by words like "when", "if", or "while"
+5. scope: the applicability range or operating subset introduced by phrases like "for", "on", "in", or "individually on"
+6. reference: a pronoun or reference word such as "it" that points back to an earlier entity
+
+Use exact text spans only. Do not paraphrase.
+Return the spans in order of appearance and do not overlap them.
+If a reference span is present, add an attribute that names its referent.
 """)
 
 examples = [
@@ -51,26 +59,89 @@ examples = [
         ),
         extractions=[
             lx.data.Extraction(
-                extraction_class="Element",
+                extraction_class="element",
                 extraction_text="electronic soft-starter",
-                attributes={"emotional_state": "wonder"},
+                attributes={"role": "specified system element"},
             ),
             lx.data.Extraction(
-                extraction_class="requirement",
+                extraction_class="action",
                 extraction_text="shall support",
-                attributes={"feeling": "gentle awe"},
+                attributes={"role": "requirement action"},
             ),
             lx.data.Extraction(
-                extraction_class="relationship",
-                extraction_text="Juliet is the sun",
-                attributes={"type": "metaphor"},
+                extraction_class="function",
+                extraction_text="up to 15 start/stop per hour",
+                attributes={"role": "performance requirement"},
+            ),
+        ],
+    ),
+    lx.data.ExampleData(
+        text=(
+            "The Safety module will report an SAFETY_ERROR_OVERVOLTAGE error when the measured rms input voltage is below the configurable parameter voltage_in - 15% for more than 10 seconds."
+        ),
+        extractions=[
+            lx.data.Extraction(
+                extraction_class="element",
+                extraction_text="Safety module",
+                attributes={"role": "specified system element"},
+            ),
+            lx.data.Extraction(
+                extraction_class="action",
+                extraction_text="will report",
+                attributes={"role": "requirement action"},
+            ),
+            lx.data.Extraction(
+                extraction_class="function",
+                extraction_text="an SAFETY_ERROR_OVERVOLTAGE error",
+                attributes={"role": "performance requirement"},
+            ),
+            lx.data.Extraction(
+                extraction_class="condition",
+                extraction_text="when the measured rms input voltage is below the configurable parameter voltage_in - 15% for more than 10 seconds",
+                attributes={"role": "triggering condition"},
+            ),
+        ],
+    ),
+    lx.data.ExampleData(
+        text=(
+            "The startSoftStartAlgorithm function will function individually on phases U and W, for each of these phases it will have an Zero Crossing Detection Input that will be active high when a zero crossing is detected."
+        ),
+        extractions=[
+            lx.data.Extraction(
+                extraction_class="element",
+                extraction_text="startSoftStartAlgorithm function",
+                attributes={"role": "specified function element"},
+            ),
+            lx.data.Extraction(
+                extraction_class="action",
+                extraction_text="will function",
+                attributes={"role": "requirement action"},
+            ),
+            lx.data.Extraction(
+                extraction_class="scope",
+                extraction_text="individually on phases U and W",
+                attributes={"role": "operating scope"},
+            ),
+            lx.data.Extraction(
+                extraction_class="reference",
+                extraction_text="it",
+                attributes={"refers_to": "startSoftStartAlgorithm function"},
+            ),
+            lx.data.Extraction(
+                extraction_class="connected_component",
+                extraction_text="Zero Crossing Detection Input",
+                attributes={"role": "associated input"},
+            ),
+            lx.data.Extraction(
+                extraction_class="condition",
+                extraction_text="when a zero crossing is detected",
+                attributes={"role": "triggering condition"},
             ),
         ],
     )
 ]
 
-input_text = "Lady Juliet gazed longingly at the stars, her heart aching for Romeo"
-
+input_text = "The soft start algorithm will start with a 200ms delay after the last motor relay has been swapped, and will stop with a 200ms delay after the bypass relays have been swapped."
 api_key = os.getenv("OPENAI_API_KEY") or os.getenv("LANGEXTRACT_API_KEY")
 if not api_key:
     raise RuntimeError(
@@ -135,7 +206,7 @@ def main(text_or_documents: str, prompt_description: str) -> dict[str, str]:
             config=model_config,
         )
 
-    output_dir = Path("outputs") / "langextract_demo"
+    output_dir = Path("outputs") / "langextract_spefication"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_file = output_dir / "extraction_results.jsonl"
