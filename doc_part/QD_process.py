@@ -1,7 +1,7 @@
 import os
 import re
 import json
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 
 import pdfplumber
 
@@ -28,6 +28,8 @@ DRQ_ID_PATTERN = re.compile(r"\bDRQ_\d+\*?\b")
 REF_PATTERN = re.compile(r"\[\d+\]")
 
 QD_TITLE_PATTERN = re.compile(r"^QD\s*:\s*(.+)$", re.I)
+TOC_ENTRY_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\.{2,}\s*(\d+)\s*$")
+SECTION_HEADING_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\s*$")
 
 SECTION_LABELS = {"Objectives", "Preconditions"}
 
@@ -35,6 +37,12 @@ SECTION_LABELS = {"Objectives", "Preconditions"}
 # =========================================================
 # BASIC UTILS
 # =========================================================
+
+def safe_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
 def normalize_spaces(text: str) -> str:
     if not text:
         return ""
@@ -186,6 +194,18 @@ def parse_qd_id(text: str) -> Optional[str]:
     return m.group(0) if m else None
 
 
+def strip_qd_id_prefix(text: str, qd_id: str) -> str:
+    t = clean_line(text)
+    q = clean_line(qd_id)
+    if not t or not q:
+        return ""
+    pattern = rf"^{re.escape(q)}\s*(.*)$"
+    m = re.match(pattern, t, re.I)
+    if m:
+        return clean_line(m.group(1))
+    return ""
+
+
 def parse_tst_left_label(text: str) -> Dict:
     tst_id = next(iter(TST_ID_PATTERN.findall(text)), None)
     verified_ids = extract_verified_ids(text)
@@ -197,6 +217,187 @@ def parse_tst_left_label(text: str) -> Dict:
         "refs": refs,
         "raw_label": clean_line(text),
     }
+
+
+def parse_toc_line(text: str) -> Optional[Dict[str, Any]]:
+    match = TOC_ENTRY_PATTERN.match(clean_line(text))
+    if not match:
+        return None
+
+    number = match.group(1)
+    title = clean_line(match.group(2))
+    page = int(match.group(3))
+
+    return {
+        "number": number,
+        "title": title,
+        "page": page,
+        "level": min(number.count(".") + 1, 4),
+        "full_text": clean_line(f"{number} {title}"),
+    }
+
+
+def extract_toc_entries_from_pdf(pdf) -> Dict[str, Dict[str, Any]]:
+    entries: Dict[str, Dict[str, Any]] = {}
+    in_toc = False
+    started_collecting = False
+    non_match_streak = 0
+
+    for page in pdf.pages[:10]:
+        cropped = page.crop((0, HEADER_CROP, page.width, page.height))
+        page_text = cropped.extract_text() or ""
+        if not page_text:
+            continue
+
+        lines = [clean_line(line) for line in page_text.splitlines() if clean_line(line)]
+        for line in lines:
+            low = line.lower()
+            if "table of contents" in low:
+                in_toc = True
+                non_match_streak = 0
+                continue
+
+            if not in_toc:
+                continue
+
+            entry = parse_toc_line(line)
+            if entry:
+                entries[entry["full_text"].lower()] = entry
+                started_collecting = True
+                non_match_streak = 0
+                continue
+
+            if started_collecting:
+                non_match_streak += 1
+                if re.match(r"^\s*1\s+", line) or non_match_streak >= 8:
+                    return entries
+
+    return entries
+
+
+def get_toc_section_list(toc_entries: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(toc_entries.values(), key=lambda item: (item["page"], item["number"]))
+
+
+def find_toc_entry_for_heading(text: str, toc_entries: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
+    if not toc_entries:
+        return None
+    return toc_entries.get(clean_line(text).lower())
+
+
+def match_toc_section_info(
+    text: str,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    toc_entry = find_toc_entry_for_heading(text, toc_entries)
+    if toc_entry is None:
+        return None
+
+    return {
+        "number": toc_entry["number"],
+        "title": toc_entry["title"],
+        "level": toc_entry["level"],
+        "full_text": toc_entry["full_text"],
+    }
+
+
+def parse_section_heading_info(
+    text: str,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    if not text:
+        return None
+
+    t = clean_line(text)
+    if not t:
+        return None
+
+    toc_info = match_toc_section_info(t, toc_entries=toc_entries)
+    if toc_info is not None:
+        return toc_info
+
+    match = SECTION_HEADING_PATTERN.match(t)
+    if not match:
+        return None
+
+    number = clean_line(match.group(1))
+    title = clean_line(match.group(2))
+    if not number:
+        return None
+
+    return {
+        "number": number,
+        "title": title,
+        "level": min(number.count(".") + 1, 4),
+        "full_text": clean_line(f"{number} {title}") if title else number,
+    }
+
+
+def detect_page_section_info(
+    line_infos: List[Dict],
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    for line in line_infos:
+        info = match_toc_section_info(line.get("text", ""), toc_entries=toc_entries)
+        if info is not None:
+            return info
+    return None
+
+
+def is_qd_boundary_line(text: str, toc_entries: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+    t = clean_line(text)
+    if not t:
+        return False
+    if QD_TITLE_PATTERN.match(t):
+        return True
+    return match_toc_section_info(t, toc_entries=toc_entries) is not None
+
+
+def collect_page_section_hits(
+    line_infos: List[Dict],
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    hits: List[Dict[str, Any]] = []
+    seen = set()
+    for line in line_infos:
+        info = match_toc_section_info(line.get("text", ""), toc_entries=toc_entries)
+        if info is None:
+            continue
+        key = clean_line(info["full_text"]).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        hits.append(info)
+    return hits
+
+
+def split_table_lines_for_tst_and_qd(
+    table_lines: List[Dict],
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[List[Dict], List[Dict]]:
+    tst_lines: List[Dict] = []
+    qd_tail_lines: List[Dict] = []
+    tail_started = False
+
+    for line in table_lines:
+        full_text = clean_line(line["text"])
+        if not tail_started and is_qd_boundary_line(full_text, toc_entries=toc_entries):
+            tail_started = True
+
+        if tail_started:
+            qd_tail_lines.append(line)
+        else:
+            tst_lines.append(line)
+
+    return tst_lines, qd_tail_lines
+
+
+def make_qualification_document_id(file_path: str) -> str:
+    return os.path.splitext(os.path.basename(file_path))[0]
+
+
+def get_section_node_semantic_id(document_id: str, section_number: str) -> str:
+    return f"{document_id}::section::{section_number}"
 
 
 # =========================================================
@@ -266,19 +467,11 @@ def append_field(obj: Dict, key: str, text: str):
         obj[key] = text
 
 
-# =========================================================
-# QD BLOCK PARSER
-# =========================================================
-def parse_qd_block(
-    qd_lines: List[Dict],
-    left_boundary: float = LEFT_QD_BOUNDARY,
-) -> Dict:
-    """
-    解析表格上方的 QD 描述区域:
-      - 左侧: QD_49 + verified ids + refs
-      - 右侧: QD : title / Objectives / Preconditions
-    """
-    result = {
+def make_empty_qd_block(
+    section_info: Optional[Dict[str, Any]] = None,
+    document_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    block = {
         "qd_id": None,
         "verified_ids": [],
         "refs": [],
@@ -287,13 +480,91 @@ def parse_qd_block(
         "preconditions": "",
         "raw_lines": [],
         "raw_left_label_lines": [],
+        "tests": [],
+        "section_tag": safe_text(section_info.get("full_text")) if section_info else "",
+        "section_number": safe_text(section_info.get("number")) if section_info else "",
+        "section_title": safe_text(section_info.get("title")) if section_info else "",
+        "section_level": section_info.get("level") if section_info else None,
+        "section_node_id": "",
     }
 
-    current_section = None
+    if section_info and section_info.get("number") and document_id:
+        block["section_node_id"] = get_section_node_semantic_id(document_id, section_info["number"])
+
+    return block
+
+
+def apply_section_info_to_block(
+    block: Dict[str, Any],
+    section_info: Optional[Dict[str, Any]],
+    document_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not section_info:
+        return block
+
+    block["section_tag"] = safe_text(section_info.get("full_text"))
+    block["section_number"] = safe_text(section_info.get("number"))
+    block["section_title"] = safe_text(section_info.get("title"))
+    block["section_level"] = section_info.get("level")
+    block["section_node_id"] = ""
+    if section_info.get("number") and document_id:
+        block["section_node_id"] = get_section_node_semantic_id(document_id, section_info["number"])
+    return block
+
+
+# =========================================================
+# QD BLOCK PARSER
+# =========================================================
+def parse_qd_blocks(
+    qd_lines: List[Dict],
+    left_boundary: float = LEFT_QD_BOUNDARY,
+    section_info: Optional[Dict[str, Any]] = None,
+    document_id: Optional[str] = None,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict]:
+    """
+    解析表格上方的 QD 描述区域:
+      - 左侧: QD_49 + verified ids + refs
+      - 右侧: QD : title / Objectives / Preconditions
+    """
+    blocks: List[Dict[str, Any]] = []
+    result = make_empty_qd_block(section_info=section_info, document_id=document_id)
+    current_section_info = section_info
+    current_content_section = None
+    pending_qd_title = ""
+
+    def finalize_current_block(block: Dict[str, Any]):
+        block["verified_ids"] = unique_keep_order(block["verified_ids"])
+        block["refs"] = unique_keep_order(block["refs"])
+        block["objectives"] = clean_multiline_text(block["objectives"])
+        block["preconditions"] = clean_multiline_text(block["preconditions"])
+        blocks.append(block)
 
     for line in qd_lines:
         full_text = clean_line(line["text"])
         if not full_text or is_noise_line(full_text):
+            continue
+
+        line_section = match_toc_section_info(full_text, toc_entries=toc_entries)
+        if line_section is not None:
+            current_section_info = line_section
+            has_block_content = bool(
+                result["qd_id"]
+                or result["raw_lines"]
+                or result["verified_ids"]
+                or result["refs"]
+                or result["qd_title"]
+                or result["objectives"]
+                or result["preconditions"]
+            )
+            if has_block_content:
+                finalize_current_block(result)
+                result = make_empty_qd_block(section_info=line_section, document_id=document_id)
+                current_content_section = None
+                pending_qd_title = ""
+            else:
+                apply_section_info_to_block(result, line_section, document_id=document_id)
+            current_content_section = None
             continue
 
         left_words = [w for w in line["words"] if w["x0"] < left_boundary]
@@ -302,51 +573,102 @@ def parse_qd_block(
         left_text = words_to_text(left_words)
         right_text = words_to_text(right_words)
 
+        qd_id = parse_qd_id(left_text)
+        if not qd_id and not result["qd_id"]:
+            qd_id = parse_qd_id(full_text)
+
+        if qd_id and qd_id != result["qd_id"]:
+            if result["qd_id"]:
+                finalize_current_block(result)
+                result = make_empty_qd_block(section_info=current_section_info, document_id=document_id)
+                current_content_section = None
+            result["qd_id"] = qd_id
+            if pending_qd_title and not result["qd_title"]:
+                result["qd_title"] = pending_qd_title
+                pending_qd_title = ""
+
+        if not result["qd_id"] and qd_id:
+            result["qd_id"] = qd_id
+
         result["raw_lines"].append(full_text)
 
         if left_text:
             result["raw_left_label_lines"].append(left_text)
-
-            if not result["qd_id"]:
-                qd_id = parse_qd_id(left_text)
-                if qd_id:
-                    result["qd_id"] = qd_id
-
             result["verified_ids"].extend(extract_verified_ids(left_text))
             result["refs"].extend(extract_refs(left_text))
 
-        if not result["qd_id"]:
-            qd_id = parse_qd_id(full_text)
-            if qd_id:
-                result["qd_id"] = qd_id
+        qd_inline_text = ""
+        active_qd_id = result["qd_id"] or qd_id
+        if active_qd_id:
+            qd_inline_text = strip_qd_id_prefix(full_text, active_qd_id)
+            if not qd_inline_text:
+                qd_inline_text = strip_qd_id_prefix(left_text, active_qd_id)
 
         m_title = QD_TITLE_PATTERN.match(right_text) or QD_TITLE_PATTERN.match(full_text)
         if m_title:
-            result["qd_title"] = clean_line(m_title.group(1))
-            current_section = None
+            new_title = clean_line(m_title.group(1))
+            if result["qd_id"] and result["qd_title"] and result["qd_title"] != new_title:
+                finalize_current_block(result)
+                result = make_empty_qd_block(section_info=current_section_info, document_id=document_id)
+                current_content_section = None
+                result["qd_title"] = new_title
+                pending_qd_title = new_title
+            else:
+                pending_qd_title = new_title
+                if result["qd_id"] and not result["qd_title"]:
+                    result["qd_title"] = pending_qd_title
+                    pending_qd_title = ""
             continue
 
         if right_text in SECTION_LABELS:
-            current_section = right_text.lower()
+            current_content_section = right_text.lower()
             continue
 
         if full_text in SECTION_LABELS:
-            current_section = full_text.lower()
+            current_content_section = full_text.lower()
             continue
 
-        content = right_text if right_text else full_text
+        content = full_text
+        if qd_inline_text:
+            content = qd_inline_text
 
-        if current_section == "objectives":
+        if current_content_section == "objectives":
             append_field(result, "objectives", content)
-        elif current_section == "preconditions":
+        elif current_content_section == "preconditions":
             append_field(result, "preconditions", content)
+        elif qd_inline_text and not current_content_section:
+            append_field(result, "objectives", content)
 
-    result["verified_ids"] = unique_keep_order(result["verified_ids"])
-    result["refs"] = unique_keep_order(result["refs"])
-    result["objectives"] = clean_multiline_text(result["objectives"])
-    result["preconditions"] = clean_multiline_text(result["preconditions"])
+        if pending_qd_title and result["qd_id"] and not result["qd_title"]:
+            result["qd_title"] = pending_qd_title
 
-    return result
+    if result["qd_id"]:
+        result["verified_ids"] = unique_keep_order(result["verified_ids"])
+        result["refs"] = unique_keep_order(result["refs"])
+        result["objectives"] = clean_multiline_text(result["objectives"])
+        result["preconditions"] = clean_multiline_text(result["preconditions"])
+        if pending_qd_title and not result["qd_title"]:
+            result["qd_title"] = pending_qd_title
+        blocks.append(result)
+
+    return blocks
+
+
+def parse_qd_block(
+    qd_lines: List[Dict],
+    left_boundary: float = LEFT_QD_BOUNDARY,
+    section_info: Optional[Dict[str, Any]] = None,
+    document_id: Optional[str] = None,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Dict:
+    blocks = parse_qd_blocks(
+        qd_lines,
+        left_boundary=left_boundary,
+        section_info=section_info,
+        document_id=document_id,
+        toc_entries=toc_entries,
+    )
+    return blocks[0] if blocks else make_empty_qd_block(section_info=section_info, document_id=document_id)
 
 
 # =========================================================
@@ -383,7 +705,12 @@ def split_table_lines_into_tst_groups(
 # =========================================================
 # TST GROUP PARSER
 # =========================================================
-def parse_one_tst_group(group_lines: List[Dict], cols: Dict[str, float], page_width: float) -> Dict:
+def parse_one_tst_group(
+    group_lines: List[Dict],
+    cols: Dict[str, float],
+    page_width: float,
+    section_info: Optional[Dict[str, Any]] = None,
+) -> Dict:
     first_line = group_lines[0]
     left_label_first = words_left_of(first_line["words"], cols["x_left_label_end"])
     left_info = parse_tst_left_label(left_label_first)
@@ -435,22 +762,44 @@ def parse_tst_rows(
     table_lines: List[Dict],
     cols: Dict[str, float],
     page_width: float,
+    section_info: Optional[Dict[str, Any]] = None,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[Dict]:
-    groups = split_table_lines_into_tst_groups(table_lines, cols)
+    tst_lines, _ = split_table_lines_for_tst_and_qd(table_lines, toc_entries=toc_entries)
+    groups = split_table_lines_into_tst_groups(tst_lines, cols)
     rows = []
 
     for group in groups:
-        parsed = parse_one_tst_group(group, cols, page_width)
+        parsed = parse_one_tst_group(group, cols, page_width, section_info=section_info)
         if parsed.get("tst_id"):
             rows.append(parsed)
 
     return rows
 
 
+def attach_tests_to_qd_blocks(qd_blocks: List[Dict[str, Any]], tst_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not qd_blocks:
+        return []
+
+    for block in qd_blocks:
+        block["tests"] = block.get("tests", [])
+
+    anchor_block = qd_blocks[-1]
+    anchor_block["tests"].extend(tst_rows)
+    return qd_blocks
+
+
 # =========================================================
 # PAGE PARSER
 # =========================================================
-def parse_one_page(page, page_no: int, debug: bool = False) -> Optional[Dict]:
+def parse_one_page(
+    page,
+    page_no: int,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+    current_section_info: Optional[Dict[str, Any]] = None,
+    document_id: Optional[str] = None,
+    debug: bool = False,
+) -> Optional[Dict]:
     cropped = page.crop((0, HEADER_CROP, page.width, page.height))
 
     words = cropped.extract_words(
@@ -477,34 +826,193 @@ def parse_one_page(page, page_no: int, debug: bool = False) -> Optional[Dict]:
 
     qd_lines = line_infos[:header_idx]
     table_lines = line_infos[header_idx + 1:]
+    section_hits = collect_page_section_hits(line_infos, toc_entries=toc_entries)
+    ocr_section_info = section_hits[-1] if section_hits else detect_page_section_info(qd_lines, toc_entries=toc_entries) or detect_page_section_info(line_infos, toc_entries=toc_entries)
+    page_section_info = ocr_section_info or current_section_info
+    section_source = "ocr" if ocr_section_info else ("inherited" if current_section_info else "none")
+    tst_lines, qd_tail_lines = split_table_lines_for_tst_and_qd(table_lines, toc_entries=toc_entries)
 
-    qd_data = parse_qd_block(qd_lines, left_boundary=LEFT_QD_BOUNDARY)
-    tst_rows = parse_tst_rows(table_lines, cols, page.width)
+    qd_blocks = parse_qd_blocks(
+        qd_lines,
+        left_boundary=LEFT_QD_BOUNDARY,
+        section_info=page_section_info,
+        document_id=document_id,
+        toc_entries=toc_entries,
+    )
+    tst_rows = parse_tst_rows(tst_lines, cols, page.width, section_info=page_section_info, toc_entries=toc_entries)
+    qd_blocks = attach_tests_to_qd_blocks(qd_blocks, tst_rows)
+
+    qd_tail_blocks: List[Dict[str, Any]] = []
+    qd_tail_tests: List[Dict[str, Any]] = []
+    if qd_tail_lines:
+        tail_header_idx = find_table_header_line(qd_tail_lines)
+        if tail_header_idx is not None:
+            tail_qd_lines = qd_tail_lines[:tail_header_idx]
+            tail_table_lines = qd_tail_lines[tail_header_idx + 1:]
+            qd_tail_blocks = parse_qd_blocks(
+                tail_qd_lines,
+                left_boundary=LEFT_QD_BOUNDARY,
+                section_info=page_section_info,
+                document_id=document_id,
+                toc_entries=toc_entries,
+            )
+            qd_tail_tests = parse_tst_rows(
+                tail_table_lines,
+                cols,
+                page.width,
+                section_info=page_section_info,
+                toc_entries=toc_entries,
+            )
+            qd_tail_blocks = attach_tests_to_qd_blocks(qd_tail_blocks, qd_tail_tests)
+        else:
+            qd_tail_blocks = parse_qd_blocks(
+                qd_tail_lines,
+                left_boundary=LEFT_QD_BOUNDARY,
+                section_info=page_section_info,
+                document_id=document_id,
+                toc_entries=toc_entries,
+            )
+
+    if qd_tail_blocks:
+        qd_blocks.extend(qd_tail_blocks)
+
+    qd_data = qd_blocks[-1] if qd_blocks else make_empty_qd_block(section_info=page_section_info, document_id=document_id)
+    tst_rows = tst_rows + qd_tail_tests
 
     if not qd_data["qd_id"] and not tst_rows:
         return None
 
     return {
         "page": page_no,
-        "qd": qd_data,
+        "qd": qd_blocks if len(qd_blocks) > 1 else qd_data,
         "table_columns": cols,
-        "tests": tst_rows,
+        "section_info": page_section_info,
+        "section_source": section_source,
+        "section_hits": section_hits,
     }
 
 
 # =========================================================
 # DOCUMENT PARSER
 # =========================================================
-def extract_qd_tst_from_pdf(file_path: str, debug: bool = False) -> List[Dict]:
+def print_identified_sections(
+    toc_section_list: List[Dict[str, Any]],
+    pages: List[Dict[str, Any]],
+    page_tracks: Optional[List[Dict[str, Any]]] = None,
+):
+    print("\n" + "=" * 120)
+    print("[IDENTIFIED SECTIONS]")
+    print("=" * 120)
+
+    if not toc_section_list:
+        print("[INFO] No TOC sections found")
+    else:
+        for sec in toc_section_list:
+            print(f"- {sec['number']} {sec['title']} (page {sec['page']}, level {sec['level']})")
+
+    matched_sections = []
+    seen_matched = set()
+    if page_tracks:
+        for track in page_tracks:
+            section_info = track.get("section_info") or {}
+            if track.get("section_source") == "ocr" and section_info.get("full_text"):
+                key = clean_line(section_info["full_text"]).lower()
+                if key not in seen_matched:
+                    seen_matched.add(key)
+                    matched_sections.append(section_info)
+
+    print("\n" + "=" * 120)
+    print("[OCR MATCHED SECTIONS]")
+    print("=" * 120)
+    if matched_sections:
+        for sec in matched_sections:
+            print(f"- {sec.get('full_text')} (page {sec.get('page', '?')}, level {sec.get('level', '?')})")
+    else:
+        print("[INFO] No OCR section matches found")
+
+    toc_seen = {clean_line(sec.get("full_text", "")).lower() for sec in matched_sections if sec.get("full_text")}
+    print("\n" + "=" * 120)
+    print("[TOC SECTIONS NOT SEEN BY OCR]")
+    print("=" * 120)
+    unseen = [
+        sec for sec in toc_section_list
+        if clean_line(sec.get("full_text", "")).lower() not in toc_seen and safe_text(sec.get("number")) != "1"
+    ]
+    if unseen:
+        for sec in unseen:
+            print(f"- {sec['number']} {sec['title']} (page {sec['page']}, level {sec['level']})")
+    else:
+        print("[INFO] Every TOC section was seen by OCR at least once")
+
+    print("\n" + "=" * 120)
+    print("[PAGE SECTION TRACKING]")
+    print("=" * 120)
+    if page_tracks:
+        for track in page_tracks:
+            section_info = track.get("section_info") or {}
+            section_text = section_info.get("full_text") or "[NO SECTION]"
+            source = track.get("section_source") or "unknown"
+            print(f"Page {track['page']}: {section_text} [{source}]")
+    else:
+        for page in pages:
+            section_info = page.get("section_info") or {}
+            section_text = section_info.get("full_text") or "[NO SECTION]"
+            print(f"Page {page['page']}: {section_text}")
+
+
+def extract_qd_tst_from_pdf(file_path: str, debug: bool = False) -> Dict[str, Any]:
     results = []
+    page_tracks = []
+    document_id = make_qualification_document_id(file_path)
 
     with pdfplumber.open(file_path) as pdf:
-        for page_idx, page in enumerate(pdf.pages):
-            parsed = parse_one_page(page, page_idx + 1, debug=debug)
-            if parsed:
-                results.append(parsed)
+        toc_entries = extract_toc_entries_from_pdf(pdf)
+        toc_section_list = get_toc_section_list(toc_entries)
+        current_section_info: Optional[Dict[str, Any]] = None
 
-    return results
+        for page_idx, page in enumerate(pdf.pages):
+            parsed = parse_one_page(
+                page,
+                page_idx + 1,
+                toc_entries=toc_entries,
+                current_section_info=current_section_info,
+                document_id=document_id,
+                debug=debug,
+            )
+            if parsed:
+                if parsed.get("section_info"):
+                    current_section_info = parsed["section_info"]
+                elif current_section_info is not None:
+                    parsed["section_info"] = current_section_info
+                    parsed["section_source"] = "inherited"
+                page_tracks.append({
+                    "page": parsed["page"],
+                    "section_info": parsed.get("section_info"),
+                    "section_source": parsed.get("section_source"),
+                    "section_hits": parsed.get("section_hits", []),
+                })
+                output_page = dict(parsed)
+                output_page.pop("section_info", None)
+                output_page.pop("section_source", None)
+                output_page.pop("section_hits", None)
+                results.append(output_page)
+
+    results_meta = {
+        "toc_sections": toc_section_list,
+        "pages": results,
+        "page_tracks": page_tracks,
+    }
+
+    return results_meta
+
+
+def iter_qd_entries_from_page(page: Dict[str, Any]) -> List[Dict[str, Any]]:
+    qd_value = page.get("qd")
+    if isinstance(qd_value, list):
+        return qd_value
+    if isinstance(qd_value, dict):
+        return [qd_value]
+    return []
 
 
 # =========================================================
@@ -518,33 +1026,76 @@ def save_json(data, output_path: str):
 # =========================================================
 # PRETTY PRINT
 # =========================================================
-def print_summary(results: List[Dict]):
+def print_summary(results_meta: Dict[str, Any]):
+    pages = results_meta.get("pages", [])
+    toc_sections = results_meta.get("toc_sections", [])
+    page_tracks = results_meta.get("page_tracks", [])
     print("\n" + "=" * 120)
     print("[SUMMARY]")
     print("=" * 120)
 
-    for page in results:
-        qd = page["qd"]
-        print(f"\n[PAGE {page['page']}]")
-        print(f"QD ID: {qd.get('qd_id')}")
-        print(f"verified_ids: {qd.get('verified_ids')}")
-        print(f"refs: {qd.get('refs')}")
-        print(f"QD Title: {qd.get('qd_title')}")
-        print(f"Objectives: {qd.get('objectives')}")
-        print(f"Preconditions: {qd.get('preconditions')}")
-        print(f"Tests: {len(page['tests'])}")
+    print("\n" + "=" * 120)
+    print("[TOC SECTIONS]")
+    print("=" * 120)
+    if toc_sections:
+        for sec in toc_sections:
+            print(f"{sec['number']} {sec['title']} -> page {sec['page']} -> level {sec['level']}")
+    else:
+        print("[INFO] No TOC sections found")
 
-        for i, t in enumerate(page["tests"], start=1):
-            print("-" * 100)
-            print(f"Test #{i}")
-            print(f"tst_id: {t.get('tst_id')}")
-            print(f"verified_ids: {t.get('verified_ids')}")
-            print(f"refs: {t.get('refs')}")
-            print(f"step_no: {t.get('step_no')}")
-            print(f"action: {t.get('action')}")
-            print(f"expected_result: {t.get('expected_result')}")
-            print(f"observed_result: {t.get('observed_result')}")
-            print(f"state: {t.get('state')}")
+    matched_sections = []
+    seen_matched = set()
+    if page_tracks:
+        for track in page_tracks:
+            for section_info in track.get("section_hits", []):
+                if section_info.get("full_text"):
+                    key = clean_line(section_info["full_text"]).lower()
+                    if key not in seen_matched:
+                        seen_matched.add(key)
+                        matched_sections.append(section_info)
+
+    print("\n" + "=" * 120)
+    print("[OCR MATCHED SECTIONS]")
+    print("=" * 120)
+    if matched_sections:
+        for sec in matched_sections:
+            print(f"- {sec.get('full_text')} (page {sec.get('page', '?')}, level {sec.get('level', '?')})")
+    else:
+        print("[INFO] No OCR section matches found")
+
+    toc_seen = {clean_line(sec.get("full_text", "")).lower() for sec in matched_sections if sec.get("full_text")}
+    print("\n" + "=" * 120)
+    print("[TOC SECTIONS NOT SEEN BY OCR]")
+    print("=" * 120)
+    unseen = [
+        sec for sec in toc_sections
+        if clean_line(sec.get("full_text", "")).lower() not in toc_seen and safe_text(sec.get("number")) != "1"
+    ]
+    if unseen:
+        for sec in unseen:
+            print(f"- {sec['number']} {sec['title']} (page {sec['page']}, level {sec['level']})")
+    else:
+        print("[INFO] Every TOC section was seen by OCR at least once")
+
+    print("\n" + "=" * 120)
+    print("[PAGE SECTION TRACKING]")
+    print("=" * 120)
+    if page_tracks:
+        for track in page_tracks:
+            section_info = track.get("section_info") or {}
+            section_text = section_info.get("full_text") or "[NO SECTION]"
+            source = track.get("section_source") or "unknown"
+            hits = track.get("section_hits", [])
+            hit_text = ", ".join(sec.get("full_text", "") for sec in hits) if hits else ""
+            if hit_text:
+                print(f"Page {track['page']}: {section_text} [{source}] | hits: {hit_text}")
+            else:
+                print(f"Page {track['page']}: {section_text} [{source}]")
+    else:
+        for page in pages:
+            section_info = page.get("section_info") or {}
+            section_text = section_info.get("full_text") or "[NO SECTION]"
+            print(f"Page {page['page']}: {section_text}")
 
 
 # =========================================================

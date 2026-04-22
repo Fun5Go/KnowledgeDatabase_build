@@ -620,6 +620,7 @@ def aggregate_qd_results(parsed_pages: List[Dict], file_path: str) -> Dict[str, 
                 "objectives": "",
                 "preconditions": "",
                 "pages": [],
+                "tests": [],
                 "type": "QD",
             }
 
@@ -670,6 +671,7 @@ def aggregate_qd_results(parsed_pages: List[Dict], file_path: str) -> Dict[str, 
                 row["embedding"] = None
 
             tst_rows.append(row)
+            target["tests"].append(row)
             global_tst_seq += 1
 
     qd_rows = []
@@ -680,6 +682,7 @@ def aggregate_qd_results(parsed_pages: List[Dict], file_path: str) -> Dict[str, 
         row["preconditions"] = clean_multiline_text(row["preconditions"])
         row["text"] = build_qd_text(row)
         row["embedding"] = embed(row["text"]) if row["text"] else None
+        row["tests"] = row.get("tests", [])
         qd_rows.append(row)
 
     return {
@@ -918,6 +921,11 @@ def print_summary(qd_rows: List[Dict], tst_rows: List[Dict]):
         print(f"preconditions: {q['preconditions']}")
         print(f"text: {q['text']}")
         print(f"pages: {q['pages']}")
+        tests = q.get("tests", [])
+        if tests:
+            print("tests:")
+            for t in tests:
+                print(f"  - {t['tst_id']} -> {t['name']}")
 
     print("\n" + "=" * 120)
     print("[TST SUMMARY]")
