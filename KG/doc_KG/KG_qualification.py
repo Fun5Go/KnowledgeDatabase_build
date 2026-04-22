@@ -243,6 +243,18 @@ def parse_qd_id(text: str) -> Optional[str]:
     return m.group(0) if m else None
 
 
+def strip_qd_id_prefix(text: str, qd_id: str) -> str:
+    t = clean_line(text)
+    q = clean_line(qd_id)
+    if not t or not q:
+        return ""
+    pattern = rf"^{re.escape(q)}\s*(.*)$"
+    m = re.match(pattern, t, re.I)
+    if m:
+        return clean_line(m.group(1))
+    return ""
+
+
 def parse_tst_left_label(text: str) -> Dict:
     tst_id = next(iter(TST_ID_PATTERN.findall(text)), None)
 
@@ -320,6 +332,22 @@ def find_toc_entry_for_heading(text: str, toc_entries: Optional[Dict[str, Dict[s
     return toc_entries.get(clean_line(text).lower())
 
 
+def match_toc_section_info(
+    text: str,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    toc_entry = find_toc_entry_for_heading(text, toc_entries)
+    if toc_entry is None:
+        return None
+
+    return {
+        "number": toc_entry["number"],
+        "title": toc_entry["title"],
+        "level": toc_entry["level"],
+        "full_text": toc_entry["full_text"],
+    }
+
+
 def parse_section_heading_info(
     text: str,
     toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -331,14 +359,9 @@ def parse_section_heading_info(
     if not t:
         return None
 
-    toc_entry = find_toc_entry_for_heading(t, toc_entries)
-    if toc_entry is not None:
-        return {
-            "number": toc_entry["number"],
-            "title": toc_entry["title"],
-            "level": toc_entry["level"],
-            "full_text": toc_entry["full_text"],
-        }
+    toc_info = match_toc_section_info(t, toc_entries=toc_entries)
+    if toc_info is not None:
+        return toc_info
 
     match = SECTION_HEADING_PATTERN.match(t)
     if not match:
@@ -363,6 +386,15 @@ def get_section_heading_level(
 ) -> Optional[int]:
     info = parse_section_heading_info(text, toc_entries=toc_entries)
     return info["level"] if info else None
+
+
+def is_qd_boundary_line(text: str, toc_entries: Optional[Dict[str, Dict[str, Any]]] = None) -> bool:
+    t = clean_line(text)
+    if not t:
+        return False
+    if QD_TITLE_PATTERN.match(t):
+        return True
+    return match_toc_section_info(t, toc_entries=toc_entries) is not None
 
 
 # =========================================================
@@ -522,7 +554,7 @@ def parse_qd_blocks(
         if not full_text or is_noise_line(full_text):
             continue
 
-        line_section = parse_section_heading_info(full_text, toc_entries=toc_entries)
+        line_section = match_toc_section_info(full_text, toc_entries=toc_entries)
         if line_section is not None:
             current_section_info = line_section
             has_block_content = bool(
@@ -577,11 +609,9 @@ def parse_qd_blocks(
         qd_inline_text = ""
         active_qd_id = result["qd_id"] or qd_id
         if active_qd_id:
-            qd_inline_text = ""
-            pattern = rf"^{re.escape(active_qd_id)}\s*(.*)$"
-            m_inline = re.match(pattern, left_text or full_text, re.I)
-            if m_inline:
-                qd_inline_text = clean_line(m_inline.group(1))
+            qd_inline_text = strip_qd_id_prefix(full_text, active_qd_id)
+            if not qd_inline_text:
+                qd_inline_text = strip_qd_id_prefix(left_text, active_qd_id)
 
         m_title = QD_TITLE_PATTERN.match(right_text) or QD_TITLE_PATTERN.match(full_text)
         if m_title:
@@ -761,7 +791,7 @@ def split_table_lines_for_tst_and_qd(
 
     for line in table_lines:
         full_text = clean_line(line["text"])
-        if not tail_started and parse_section_heading_info(full_text, toc_entries=toc_entries) is not None:
+        if not tail_started and is_qd_boundary_line(full_text, toc_entries=toc_entries):
             tail_started = True
 
         if tail_started:
@@ -787,8 +817,11 @@ def attach_tests_to_qd_blocks(qd_blocks: List[Dict[str, Any]], tst_rows: List[Di
 # PAGE PARSER
 # =========================================================
 def detect_page_section_info(line_infos: List[Dict], toc_entries: Optional[Dict[str, Dict[str, Any]]] = None) -> Optional[Dict[str, Any]]:
-    hits = collect_page_section_hits(line_infos, toc_entries=toc_entries)
-    return hits[-1] if hits else None
+    for line in line_infos:
+        info = match_toc_section_info(line.get("text", ""), toc_entries=toc_entries)
+        if info is not None:
+            return info
+    return None
 
 
 def collect_page_section_hits(
@@ -799,7 +832,7 @@ def collect_page_section_hits(
     seen = set()
 
     for line in line_infos:
-        info = parse_section_heading_info(line.get("text", ""), toc_entries=toc_entries)
+        info = match_toc_section_info(line.get("text", ""), toc_entries=toc_entries)
         if info is None:
             continue
         key = clean_line(info["full_text"]).lower()
@@ -815,6 +848,8 @@ def parse_one_page(
     page,
     page_no: int,
     toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+    current_section_info: Optional[Dict[str, Any]] = None,
+    document_id: Optional[str] = None,
     debug: bool = False,
 ) -> Optional[Dict]:
     cropped = page.crop((0, HEADER_CROP, page.width, page.height))
@@ -840,13 +875,14 @@ def parse_one_page(
 
     header_line = line_infos[header_idx]
     cols = infer_table_columns(header_line)
-    document_id = make_qualification_document_id(QD_PATH)
+    document_id = document_id or make_qualification_document_id(QD_PATH)
 
     qd_lines = line_infos[:header_idx]
     table_lines = line_infos[header_idx + 1:]
     section_hits = collect_page_section_hits(line_infos, toc_entries=toc_entries)
-    section_info = section_hits[-1] if section_hits else (detect_page_section_info(qd_lines, toc_entries=toc_entries) or detect_page_section_info(line_infos, toc_entries=toc_entries))
-    section_source = "ocr" if section_hits else ("inherited" if current_section_info else "none")
+    ocr_section_info = section_hits[-1] if section_hits else detect_page_section_info(qd_lines, toc_entries=toc_entries) or detect_page_section_info(line_infos, toc_entries=toc_entries)
+    section_info = ocr_section_info or current_section_info
+    section_source = "ocr" if ocr_section_info else ("inherited" if current_section_info else "none")
 
     tst_lines, qd_tail_lines = split_table_lines_for_tst_and_qd(table_lines, toc_entries=toc_entries)
 
@@ -990,9 +1026,17 @@ def extract_qd_tst_from_pdf(file_path: str, debug: bool = False) -> Dict[str, An
     with pdfplumber.open(file_path) as pdf:
         toc_entries = extract_toc_entries_from_pdf(pdf)
         toc_section_list = get_toc_section_list(toc_entries)
+        document_id = make_qualification_document_id(file_path)
         current_section_info: Optional[Dict[str, Any]] = None
         for page_idx, page in enumerate(pdf.pages):
-            parsed = parse_one_page(page, page_idx + 1, toc_entries=toc_entries, debug=debug)
+            parsed = parse_one_page(
+                page,
+                page_idx + 1,
+                toc_entries=toc_entries,
+                current_section_info=current_section_info,
+                document_id=document_id,
+                debug=debug,
+            )
             if parsed:
                 if parsed.get("section_info"):
                     current_section_info = parsed["section_info"]
@@ -1289,29 +1333,34 @@ class QualificationKGBuilder:
             session.run(query, document_id=document_id, props=props)
 
     def purge_document_subgraph(self, document_id: str):
+        name_prefix = f"{document_id}_"
         with self.driver.session(database=self.database) as session:
             session.run(
                 """
                 MATCH (d:QualificationDocumentation {semantic_id: $document_id})
-                OPTIONAL MATCH (d)-[:HAS_CHAPTER|HAS_SECTION|HAS_SUBSECTION|HAS_SUBSUBSECTION*1..]->(sec)<-[:PART_OF]-(q:QDChunk)<-[:BELONGS_TO]-(t:TSTChunk)
+                OPTIONAL MATCH (t:TSTChunk)
+                WHERE t.name STARTS WITH $name_prefix
                 WITH collect(DISTINCT t) AS tst_nodes
                 UNWIND tst_nodes AS t
                 WITH t WHERE t IS NOT NULL
                 DETACH DELETE t
                 """,
                 document_id=document_id,
+                name_prefix=name_prefix,
             )
 
             session.run(
                 """
                 MATCH (d:QualificationDocumentation {semantic_id: $document_id})
-                OPTIONAL MATCH (d)-[:HAS_CHAPTER|HAS_SECTION|HAS_SUBSECTION|HAS_SUBSUBSECTION*1..]->(sec)<-[:PART_OF]-(q:QDChunk)
+                OPTIONAL MATCH (q:QDChunk)
+                WHERE q.name STARTS WITH $name_prefix
                 WITH collect(DISTINCT q) AS qd_nodes
                 UNWIND qd_nodes AS q
                 WITH q WHERE q IS NOT NULL
                 DETACH DELETE q
                 """,
                 document_id=document_id,
+                name_prefix=name_prefix,
             )
 
             session.run(
@@ -1464,11 +1513,6 @@ class QualificationKGBuilder:
             section_node_id: row.section_node_id,
             type: row.type
         }
-        WITH q, row
-        OPTIONAL MATCH (sec {semantic_id: row.section_node_id})
-        FOREACH (_ IN CASE WHEN row.section_node_id IS NULL OR sec IS NULL THEN [] ELSE [1] END |
-            MERGE (q)-[:PART_OF]->(sec)
-        )
         """
 
         with self.driver.session(database=self.database) as session:
