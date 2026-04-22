@@ -684,7 +684,7 @@ if  __name__ == "__main__":
 }
     group_maps = load_group_maps(group_files)
 
-    query_text = "Too much demand on voltage circuit"
+    query_text = "Cooling insufficient"
 
     res = query_semantic_kb(
         persist_dir=KB_PATH,
