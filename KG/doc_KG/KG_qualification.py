@@ -107,6 +107,17 @@ def normalize_discipline(discipline: Optional[str]) -> Optional[str]:
     return discipline
 
 
+def get_document_primary_label() -> str:
+    return "QualificationDocumentation"
+
+
+def get_document_secondary_label(discipline: Optional[str]) -> Optional[str]:
+    discipline = normalize_discipline(discipline)
+    if discipline:
+        return f"{discipline}QualificationDocumentation"
+    return None
+
+
 def unique_keep_order(items: List[str]) -> List[str]:
     seen = set()
     out = []
@@ -873,6 +884,18 @@ def detect_page_section_info(line_infos: List[Dict], toc_entries: Optional[Dict[
     return None
 
 
+def detect_last_page_section_info(
+    line_infos: List[Dict],
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    last_info = None
+    for line in line_infos:
+        info = match_toc_section_info(line.get("text", ""), toc_entries=toc_entries)
+        if info is not None:
+            last_info = info
+    return last_info
+
+
 def collect_page_section_hits(
     line_infos: List[Dict],
     toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -930,7 +953,13 @@ def parse_one_page(
     qd_lines = line_infos[:header_idx]
     table_lines = line_infos[header_idx + 1:]
     section_hits = collect_page_section_hits(line_infos, toc_entries=toc_entries)
-    ocr_section_info = section_hits[-1] if section_hits else detect_page_section_info(qd_lines, toc_entries=toc_entries) or detect_page_section_info(line_infos, toc_entries=toc_entries)
+    qd_section_hits = collect_page_section_hits(qd_lines, toc_entries=toc_entries)
+    ocr_section_info = (
+        qd_section_hits[-1]
+        if qd_section_hits
+        else detect_last_page_section_info(qd_lines, toc_entries=toc_entries)
+        or current_section_info
+    )
     section_info = ocr_section_info or current_section_info
     section_source = "ocr" if ocr_section_info else ("inherited" if current_section_info else "none")
 
@@ -1357,6 +1386,16 @@ class QualificationKGBuilder:
             REQUIRE n.semantic_id IS UNIQUE
             """,
             """
+            CREATE CONSTRAINT esw_qualification_document_semantic_id_unique IF NOT EXISTS
+            FOR (n:ESWQualificationDocumentation)
+            REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT hw_qualification_document_semantic_id_unique IF NOT EXISTS
+            FOR (n:HWQualificationDocumentation)
+            REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
             CREATE CONSTRAINT qdchunk_name_unique IF NOT EXISTS
             FOR (n:QDChunk)
             REQUIRE n.name IS UNIQUE
@@ -1378,25 +1417,24 @@ class QualificationKGBuilder:
         self,
         document_id: str,
         file_path: str,
-        section_tags: Optional[List[str]] = None,
         discipline: Optional[str] = None,
     ):
         file_name = os.path.basename(file_path)
-        section_tags = unique_keep_order([safe_text(x) for x in (section_tags or []) if safe_text(x)])
         discipline = normalize_discipline(discipline)
+        primary_label = get_document_primary_label()
+        secondary_label = get_document_secondary_label(discipline)
+        secondary_label_set = f"SET d:{secondary_label}" if secondary_label else ""
 
         props = {
             "semantic_id": document_id,
             "file_name": file_name,
             "source": file_path,
-            "doc_type": "qualification",
             "discipline": discipline,
-            "section_tags": section_tags,
-            "section_count": len(section_tags),
         }
 
-        query = """
-        MERGE (d:QualificationDocumentation {semantic_id: $document_id})
+        query = f"""
+        MERGE (d:{primary_label} {{semantic_id: $document_id}})
+        {secondary_label_set}
         SET d = $props
         """
         with self.driver.session(database=self.database) as session:
@@ -1484,9 +1522,8 @@ class QualificationKGBuilder:
                 {
                     "semantic_id": get_section_node_semantic_id(document_id, number),
                     "document_id": document_id,
-                    "number": number,
-                    "title": safe_text(info["title"]) or number,
-                    "section_tag": safe_text(info["full_text"]) or number,
+                    "name": safe_text(info["title"]) or number,
+                    "prefix": number,
                     "hierarchy_level": str(level),
                     "level": level,
                     "parent_semantic_id": parent_semantic_id,
@@ -1526,10 +1563,8 @@ class QualificationKGBuilder:
                 MERGE (n:{label} {{semantic_id: row.semantic_id}})
                 SET n = {{
                     semantic_id: row.semantic_id,
-                    document_id: row.document_id,
-                    number: row.number,
-                    title: row.title,
-                    section_tag: row.section_tag,
+                    name: row.name,
+                    prefix: row.prefix,
                     hierarchy_level: row.hierarchy_level
                 }}
                 """
@@ -1698,14 +1733,13 @@ class QualificationKGBuilder:
         batch_size: int = 100,
     ):
         document_id = make_qualification_document_id(file_path)
-        section_tags = self._collect_section_tags(toc_sections)
         discipline = normalize_discipline(discipline)
 
-        self.upsert_document_node(document_id, file_path, section_tags=section_tags, discipline=discipline)
+        self.upsert_document_node(document_id, file_path, discipline=discipline)
         self.purge_document_subgraph(document_id)
 
         self.import_section_nodes(document_id, toc_sections, batch_size=batch_size)
-        self.upsert_document_node(document_id, file_path, section_tags=section_tags, discipline=discipline)
+        self.upsert_document_node(document_id, file_path, discipline=discipline)
         self.import_qdchunks(document_id, qd_rows, batch_size=batch_size)
         self.import_tstchunks(tst_rows, batch_size=batch_size)
         self.import_qd_verified_links(qd_rows, batch_size=batch_size)

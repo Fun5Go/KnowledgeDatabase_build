@@ -1,0 +1,189 @@
+<style>
+.lx-highlight { position: relative; border-radius:3px; padding:1px 2px;}
+.lx-highlight .lx-tooltip {
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+  background: #333;
+  color: #fff;
+  text-align: left;
+  border-radius: 4px;
+  padding: 6px 8px;
+  position: absolute;
+  z-index: 1000;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  max-width: 240px;
+  white-space: normal;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+}
+.lx-highlight:hover .lx-tooltip { visibility: visible; opacity:1; }
+.lx-animated-wrapper { max-width: 100%; font-family: Arial, sans-serif; }
+.lx-controls {
+  background: #fafafa; border: 1px solid #90caf9; border-radius: 8px;
+  padding: 12px; margin-bottom: 16px;
+}
+.lx-button-row {
+  display: flex; justify-content: center; gap: 8px; margin-bottom: 12px;
+}
+.lx-control-btn {
+  background: #4285f4; color: white; border: none; border-radius: 4px;
+  padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 500;
+  transition: background-color 0.2s;
+}
+.lx-control-btn:hover { background: #3367d6; }
+.lx-progress-container {
+  margin-bottom: 8px;
+}
+.lx-progress-slider {
+  width: 100%; margin: 0; appearance: none; height: 6px;
+  background: #ddd; border-radius: 3px; outline: none;
+}
+.lx-progress-slider::-webkit-slider-thumb {
+  appearance: none; width: 18px; height: 18px; background: #4285f4;
+  border-radius: 50%; cursor: pointer;
+}
+.lx-progress-slider::-moz-range-thumb {
+  width: 18px; height: 18px; background: #4285f4; border-radius: 50%;
+  cursor: pointer; border: none;
+}
+.lx-status-text {
+  text-align: center; font-size: 12px; color: #666; margin-top: 4px;
+}
+.lx-text-window {
+  font-family: monospace; white-space: pre-wrap; border: 1px solid #90caf9;
+  padding: 12px; max-height: 260px; overflow-y: auto; margin-bottom: 12px;
+  line-height: 1.6;
+}
+.lx-attributes-panel {
+  background: #fafafa; border: 1px solid #90caf9; border-radius: 6px;
+  padding: 8px 10px; margin-top: 8px; font-size: 13px;
+}
+.lx-current-highlight {
+  border-bottom: 4px solid #ff4444;
+  font-weight: bold;
+  animation: lx-pulse 1s ease-in-out;
+}
+@keyframes lx-pulse {
+  0% { text-decoration-color: #ff4444; }
+  50% { text-decoration-color: #ff0000; }
+  100% { text-decoration-color: #ff4444; }
+}
+.lx-legend {
+  font-size: 12px; margin-bottom: 8px;
+  padding-bottom: 8px; border-bottom: 1px solid #e0e0e0;
+}
+.lx-label {
+  display: inline-block;
+  padding: 2px 4px;
+  border-radius: 3px;
+  margin-right: 4px;
+  color: #000;
+}
+.lx-attr-key {
+  font-weight: 600;
+  color: #1565c0;
+  letter-spacing: 0.3px;
+}
+.lx-attr-value {
+  font-weight: 400;
+  opacity: 0.85;
+  letter-spacing: 0.2px;
+}
+
+/* Add optimizations with larger fonts and better readability for GIFs */
+.lx-gif-optimized .lx-text-window { font-size: 16px; line-height: 1.8; }
+.lx-gif-optimized .lx-attributes-panel { font-size: 15px; }
+.lx-gif-optimized .lx-current-highlight { text-decoration-thickness: 4px; }
+</style>
+<div class="lx-animated-wrapper lx-gif-optimized">
+  <div class="lx-attributes-panel">
+    <div class="lx-legend">Highlights Legend: <span class="lx-label" style="background-color:#D2E3FC;">condition</span> <span class="lx-label" style="background-color:#C8E6C9;">element</span> <span class="lx-label" style="background-color:#FEF0C3;">function</span> <span class="lx-label" style="background-color:#F9DEDC;">object</span> <span class="lx-label" style="background-color:#FFDDBE;">pronoun</span> <span class="lx-label" style="background-color:#EADDFF;">sub_element</span></div>
+    <div id="attributesContainer"></div>
+  </div>
+  <div class="lx-text-window" id="textWindow">
+    <span class="lx-highlight lx-current-highlight" data-idx="0" style="background-color:#D2E3FC;">On t<span class="lx-highlight" data-idx="1" style="background-color:#C8E6C9;">he ot<span class="lx-highlight" data-idx="2" style="background-color:#C8E6C9;">h</span><span class="lx-highlight" data-idx="3" style="background-color:#D2E3FC;">e<span class="lx-highlight" data-idx="4" style="background-color:#FEF0C3;">r s</span><span class="lx-highlight" data-idx="5" style="background-color:#D2E3FC;">i<span class="lx-highlight" data-idx="6" style="background-color:#FEF0C3;">d<span class="lx-highlight" data-idx="7" style="background-color:#C8E6C9;">e, the</span> <span class="lx-highlight" data-idx="8" style="background-color:#FEF0C3;"><span class="lx-highlight" data-idx="9" style="background-color:#C8E6C9;">TRIACS</span> <span class="lx-highlight" data-idx="10" style="background-color:#FEF0C3;">can be <span class="lx-highlight" data-idx="11" style="background-color:#EADDFF;">sim</span>p</span></span><span class="lx-highlight" data-idx="12" style="background-color:#F9DEDC;">ly</span> con<span class="lx-highlight" data-idx="13" style="background-color:#C8E6C9;">si<span class="lx-highlight" data-idx="14" style="background-color:#C8E6C9;"><span class="lx-highlight" data-idx="15" style="background-color:#EADDFF;">der</span>e<span class="lx-highlight" data-idx="16" style="background-color:#FEF0C3;">d</span></span> </span><span class="lx-highlight" data-idx="17" style="background-color:#FEF0C3;">as 2</span><span class="lx-highlight" data-idx="18" style="background-color:#EADDFF;"> <span class="lx-highlight" data-idx="19" style="background-color:#C8E6C9;">SCRs</span></span> <span class="lx-highlight" data-idx="20" style="background-color:#F9DEDC;">c</span></span>o<span class="lx-highlight" data-idx="21" style="background-color:#FFDDBE;">n<span class="lx-highlight" data-idx="22" style="background-color:#FFDDBE;">nect</span>ed <span class="lx-highlight" data-idx="23" style="background-color:#FFDDBE;">to</span></span>geth</span>er</span> <span class="lx-highlight" data-idx="24" style="background-color:#F9DEDC;">in<span class="lx-highlight" data-idx="25" style="background-color:#FFDDBE;"> <span class="lx-highlight" data-idx="26" style="background-color:#D2E3FC;">a back to </span></span>ba<span class="lx-highlight" data-idx="27" style="background-color:#D2E3FC;">ck conf<span class="lx-highlight" data-idx="28" style="background-color:#D2E3FC;">iguratio<span class="lx-highlight" data-idx="29" style="background-color:#FFDDBE;">n</span></span>. T<span class="lx-highlight" data-idx="30" style="background-color:#EADDFF;">her</span>e</span></span>f<span class="lx-highlight" data-idx="31" style="background-color:#FEF0C3;">ore by applyin<span class="lx-highlight" data-idx="32" style="background-color:#FFDDBE;">g<span class="lx-highlight" data-idx="33" style="background-color:#FFDDBE;"> </span>a </span>pulse a</span>t</span> the g<span class="lx-highlight" data-idx="34" style="background-color:#C8E6C9;">ate, t</span>h<span class="lx-highlight" data-idx="35" style="background-color:#FEF0C3;">e TRIAC</span> can conduct on both</span> ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loads. Considering that in an inductive load the currents and voltages are not in phase with one another (the more inductive the load, the more this is true) the triacs can be spuriously turned on. Theoretically when the current reaches zero, the TRIAC is supposed to be disabled, but since the load is highly inductive, the voltage at that stage is not equal to zero. Thus the TRIAC will observe a high dV/dt between anode and cathode which might trigger a spurious turn on even if the gate is not triggered. Furthermore the TRIACS have way lower breakdown voltage.
+  </div>
+  <div class="lx-controls">
+    <div class="lx-button-row">
+      <button class="lx-control-btn" onclick="playPause()">▶️ Play</button>
+      <button class="lx-control-btn" onclick="prevExtraction()">⏮ Previous</button>
+      <button class="lx-control-btn" onclick="nextExtraction()">⏭ Next</button>
+    </div>
+    <div class="lx-progress-container">
+      <input type="range" id="progressSlider" class="lx-progress-slider"
+             min="0" max="35" value="0"
+             onchange="jumpToExtraction(this.value)">
+    </div>
+    <div class="lx-status-text">
+      Entity <span id="entityInfo">1/36</span> |
+      Pos <span id="posInfo">[23-29]</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function() {
+    const extractions = [{"index": 0, "class": "condition", "text": "Considering that in an inductive load the currents and voltages are not in phase with one another", "color": "#D2E3FC", "startPos": 0, "endPos": 97, "beforeText": "", "extractionText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to ", "afterText": "back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS ha", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}, {"index": 1, "class": "element", "text": "TRIACS", "color": "#C8E6C9", "startPos": 4, "endPos": 10, "beforeText": "On t", "extractionText": "he oth", "afterText": "er side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, ", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 2, "class": "element", "text": "TRIAC", "color": "#C8E6C9", "startPos": 9, "endPos": 14, "beforeText": "On the ot", "extractionText": "her s", "afterText": "ide, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the ", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 3, "class": "condition", "text": "by applying a pulse at the gate", "color": "#D2E3FC", "startPos": 10, "endPos": 41, "beforeText": "On the oth", "extractionText": "er side, the TRIACS can be simp", "afterText": "ly considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both w", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}, {"index": 4, "class": "function", "text": "have a difficulty on turning off inductive loads", "color": "#FEF0C3", "startPos": 11, "endPos": 59, "beforeText": "On the othe", "extractionText": "r side, the TRIACS can be simply considered as 2", "afterText": " SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positi", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}, {"index": 5, "class": "condition", "text": "when the current reaches zero", "color": "#D2E3FC", "startPos": 14, "endPos": 43, "beforeText": "On the other s", "extractionText": "ide, the TRIACS can be simply", "afterText": " considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both way", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}, {"index": 6, "class": "function", "text": "will observe a high dV/dt", "color": "#FEF0C3", "startPos": 15, "endPos": 40, "beforeText": "On the other si", "extractionText": "de, the TRIACS can be sim", "afterText": "ply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}, {"index": 7, "class": "element", "text": "TRIACS", "color": "#C8E6C9", "startPos": 16, "endPos": 22, "beforeText": "On the other sid", "extractionText": "e, the", "afterText": " TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC ca", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 8, "class": "function", "text": "have way lower breakdown voltage", "color": "#FEF0C3", "startPos": 23, "endPos": 55, "beforeText": "On the other side, the ", "extractionText": "TRIACS can be simply considered ", "afterText": "as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either po", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}, {"index": 9, "class": "element", "text": "TRIACS", "color": "#C8E6C9", "startPos": 23, "endPos": 29, "beforeText": "On the other side, the ", "extractionText": "TRIACS", "afterText": " can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can condu", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 10, "class": "function", "text": "can be simply considered as 2 SCRs connected together in a back to back configuration", "color": "#FEF0C3", "startPos": 30, "endPos": 115, "beforeText": "On the other side, the TRIACS ", "extractionText": "can be simply considered as 2 SCRs connected together in a back to back configuration", "afterText": ". Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}, {"index": 11, "class": "sub_element", "text": "gate", "color": "#EADDFF", "startPos": 37, "endPos": 41, "beforeText": "On the other side, the TRIACS can be ", "extractionText": "simp", "afterText": "ly considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both w", "attributesHtml": "<div><strong>class:</strong> sub_element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 12, "class": "object", "text": "between anode and cathode", "color": "#F9DEDC", "startPos": 41, "endPos": 66, "beforeText": "On the other side, the TRIACS can be simp", "extractionText": "ly considered as 2 SCRs c", "afterText": "onnected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or n", "attributesHtml": "<div><strong>class:</strong> object</div><div><strong>attributes:</strong> {}</div>"}, {"index": 13, "class": "element", "text": "TRIAC", "color": "#C8E6C9", "startPos": 47, "endPos": 52, "beforeText": "On the other side, the TRIACS can be simply con", "extractionText": "sider", "afterText": "ed as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 14, "class": "element", "text": "TRIAC", "color": "#C8E6C9", "startPos": 49, "endPos": 54, "beforeText": "On the other side, the TRIACS can be simply consi", "extractionText": "dered", "afterText": " as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either p", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 15, "class": "sub_element", "text": "anode", "color": "#EADDFF", "startPos": 49, "endPos": 54, "beforeText": "On the other side, the TRIACS can be simply consi", "extractionText": "dered", "afterText": " as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either p", "attributesHtml": "<div><strong>class:</strong> sub_element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 16, "class": "function", "text": "can conduct", "color": "#FEF0C3", "startPos": 53, "endPos": 64, "beforeText": "On the other side, the TRIACS can be simply considere", "extractionText": "d as 2 SCRs", "afterText": " connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}, {"index": 17, "class": "function", "text": "is supposed to be disabled", "color": "#FEF0C3", "startPos": 55, "endPos": 81, "beforeText": "On the other side, the TRIACS can be simply considered ", "extractionText": "as 2 SCRs connected togeth", "afterText": "er in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative wavefor", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}, {"index": 18, "class": "sub_element", "text": "cathode", "color": "#EADDFF", "startPos": 59, "endPos": 66, "beforeText": "On the other side, the TRIACS can be simply considered as 2", "extractionText": " SCRs c", "afterText": "onnected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or n", "attributesHtml": "<div><strong>class:</strong> sub_element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 19, "class": "element", "text": "SCRs", "color": "#C8E6C9", "startPos": 60, "endPos": 64, "beforeText": "On the other side, the TRIACS can be simply considered as 2 ", "extractionText": "SCRs", "afterText": " connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 20, "class": "object", "text": "on both ways", "color": "#F9DEDC", "startPos": 65, "endPos": 77, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs ", "extractionText": "connected to", "afterText": "gether in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative wav", "attributesHtml": "<div><strong>class:</strong> object</div><div><strong>attributes:</strong> {}</div>"}, {"index": 21, "class": "pronoun", "text": "which", "color": "#FFDDBE", "startPos": 67, "endPos": 72, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs co", "extractionText": "nnect", "afterText": "ed together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negativ", "attributesHtml": "<div><strong>class:</strong> pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">a high dV/dt between anode and cathode</span>}</div>"}, {"index": 22, "class": "pronoun", "text": "both ways", "color": "#FFDDBE", "startPos": 68, "endPos": 77, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs con", "extractionText": "nected to", "afterText": "gether in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative wav", "attributesHtml": "<div><strong>class:</strong> pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">positive or negative waveform</span>}</div>"}, {"index": 23, "class": "pronoun", "text": "together", "color": "#FFDDBE", "startPos": 75, "endPos": 83, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected ", "extractionText": "together", "afterText": " in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform.", "attributesHtml": "<div><strong>class:</strong> pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">2 SCRs</span>}</div>"}, {"index": 24, "class": "object", "text": "in a back to back configuration", "color": "#F9DEDC", "startPos": 84, "endPos": 115, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together ", "extractionText": "in a back to back configuration", "afterText": ". Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on", "attributesHtml": "<div><strong>class:</strong> object</div><div><strong>attributes:</strong> {}</div>"}, {"index": 25, "class": "pronoun", "text": "one another", "color": "#FFDDBE", "startPos": 86, "endPos": 97, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in", "extractionText": " a back to ", "afterText": "back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS ha", "attributesHtml": "<div><strong>class:</strong> pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">currents and voltages</span>}</div>"}, {"index": 26, "class": "condition", "text": "since the load is highly inductive", "color": "#D2E3FC", "startPos": 87, "endPos": 121, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in ", "extractionText": "a back to back configuration. Ther", "afterText": "efore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turni", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}, {"index": 27, "class": "condition", "text": "the more inductive the load, the more this is true", "color": "#D2E3FC", "startPos": 99, "endPos": 149, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to ba", "extractionText": "ck configuration. Therefore by applying a pulse at", "afterText": " the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loads. Cons", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}, {"index": 28, "class": "condition", "text": "even if the gate is not triggered", "color": "#D2E3FC", "startPos": 106, "endPos": 139, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back conf", "extractionText": "iguration. Therefore by applying ", "afterText": "a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive l", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}, {"index": 29, "class": "pronoun", "text": "the gate", "color": "#FFDDBE", "startPos": 114, "endPos": 122, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuratio", "extractionText": "n. There", "afterText": "fore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turnin", "attributesHtml": "<div><strong>class:</strong> pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">the gate</span>}</div>"}, {"index": 30, "class": "sub_element", "text": "gate", "color": "#EADDFF", "startPos": 118, "endPos": 122, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. T", "extractionText": "here", "afterText": "fore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turnin", "attributesHtml": "<div><strong>class:</strong> sub_element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 31, "class": "function", "text": "the voltage at that stage is not equal to zero", "color": "#FEF0C3", "startPos": 123, "endPos": 169, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Theref", "extractionText": "ore by applying a pulse at the gate, the TRIAC", "afterText": " can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loads. Considering that in an i", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}, {"index": 32, "class": "pronoun", "text": "this", "color": "#FFDDBE", "startPos": 137, "endPos": 141, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applyin", "extractionText": "g a ", "afterText": "pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loa", "attributesHtml": "<div><strong>class:</strong> pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">the currents and voltages are not in phase with one another</span>}</div>"}, {"index": 33, "class": "pronoun", "text": "that stage", "color": "#FFDDBE", "startPos": 138, "endPos": 148, "beforeText": "On the other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying", "extractionText": " a pulse a", "afterText": "t the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loads. Con", "attributesHtml": "<div><strong>class:</strong> pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">when the current reaches zero</span>}</div>"}, {"index": 34, "class": "element", "text": "triacs", "color": "#C8E6C9", "startPos": 155, "endPos": 161, "beforeText": "e other side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the g", "extractionText": "ate, t", "afterText": "he TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loads. Considering that", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 35, "class": "function", "text": "can be spuriously turned on", "color": "#FEF0C3", "startPos": 162, "endPos": 189, "beforeText": " side, the TRIACS can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, th", "extractionText": "e TRIAC can conduct on both", "afterText": " ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loads. Considering that in an inductive load the cu", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {}</div>"}];
+    let currentIndex = 0;
+    let isPlaying = false;
+    let animationInterval = null;
+    let animationSpeed = 1.0;
+
+    function updateDisplay() {
+      const extraction = extractions[currentIndex];
+      if (!extraction) return;
+
+      document.getElementById('attributesContainer').innerHTML = extraction.attributesHtml;
+      document.getElementById('entityInfo').textContent = (currentIndex + 1) + '/' + extractions.length;
+      document.getElementById('posInfo').textContent = '[' + extraction.startPos + '-' + extraction.endPos + ']';
+      document.getElementById('progressSlider').value = currentIndex;
+
+      const playBtn = document.querySelector('.lx-control-btn');
+      if (playBtn) playBtn.textContent = isPlaying ? '⏸ Pause' : '▶️ Play';
+
+      const prevHighlight = document.querySelector('.lx-text-window .lx-current-highlight');
+      if (prevHighlight) prevHighlight.classList.remove('lx-current-highlight');
+      const currentSpan = document.querySelector('.lx-text-window span[data-idx="' + currentIndex + '"]');
+      if (currentSpan) {
+        currentSpan.classList.add('lx-current-highlight');
+        currentSpan.scrollIntoView({block: 'center', behavior: 'smooth'});
+      }
+    }
+
+    function nextExtraction() {
+      currentIndex = (currentIndex + 1) % extractions.length;
+      updateDisplay();
+    }
+
+    function prevExtraction() {
+      currentIndex = (currentIndex - 1 + extractions.length) % extractions.length;
+      updateDisplay();
+    }
+
+    function jumpToExtraction(index) {
+      currentIndex = parseInt(index);
+      updateDisplay();
+    }
+
+    function playPause() {
+      if (isPlaying) {
+        clearInterval(animationInterval);
+        isPlaying = false;
+      } else {
+        animationInterval = setInterval(nextExtraction, animationSpeed * 1000);
+        isPlaying = true;
+      }
+      updateDisplay();
+    }
+
+    window.playPause = playPause;
+    window.nextExtraction = nextExtraction;
+    window.prevExtraction = prevExtraction;
+    window.jumpToExtraction = jumpToExtraction;
+
+    updateDisplay();
+  })();
+</script>

@@ -1597,13 +1597,9 @@ class VectorKGBuilder:
 
                 rows_by_id[semantic_id] = {
                     "semantic_id": semantic_id,
-                    "name": entry["full_text"],
-                    "text": entry["title"],
-                    "section_prefix": section_info["section_prefix"],
-                    "section_title": section_info["section_title"],
+                    "name": safe_text(section_info["section_title"]) or safe_text(entry["title"]) or entry["full_text"],
+                    "prefix": section_info["section_prefix"],
                     "hierarchy_level": section_info["hierarchy_level"],
-                    "node_type": section_info["node_type"],
-                    "toc_page": entry["page"],
                     "parent_semantic_id": make_section_node_semantic_id(
                         document_id,
                         ".".join(section_info["section_prefix"].split(".")[:-1]),
@@ -1624,13 +1620,9 @@ class VectorKGBuilder:
 
             rows_by_id[semantic_id] = {
                 "semantic_id": semantic_id,
-                "name": section_tag,
-                "text": section_tag,
-                "section_prefix": section_info["section_prefix"],
-                "section_title": section_info["section_title"],
+                "name": safe_text(section_info["section_title"]) or section_tag,
+                "prefix": section_info["section_prefix"],
                 "hierarchy_level": section_info["hierarchy_level"],
-                "node_type": section_info["node_type"],
-                "toc_page": None,
                 "parent_semantic_id": make_section_node_semantic_id(
                     document_id,
                     ".".join(section_info["section_prefix"].split(".")[:-1]),
@@ -1665,12 +1657,8 @@ class VectorKGBuilder:
                     SET n = {{
                         semantic_id: row.semantic_id,
                         name: row.name,
-                        text: row.text,
-                        section_prefix: row.section_prefix,
-                        section_title: row.section_title,
+                        prefix: row.prefix,
                         hierarchy_level: row.hierarchy_level,
-                        type: row.node_type,
-                        toc_page: row.toc_page
                     }}
                     WITH n
                     MATCH (d {{semantic_id: $document_id}})
@@ -1684,12 +1672,8 @@ class VectorKGBuilder:
                     SET n = {{
                         semantic_id: row.semantic_id,
                         name: row.name,
-                        text: row.text,
-                        section_prefix: row.section_prefix,
-                        section_title: row.section_title,
+                        prefix: row.prefix,
                         hierarchy_level: row.hierarchy_level,
-                        type: row.node_type,
-                        toc_page: row.toc_page
                     }}
                     MERGE (parent)-[:{rel_type}]->(n)
                     """

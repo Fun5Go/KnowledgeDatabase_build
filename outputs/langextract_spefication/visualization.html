@@ -98,92 +98,97 @@
 .lx-gif-optimized .lx-attributes-panel { font-size: 15px; }
 .lx-gif-optimized .lx-current-highlight { text-decoration-thickness: 4px; }
 </style>
-<div class="lx-animated-wrapper lx-gif-optimized">
-  <div class="lx-attributes-panel">
-    <div class="lx-legend">Highlights Legend: <span class="lx-label" style="background-color:#D2E3FC;">action</span> <span class="lx-label" style="background-color:#C8E6C9;">condition</span> <span class="lx-label" style="background-color:#FEF0C3;">element</span> <span class="lx-label" style="background-color:#F9DEDC;">function</span></div>
-    <div id="attributesContainer"></div>
-  </div>
-  <div class="lx-text-window" id="textWindow">
-    The <span class="lx-highlight lx-current-highlight" data-idx="0" style="background-color:#FEF0C3;">soft start algorithm</span> <span class="lx-highlight" data-idx="1" style="background-color:#D2E3FC;">will start</span> <span class="lx-highlight" data-idx="2" style="background-color:#F9DEDC;">with a 200ms delay</span> <span class="lx-highlight" data-idx="3" style="background-color:#C8E6C9;">after the last motor relay has been swapped</span>, and <span class="lx-highlight" data-idx="4" style="background-color:#D2E3FC;">will stop</span> <span class="lx-highlight" data-idx="5" style="background-color:#F9DEDC;">with a 200ms delay after the bypass relays have been swapped</span>.
-  </div>
-  <div class="lx-controls">
-    <div class="lx-button-row">
-      <button class="lx-control-btn" onclick="playPause()">▶️ Play</button>
-      <button class="lx-control-btn" onclick="prevExtraction()">⏮ Previous</button>
-      <button class="lx-control-btn" onclick="nextExtraction()">⏭ Next</button>
+    <div class="lx-animated-wrapper lx-gif-optimized">
+      <div class="lx-attributes-panel">
+        <div class="lx-legend">Highlights Legend: <span class="lx-label" style="background-color:#D2E3FC;">Pronoun</span> <span class="lx-label" style="background-color:#C8E6C9;">condition</span> <span class="lx-label" style="background-color:#FEF0C3;">element</span> <span class="lx-label" style="background-color:#F9DEDC;">function</span> <span class="lx-label" style="background-color:#FFDDBE;">object</span></div>
+        <div id="attributesContainer"></div>
+      </div>
+      <div class="lx-text-window" id="textWindow">
+
+On the other side, <span class="lx-highlight lx-current-highlight" data-idx="0" style="background-color:#FEF0C3;">the TRIACS</span> can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS <span class="lx-highlight" data-idx="1" style="background-color:#F9DEDC;">have a difficulty on turning off</span> <span class="lx-highlight" data-idx="2" style="background-color:#FFDDBE;">inductive loads</span>. <span class="lx-highlight" data-idx="3" style="background-color:#C8E6C9;">Considering that in an inductive
+load the currents and voltages are not in phase with one another (the more inductive the load, the more this is true)</span> the triacs can be spuriously turned on. <span class="lx-highlight" data-idx="4" style="background-color:#D2E3FC;">Theoretically when the current reaches zero, the TRIAC is supposed to be disabled</span>, <span class="lx-highlight" data-idx="5" style="background-color:#C8E6C9;">but since the load is higly inductive, the
+voltage at that stage is not equal to zero</span>. Thus the TRIAC will &quot;observe&quot; a high dV/dt between anode and cathode which might trigger a spurious turn on even if the gate is not triggered.
+Furthermore the TRIACS have way lower breakdown voltage.
+
+      </div>
+      <div class="lx-controls">
+        <div class="lx-button-row">
+          <button class="lx-control-btn" onclick="playPause()">▶️ Play</button>
+          <button class="lx-control-btn" onclick="prevExtraction()">⏮ Previous</button>
+          <button class="lx-control-btn" onclick="nextExtraction()">⏭ Next</button>
+        </div>
+        <div class="lx-progress-container">
+          <input type="range" id="progressSlider" class="lx-progress-slider"
+                 min="0" max="5" value="0"
+                 onchange="jumpToExtraction(this.value)">
+        </div>
+        <div class="lx-status-text">
+          Entity <span id="entityInfo">1/6</span> |
+          Pos <span id="posInfo">[20-30]</span>
+        </div>
+      </div>
     </div>
-    <div class="lx-progress-container">
-      <input type="range" id="progressSlider" class="lx-progress-slider"
-             min="0" max="5" value="0"
-             onchange="jumpToExtraction(this.value)">
-    </div>
-    <div class="lx-status-text">
-      Entity <span id="entityInfo">1/6</span> |
-      Pos <span id="posInfo">[4-24]</span>
-    </div>
-  </div>
-</div>
 
-<script>
-  (function() {
-    const extractions = [{"index": 0, "class": "element", "text": "soft start algorithm", "color": "#FEF0C3", "startPos": 4, "endPos": 24, "beforeText": "The ", "extractionText": "soft start algorithm", "afterText": " will start with a 200ms delay after the last motor relay has been swapped, and will stop with a 200ms delay after the bypass relays have been swapped", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">role</span>: <span class=\"lx-attr-value\">specified system element</span>}</div>"}, {"index": 1, "class": "action", "text": "will start", "color": "#D2E3FC", "startPos": 25, "endPos": 35, "beforeText": "The soft start algorithm ", "extractionText": "will start", "afterText": " with a 200ms delay after the last motor relay has been swapped, and will stop with a 200ms delay after the bypass relays have been swapped.", "attributesHtml": "<div><strong>class:</strong> action</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">role</span>: <span class=\"lx-attr-value\">requirement action</span>}</div>"}, {"index": 2, "class": "function", "text": "with a 200ms delay", "color": "#F9DEDC", "startPos": 36, "endPos": 54, "beforeText": "The soft start algorithm will start ", "extractionText": "with a 200ms delay", "afterText": " after the last motor relay has been swapped, and will stop with a 200ms delay after the bypass relays have been swapped.", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">role</span>: <span class=\"lx-attr-value\">performance requirement</span>}</div>"}, {"index": 3, "class": "condition", "text": "after the last motor relay has been swapped", "color": "#C8E6C9", "startPos": 55, "endPos": 98, "beforeText": "The soft start algorithm will start with a 200ms delay ", "extractionText": "after the last motor relay has been swapped", "afterText": ", and will stop with a 200ms delay after the bypass relays have been swapped.", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">role</span>: <span class=\"lx-attr-value\">triggering condition</span>}</div>"}, {"index": 4, "class": "action", "text": "will stop", "color": "#D2E3FC", "startPos": 104, "endPos": 113, "beforeText": "The soft start algorithm will start with a 200ms delay after the last motor relay has been swapped, and ", "extractionText": "will stop", "afterText": " with a 200ms delay after the bypass relays have been swapped.", "attributesHtml": "<div><strong>class:</strong> action</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">role</span>: <span class=\"lx-attr-value\">requirement action (second action)</span>}</div>"}, {"index": 5, "class": "function", "text": "with a 200ms delay after the bypass relays have been swapped", "color": "#F9DEDC", "startPos": 114, "endPos": 174, "beforeText": "The soft start algorithm will start with a 200ms delay after the last motor relay has been swapped, and will stop ", "extractionText": "with a 200ms delay after the bypass relays have been swapped", "afterText": ".", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">role</span>: <span class=\"lx-attr-value\">performance requirement (second, includes condition)</span>}</div>"}];
-    let currentIndex = 0;
-    let isPlaying = false;
-    let animationInterval = null;
-    let animationSpeed = 1.0;
+    <script>
+      (function() {
+        const extractions = [{"index": 0, "class": "element", "text": "the TRIACS", "color": "#FEF0C3", "startPos": 20, "endPos": 30, "beforeText": "\nOn the other side, ", "extractionText": "the TRIACS", "afterText": " can be simply considered as 2 SCRs connected together in a back to back configuration. Therefore by applying a pulse at the gate, the TRIAC can condu", "attributesHtml": "<div><strong>class:</strong> element</div><div><strong>attributes:</strong> {}</div>"}, {"index": 1, "class": "function", "text": "have a difficulty on turning off", "color": "#F9DEDC", "startPos": 246, "endPos": 278, "beforeText": "o back configuration. Therefore by applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS ", "extractionText": "have a difficulty on turning off", "afterText": " inductive loads. Considering that in an inductive\nload the currents and voltages are not in phase with one another (the more inductive the load, the ", "attributesHtml": "<div><strong>class:</strong> function</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">related</span>: <span class=\"lx-attr-value\">the TRIACS</span>}</div>"}, {"index": 2, "class": "object", "text": "inductive loads", "color": "#FFDDBE", "startPos": 279, "endPos": 294, "beforeText": "y applying a pulse at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off ", "extractionText": "inductive loads", "afterText": ". Considering that in an inductive\nload the currents and voltages are not in phase with one another (the more inductive the load, the more this is tru", "attributesHtml": "<div><strong>class:</strong> object</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">related</span>: <span class=\"lx-attr-value\">the TRIACS</span>}</div>"}, {"index": 3, "class": "condition", "text": "Considering that in an inductive load the currents and voltages are not in phase with one another (the more inductive the load, the more this is true)", "color": "#C8E6C9", "startPos": 296, "endPos": 446, "beforeText": "e at the gate, the TRIAC can conduct on both ways, either positive or negative waveform. The TRIACS have a difficulty on turning off inductive loads. ", "extractionText": "Considering that in an inductive\nload the currents and voltages are not in phase with one another (the more inductive the load, the more this is true)", "afterText": " the triacs can be spuriously turned on. Theoretically when the current reaches zero, the TRIAC is supposed to be disabled, but since the load is higl", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}, {"index": 4, "class": "Pronoun", "text": "Theoretically when the current reaches zero, the TRIAC is supposed to be disabled", "color": "#D2E3FC", "startPos": 487, "endPos": 568, "beforeText": " currents and voltages are not in phase with one another (the more inductive the load, the more this is true) the triacs can be spuriously turned on. ", "extractionText": "Theoretically when the current reaches zero, the TRIAC is supposed to be disabled", "afterText": ", but since the load is higly inductive, the\nvoltage at that stage is not equal to zero. Thus the TRIAC will &quot;observe&quot; a high dV/dt between anode and ", "attributesHtml": "<div><strong>class:</strong> Pronoun</div><div><strong>attributes:</strong> {<span class=\"lx-attr-key\">referent</span>: <span class=\"lx-attr-value\">the TRIAC</span>}</div>"}, {"index": 5, "class": "condition", "text": "but since the load is higly inductive, the voltage at that stage is not equal to zero", "color": "#C8E6C9", "startPos": 570, "endPos": 655, "beforeText": "ad, the more this is true) the triacs can be spuriously turned on. Theoretically when the current reaches zero, the TRIAC is supposed to be disabled, ", "extractionText": "but since the load is higly inductive, the\nvoltage at that stage is not equal to zero", "afterText": ". Thus the TRIAC will &quot;observe&quot; a high dV/dt between anode and cathode which might trigger a spurious turn on even if the gate is not triggered.\nFurth", "attributesHtml": "<div><strong>class:</strong> condition</div><div><strong>attributes:</strong> {}</div>"}];
+        let currentIndex = 0;
+        let isPlaying = false;
+        let animationInterval = null;
+        let animationSpeed = 1.0;
 
-    function updateDisplay() {
-      const extraction = extractions[currentIndex];
-      if (!extraction) return;
+        function updateDisplay() {
+          const extraction = extractions[currentIndex];
+          if (!extraction) return;
 
-      document.getElementById('attributesContainer').innerHTML = extraction.attributesHtml;
-      document.getElementById('entityInfo').textContent = (currentIndex + 1) + '/' + extractions.length;
-      document.getElementById('posInfo').textContent = '[' + extraction.startPos + '-' + extraction.endPos + ']';
-      document.getElementById('progressSlider').value = currentIndex;
+          document.getElementById('attributesContainer').innerHTML = extraction.attributesHtml;
+          document.getElementById('entityInfo').textContent = (currentIndex + 1) + '/' + extractions.length;
+          document.getElementById('posInfo').textContent = '[' + extraction.startPos + '-' + extraction.endPos + ']';
+          document.getElementById('progressSlider').value = currentIndex;
 
-      const playBtn = document.querySelector('.lx-control-btn');
-      if (playBtn) playBtn.textContent = isPlaying ? '⏸ Pause' : '▶️ Play';
+          const playBtn = document.querySelector('.lx-control-btn');
+          if (playBtn) playBtn.textContent = isPlaying ? '⏸ Pause' : '▶️ Play';
 
-      const prevHighlight = document.querySelector('.lx-text-window .lx-current-highlight');
-      if (prevHighlight) prevHighlight.classList.remove('lx-current-highlight');
-      const currentSpan = document.querySelector('.lx-text-window span[data-idx="' + currentIndex + '"]');
-      if (currentSpan) {
-        currentSpan.classList.add('lx-current-highlight');
-        currentSpan.scrollIntoView({block: 'center', behavior: 'smooth'});
-      }
-    }
+          const prevHighlight = document.querySelector('.lx-text-window .lx-current-highlight');
+          if (prevHighlight) prevHighlight.classList.remove('lx-current-highlight');
+          const currentSpan = document.querySelector('.lx-text-window span[data-idx="' + currentIndex + '"]');
+          if (currentSpan) {
+            currentSpan.classList.add('lx-current-highlight');
+            currentSpan.scrollIntoView({block: 'center', behavior: 'smooth'});
+          }
+        }
 
-    function nextExtraction() {
-      currentIndex = (currentIndex + 1) % extractions.length;
-      updateDisplay();
-    }
+        function nextExtraction() {
+          currentIndex = (currentIndex + 1) % extractions.length;
+          updateDisplay();
+        }
 
-    function prevExtraction() {
-      currentIndex = (currentIndex - 1 + extractions.length) % extractions.length;
-      updateDisplay();
-    }
+        function prevExtraction() {
+          currentIndex = (currentIndex - 1 + extractions.length) % extractions.length;
+          updateDisplay();
+        }
 
-    function jumpToExtraction(index) {
-      currentIndex = parseInt(index);
-      updateDisplay();
-    }
+        function jumpToExtraction(index) {
+          currentIndex = parseInt(index);
+          updateDisplay();
+        }
 
-    function playPause() {
-      if (isPlaying) {
-        clearInterval(animationInterval);
-        isPlaying = false;
-      } else {
-        animationInterval = setInterval(nextExtraction, animationSpeed * 1000);
-        isPlaying = true;
-      }
-      updateDisplay();
-    }
+        function playPause() {
+          if (isPlaying) {
+            clearInterval(animationInterval);
+            isPlaying = false;
+          } else {
+            animationInterval = setInterval(nextExtraction, animationSpeed * 1000);
+            isPlaying = true;
+          }
+          updateDisplay();
+        }
 
-    window.playPause = playPause;
-    window.nextExtraction = nextExtraction;
-    window.prevExtraction = prevExtraction;
-    window.jumpToExtraction = jumpToExtraction;
+        window.playPause = playPause;
+        window.nextExtraction = nextExtraction;
+        window.prevExtraction = prevExtraction;
+        window.jumpToExtraction = jumpToExtraction;
 
-    updateDisplay();
-  })();
-</script>
+        updateDisplay();
+      })();
+    </script>
