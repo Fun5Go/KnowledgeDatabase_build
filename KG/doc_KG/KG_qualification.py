@@ -14,7 +14,12 @@ from chromadb.utils import embedding_functions
 # =========================================================
 # CONFIG
 # =========================================================
-QD_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\QD6303220037R03.pdf"
+ESW_QD_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\QD6303220037R03.pdf"
+HW_QD_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\QD6303220030R08 IPS3 - Electronics.pdf"
+QUALIFICATION_DOCS = [
+    {"file_path": ESW_QD_PATH, "discipline": "ESW"},
+    {"file_path": HW_QD_PATH, "discipline": "HW"},
+]
 
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
@@ -93,6 +98,15 @@ def safe_text(value: Any) -> str:
     return str(value).strip()
 
 
+def normalize_discipline(discipline: Optional[str]) -> Optional[str]:
+    discipline = safe_text(discipline).upper()
+    if not discipline:
+        return None
+    if discipline not in {"ESW", "HW"}:
+        raise ValueError(f"Unsupported discipline: {discipline}. Expected ESW or HW.")
+    return discipline
+
+
 def unique_keep_order(items: List[str]) -> List[str]:
     seen = set()
     out = []
@@ -106,6 +120,15 @@ def unique_keep_order(items: List[str]) -> List[str]:
 def save_json(data, output_path: str):
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def make_parsed_json_path(file_path: str, discipline: Optional[str] = None) -> str:
+    base_dir = os.path.dirname(PARSED_JSON_PATH) or "."
+    file_stem = os.path.splitext(os.path.basename(file_path))[0]
+    suffix = normalize_discipline(discipline)
+    if suffix:
+        file_stem = f"{file_stem}_{suffix}"
+    return os.path.join(base_dir, f"{file_stem}_parsed.json")
 
 
 def is_noise_line(text: str) -> bool:
@@ -467,6 +490,7 @@ def append_field(obj: Dict, key: str, text: str):
 def make_empty_qd_block(
     section_info: Optional[Dict[str, Any]] = None,
     document_id: Optional[str] = None,
+    discipline: Optional[str] = None,
 ) -> Dict[str, Any]:
     block = {
         "qd_id": None,
@@ -483,6 +507,7 @@ def make_empty_qd_block(
         "section_title": safe_text(section_info.get("title")) if section_info else "",
         "section_level": section_info.get("level") if section_info else None,
         "section_node_id": "",
+        "discipline": normalize_discipline(discipline),
     }
 
     if section_info and section_info.get("number") and document_id:
@@ -535,9 +560,15 @@ def parse_qd_blocks(
     section_info: Optional[Dict[str, Any]] = None,
     document_id: Optional[str] = None,
     toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+    discipline: Optional[str] = None,
 ) -> List[Dict]:
     blocks: List[Dict[str, Any]] = []
-    result = make_empty_qd_block(section_info=section_info, document_id=document_id)
+    normalized_discipline = normalize_discipline(discipline)
+    result = make_empty_qd_block(
+        section_info=section_info,
+        document_id=document_id,
+        discipline=normalized_discipline,
+    )
     current_section_info = section_info
     current_content_section = None
     pending_qd_title = ""
@@ -568,7 +599,11 @@ def parse_qd_blocks(
             )
             if has_block_content:
                 finalize_current_block(result)
-                result = make_empty_qd_block(section_info=line_section, document_id=document_id)
+                result = make_empty_qd_block(
+                    section_info=line_section,
+                    document_id=document_id,
+                    discipline=normalized_discipline,
+                )
                 current_content_section = None
                 pending_qd_title = ""
             else:
@@ -589,7 +624,11 @@ def parse_qd_blocks(
         if qd_id and qd_id != result["qd_id"]:
             if result["qd_id"]:
                 finalize_current_block(result)
-                result = make_empty_qd_block(section_info=current_section_info, document_id=document_id)
+                result = make_empty_qd_block(
+                    section_info=current_section_info,
+                    document_id=document_id,
+                    discipline=normalized_discipline,
+                )
                 current_content_section = None
             result["qd_id"] = qd_id
             if pending_qd_title and not result["qd_title"]:
@@ -618,7 +657,11 @@ def parse_qd_blocks(
             new_title = clean_line(m_title.group(1))
             if result["qd_id"] and result["qd_title"] and result["qd_title"] != new_title:
                 finalize_current_block(result)
-                result = make_empty_qd_block(section_info=current_section_info, document_id=document_id)
+                result = make_empty_qd_block(
+                    section_info=current_section_info,
+                    document_id=document_id,
+                    discipline=normalized_discipline,
+                )
                 current_content_section = None
                 result["qd_title"] = new_title
                 pending_qd_title = new_title
@@ -669,6 +712,7 @@ def parse_qd_block(
     section_info: Optional[Dict[str, Any]] = None,
     document_id: Optional[str] = None,
     toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+    discipline: Optional[str] = None,
 ) -> Dict:
     blocks = parse_qd_blocks(
         qd_lines,
@@ -676,8 +720,13 @@ def parse_qd_block(
         section_info=section_info,
         document_id=document_id,
         toc_entries=toc_entries,
+        discipline=discipline,
     )
-    return blocks[0] if blocks else make_empty_qd_block(section_info=section_info, document_id=document_id)
+    return blocks[0] if blocks else make_empty_qd_block(
+        section_info=section_info,
+        document_id=document_id,
+        discipline=discipline,
+    )
 
 
 # =========================================================
@@ -850,6 +899,7 @@ def parse_one_page(
     toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
     current_section_info: Optional[Dict[str, Any]] = None,
     document_id: Optional[str] = None,
+    discipline: Optional[str] = None,
     debug: bool = False,
 ) -> Optional[Dict]:
     cropped = page.crop((0, HEADER_CROP, page.width, page.height))
@@ -875,7 +925,7 @@ def parse_one_page(
 
     header_line = line_infos[header_idx]
     cols = infer_table_columns(header_line)
-    document_id = document_id or make_qualification_document_id(QD_PATH)
+    document_id = document_id or "qualification_document"
 
     qd_lines = line_infos[:header_idx]
     table_lines = line_infos[header_idx + 1:]
@@ -892,6 +942,7 @@ def parse_one_page(
         section_info=section_info,
         document_id=document_id,
         toc_entries=toc_entries,
+        discipline=discipline,
     )
     tst_rows = parse_tst_rows(tst_lines, cols, page.width)
     qd_blocks = attach_tests_to_qd_blocks(qd_blocks, tst_rows)
@@ -909,6 +960,7 @@ def parse_one_page(
                 section_info=section_info,
                 document_id=document_id,
                 toc_entries=toc_entries,
+                discipline=discipline,
             )
             qd_tail_tests = parse_tst_rows(tail_table_lines, cols, page.width)
             qd_tail_blocks = attach_tests_to_qd_blocks(qd_tail_blocks, qd_tail_tests)
@@ -919,12 +971,17 @@ def parse_one_page(
                 section_info=section_info,
                 document_id=document_id,
                 toc_entries=toc_entries,
+                discipline=discipline,
             )
 
     if qd_tail_blocks:
         qd_blocks.extend(qd_tail_blocks)
 
-    qd_data = qd_blocks[-1] if qd_blocks else make_empty_qd_block(section_info=section_info, document_id=document_id)
+    qd_data = qd_blocks[-1] if qd_blocks else make_empty_qd_block(
+        section_info=section_info,
+        document_id=document_id,
+        discipline=discipline,
+    )
     tst_rows = tst_rows + qd_tail_tests
     effective_section_info = section_info
     if qd_tail_blocks:
@@ -943,6 +1000,7 @@ def parse_one_page(
         "section_info": effective_section_info,
         "section_source": section_source,
         "section_hits": section_hits,
+        "discipline": normalize_discipline(discipline),
     }
 
 
@@ -1019,9 +1077,10 @@ def print_identified_sections(
             print(f"Page {page['page']}: {section_text}")
 
 
-def extract_qd_tst_from_pdf(file_path: str, debug: bool = False) -> Dict[str, Any]:
+def extract_qd_tst_from_pdf(file_path: str, discipline: Optional[str] = None, debug: bool = False) -> Dict[str, Any]:
     results = []
     page_tracks = []
+    normalized_discipline = normalize_discipline(discipline)
 
     with pdfplumber.open(file_path) as pdf:
         toc_entries = extract_toc_entries_from_pdf(pdf)
@@ -1035,6 +1094,7 @@ def extract_qd_tst_from_pdf(file_path: str, debug: bool = False) -> Dict[str, An
                 toc_entries=toc_entries,
                 current_section_info=current_section_info,
                 document_id=document_id,
+                discipline=normalized_discipline,
                 debug=debug,
             )
             if parsed:
@@ -1055,6 +1115,7 @@ def extract_qd_tst_from_pdf(file_path: str, debug: bool = False) -> Dict[str, An
         "toc_sections": toc_section_list,
         "pages": results,
         "page_tracks": page_tracks,
+        "discipline": normalized_discipline,
     }
 
 
@@ -1124,6 +1185,7 @@ def build_tst_text(tst: Dict) -> str:
 def aggregate_qd_results(parsed_data: Any, file_path: str) -> Dict[str, Any]:
     file_name = os.path.basename(file_path)
     document_id = make_qualification_document_id(file_path)
+    discipline = normalize_discipline(parsed_data.get("discipline") if isinstance(parsed_data, dict) else None)
 
     if isinstance(parsed_data, dict):
         parsed_pages = parsed_data.get("pages", [])
@@ -1178,6 +1240,7 @@ def aggregate_qd_results(parsed_data: Any, file_path: str) -> Dict[str, Any]:
                     "section_tag": "",
                     "section_level": None,
                     "section_node_id": None,
+                    "discipline": discipline,
                     "type": "QD",
                 }
 
@@ -1219,6 +1282,9 @@ def aggregate_qd_results(parsed_data: Any, file_path: str) -> Dict[str, Any]:
                 target["section_level"] = section_level
                 target["section_node_id"] = section_node_id
 
+            if not target.get("discipline"):
+                target["discipline"] = normalize_discipline(qd.get("discipline")) or discipline
+
             for item in iter_tests_from_qd_entries([qd]):
                 tst = item["test"]
                 tst_id = safe_text(tst.get("tst_id"))
@@ -1240,6 +1306,7 @@ def aggregate_qd_results(parsed_data: Any, file_path: str) -> Dict[str, Any]:
                     "section_tag": section_tag,
                     "section_level": section_level,
                     "section_node_id": section_node_id,
+                    "discipline": normalize_discipline(qd.get("discipline")) or discipline,
                     "type": "TST",
                 }
 
@@ -1312,15 +1379,18 @@ class QualificationKGBuilder:
         document_id: str,
         file_path: str,
         section_tags: Optional[List[str]] = None,
+        discipline: Optional[str] = None,
     ):
         file_name = os.path.basename(file_path)
         section_tags = unique_keep_order([safe_text(x) for x in (section_tags or []) if safe_text(x)])
+        discipline = normalize_discipline(discipline)
 
         props = {
             "semantic_id": document_id,
             "file_name": file_name,
             "source": file_path,
             "doc_type": "qualification",
+            "discipline": discipline,
             "section_tags": section_tags,
             "section_count": len(section_tags),
         }
@@ -1500,6 +1570,7 @@ class QualificationKGBuilder:
         SET q = {
             name: row.name,
             qd_id: row.qd_id,
+            discipline: row.discipline,
             verified_ids: row.verified_ids,
             refs: row.refs,
             qd_title: row.qd_title,
@@ -1532,6 +1603,7 @@ class QualificationKGBuilder:
         SET t = {
             name: row.name,
             tst_id: row.tst_id,
+            discipline: row.discipline,
             verified_ids: row.verified_ids,
             refs: row.refs,
             step_no: row.step_no,
@@ -1616,15 +1688,24 @@ class QualificationKGBuilder:
                 session.run(query, rows=batch)
                 print(f"[INFO] Imported QD VERIFIED batch {i + 1} - {i + len(batch)} / {len(rows)}")
 
-    def refresh_qualification_document(self, file_path: str, qd_rows: List[Dict], tst_rows: List[Dict], toc_sections: List[Dict[str, Any]], batch_size: int = 100):
+    def refresh_qualification_document(
+        self,
+        file_path: str,
+        qd_rows: List[Dict],
+        tst_rows: List[Dict],
+        toc_sections: List[Dict[str, Any]],
+        discipline: Optional[str] = None,
+        batch_size: int = 100,
+    ):
         document_id = make_qualification_document_id(file_path)
         section_tags = self._collect_section_tags(toc_sections)
+        discipline = normalize_discipline(discipline)
 
-        self.upsert_document_node(document_id, file_path, section_tags=section_tags)
+        self.upsert_document_node(document_id, file_path, section_tags=section_tags, discipline=discipline)
         self.purge_document_subgraph(document_id)
 
         self.import_section_nodes(document_id, toc_sections, batch_size=batch_size)
-        self.upsert_document_node(document_id, file_path, section_tags=section_tags)
+        self.upsert_document_node(document_id, file_path, section_tags=section_tags, discipline=discipline)
         self.import_qdchunks(document_id, qd_rows, batch_size=batch_size)
         self.import_tstchunks(tst_rows, batch_size=batch_size)
         self.import_qd_verified_links(qd_rows, batch_size=batch_size)
@@ -1749,21 +1830,6 @@ def print_section_summary(toc_sections: List[Dict[str, Any]], page_tracks: List[
 # MAIN
 # =========================================================
 def main():
-    if not os.path.isfile(QD_PATH):
-        raise FileNotFoundError(f"Qualification PDF not found: {QD_PATH}")
-
-    parsed_data = extract_qd_tst_from_pdf(QD_PATH, debug=DEBUG_PRINT_PAGE_LINES)
-
-    if DEBUG_SAVE_PARSED_JSON:
-        save_json(parsed_data, PARSED_JSON_PATH)
-        print(f"[INFO] Parsed JSON saved to: {PARSED_JSON_PATH}")
-
-    aggregated = aggregate_qd_results(parsed_data, QD_PATH)
-    qd_rows = aggregated["qd_rows"]
-    tst_rows = aggregated["tst_rows"]
-    toc_sections = aggregated.get("toc_sections", [])
-    print_section_qd_summary(toc_sections, qd_rows)
-
     kg_builder = QualificationKGBuilder(
         uri=NEO4J_URI,
         user=NEO4J_USER,
@@ -1773,13 +1839,44 @@ def main():
 
     try:
         kg_builder.setup_schema()
-        kg_builder.refresh_qualification_document(
-            file_path=QD_PATH,
-            qd_rows=qd_rows,
-            tst_rows=tst_rows,
-            toc_sections=toc_sections,
-            batch_size=BATCH_SIZE,
-        )
+
+        for doc_cfg in QUALIFICATION_DOCS:
+            file_path = doc_cfg["file_path"]
+            discipline = normalize_discipline(doc_cfg.get("discipline"))
+
+            if not os.path.isfile(file_path):
+                raise FileNotFoundError(f"Qualification PDF not found: {file_path}")
+
+            print("\n" + "=" * 120)
+            print(f"[PROCESSING] {os.path.basename(file_path)} ({discipline or 'GENERIC'})")
+            print("=" * 120)
+
+            parsed_data = extract_qd_tst_from_pdf(
+                file_path,
+                discipline=discipline,
+                debug=DEBUG_PRINT_PAGE_LINES,
+            )
+
+            if DEBUG_SAVE_PARSED_JSON:
+                parsed_json_path = make_parsed_json_path(file_path, discipline=discipline)
+                save_json(parsed_data, parsed_json_path)
+                print(f"[INFO] Parsed JSON saved to: {parsed_json_path}")
+
+            aggregated = aggregate_qd_results(parsed_data, file_path)
+            qd_rows = aggregated["qd_rows"]
+            tst_rows = aggregated["tst_rows"]
+            toc_sections = aggregated.get("toc_sections", [])
+            print_section_qd_summary(toc_sections, qd_rows)
+
+            kg_builder.refresh_qualification_document(
+                file_path=file_path,
+                qd_rows=qd_rows,
+                tst_rows=tst_rows,
+                toc_sections=toc_sections,
+                discipline=discipline,
+                batch_size=BATCH_SIZE,
+            )
+
         print("[DONE]")
     finally:
         kg_builder.close()
