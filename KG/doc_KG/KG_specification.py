@@ -1658,7 +1658,7 @@ class VectorKGBuilder:
                         semantic_id: row.semantic_id,
                         name: row.name,
                         prefix: row.prefix,
-                        hierarchy_level: row.hierarchy_level,
+                        hierarchy_level: row.hierarchy_level
                     }}
                     WITH n
                     MATCH (d {{semantic_id: $document_id}})
@@ -1673,7 +1673,7 @@ class VectorKGBuilder:
                         semantic_id: row.semantic_id,
                         name: row.name,
                         prefix: row.prefix,
-                        hierarchy_level: row.hierarchy_level,
+                        hierarchy_level: row.hierarchy_level
                     }}
                     MERGE (parent)-[:{rel_type}]->(n)
                     """

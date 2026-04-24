@@ -4,8 +4,8 @@ from gliner2 import GLiNER2  # requires gliner2[local]
 extractor = GLiNER2.from_pretrained("fastino/gliner2-base-v1")
 
 # Extract entities in one line
-text = "Sequencing will be utilized in enabling the motor relays during the soft start, there will be 200ms in between enabling the indiviual relays."
-result = extractor.extract_entities(text, ["subject", "action", "target", "constrains"])
+text = "During the soft start the thyristors shall handle peak currents up to 100A. The thyristors should handle that current for the whole duration of the soft start."
+result = extractor.extract_entities(text, ["component", "function", "object", "constrains"])
 
 print(result)
 # {'entities': {'company': ['Apple'], 'person': ['Tim Cook'], 'product': ['iPhone 15'], 'location': ['Cupertino']}}

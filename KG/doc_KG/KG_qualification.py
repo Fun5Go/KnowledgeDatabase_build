@@ -16,9 +16,13 @@ from chromadb.utils import embedding_functions
 # =========================================================
 ESW_QD_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\QD6303220037R03.pdf"
 HW_QD_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\QD6303220030R08 IPS3 - Electronics.pdf"
+FAT_PATH = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\Codes\database\doc_part\FAT6303220032R08.pdf"
 QUALIFICATION_DOCS = [
     {"file_path": ESW_QD_PATH, "discipline": "ESW"},
     {"file_path": HW_QD_PATH, "discipline": "HW"},
+]
+FAT_DOCS = [
+    {"file_path": FAT_PATH, "doc_type": "FAT", "discipline": None},
 ]
 
 NEO4J_URI = "bolt://localhost:7687"
@@ -107,13 +111,27 @@ def normalize_discipline(discipline: Optional[str]) -> Optional[str]:
     return discipline
 
 
-def get_document_primary_label() -> str:
+def normalize_doc_type(doc_type: Optional[str]) -> str:
+    doc_type = safe_text(doc_type).upper()
+    if not doc_type:
+        return "QD"
+    if doc_type not in {"QD", "FAT"}:
+        raise ValueError(f"Unsupported doc type: {doc_type}. Expected QD or FAT.")
+    return doc_type
+
+
+def get_document_primary_label(doc_type: Optional[str] = None) -> str:
+    doc_type = normalize_doc_type(doc_type)
+    if doc_type == "FAT":
+        return "FactoryAcceptanceTestDocumentation"
     return "QualificationDocumentation"
 
 
-def get_document_secondary_label(discipline: Optional[str]) -> Optional[str]:
+def get_document_secondary_label(discipline: Optional[str], doc_type: Optional[str] = None) -> Optional[str]:
     discipline = normalize_discipline(discipline)
     if discipline:
+        if normalize_doc_type(doc_type) == "FAT":
+            return f"{discipline}FactoryAcceptanceTestDocumentation"
         return f"{discipline}QualificationDocumentation"
     return None
 
@@ -133,12 +151,15 @@ def save_json(data, output_path: str):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def make_parsed_json_path(file_path: str, discipline: Optional[str] = None) -> str:
+def make_parsed_json_path(file_path: str, discipline: Optional[str] = None, doc_type: Optional[str] = None) -> str:
     base_dir = os.path.dirname(PARSED_JSON_PATH) or "."
     file_stem = os.path.splitext(os.path.basename(file_path))[0]
     suffix = normalize_discipline(discipline)
+    suffix_doc = normalize_doc_type(doc_type) if doc_type else None
     if suffix:
         file_stem = f"{file_stem}_{suffix}"
+    if suffix_doc and suffix_doc != "QD":
+        file_stem = f"{file_stem}_{suffix_doc}"
     return os.path.join(base_dir, f"{file_stem}_parsed.json")
 
 
@@ -175,14 +196,14 @@ def is_noise_line(text: str) -> bool:
 # =========================================================
 # PATTERNS
 # =========================================================
-QD_ID_PATTERN = re.compile(r"\bQD_\d+\b")
+QD_ID_PATTERN = re.compile(r"\b(?:QD|FAT)_\d+\*?\b")
 TST_ID_PATTERN = re.compile(r"\bTST_\d+\b")
 CHO_ID_PATTERN = re.compile(r"\bCHO_\d+\b")
 REQ_ID_PATTERN = re.compile(r"\bREQ_\d+\b")
 DRQ_ID_PATTERN = re.compile(r"\bDRQ_\d+\*?\b")
 REF_PATTERN = re.compile(r"\[\d+\]")
 
-QD_TITLE_PATTERN = re.compile(r"^QD\s*:\s*(.+)$", re.I)
+QD_TITLE_PATTERN = re.compile(r"^(?:QD|FAT)\s*:\s*(.+)$", re.I)
 TOC_ENTRY_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\.{2,}\s*(\d+)\s*$")
 SECTION_HEADING_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\s*$")
 
@@ -1189,15 +1210,23 @@ def make_tstchunk_name(file_name: str, tst_id: str) -> str:
     return f"{base_name}_{tst_id}"
 
 
-def build_qd_text(qd: Dict) -> str:
+def build_doc_text(title_key: str, doc: Dict, title_label: str) -> str:
     parts = []
-    if qd.get("qd_title"):
-        parts.append(f"QD Title: {qd['qd_title']}")
-    if qd.get("objectives"):
-        parts.append(f"Objectives: {flatten_text(qd['objectives'])}")
-    if qd.get("preconditions"):
-        parts.append(f"Preconditions: {flatten_text(qd['preconditions'])}")
+    if doc.get(title_key):
+        parts.append(f"{title_label}: {doc[title_key]}")
+    if doc.get("objectives"):
+        parts.append(f"Objectives: {flatten_text(doc['objectives'])}")
+    if doc.get("preconditions"):
+        parts.append(f"Preconditions: {flatten_text(doc['preconditions'])}")
     return "\n".join(parts).strip()
+
+
+def build_qd_text(qd: Dict) -> str:
+    return build_doc_text("qd_title", qd, "QD Title")
+
+
+def build_fat_text(fat: Dict) -> str:
+    return build_doc_text("fat_title", fat, "FAT Title")
 
 
 def build_tst_text(tst: Dict) -> str:
@@ -1323,6 +1352,7 @@ def aggregate_qd_results(parsed_data: Any, file_path: str) -> Dict[str, Any]:
                 row = {
                     "name": make_tstchunk_name(file_name, tst_id),
                     "tst_id": tst_id,
+                    "parent_chunk_name": qd_map[qd_id]["name"] if qd_id in qd_map else "",
                     "qd_chunk_name": qd_map[qd_id]["name"] if qd_id in qd_map else "",
                     "verified_ids": unique_keep_order(tst.get("verified_ids", [])),
                     "refs": unique_keep_order(tst.get("refs", [])),
@@ -1367,6 +1397,35 @@ def aggregate_qd_results(parsed_data: Any, file_path: str) -> Dict[str, Any]:
     }
 
 
+def aggregate_fat_results(parsed_data: Any, file_path: str) -> Dict[str, Any]:
+    aggregated = aggregate_qd_results(parsed_data, file_path)
+
+    fat_rows: List[Dict[str, Any]] = []
+    for row in aggregated.get("qd_rows", []):
+        fat_row = dict(row)
+        fat_row["fat_id"] = fat_row.pop("qd_id", "")
+        fat_row["fat_title"] = fat_row.pop("qd_title", "")
+        fat_row["doc_type"] = "FAT"
+        fat_row["type"] = "FAT"
+        fat_row["text"] = build_fat_text(fat_row)
+        fat_row["embedding"] = embed(fat_row["text"]) if fat_row["text"] else None
+        fat_rows.append(fat_row)
+
+    tst_rows: List[Dict[str, Any]] = []
+    for row in aggregated.get("tst_rows", []):
+        tst_row = dict(row)
+        parent_name = safe_text(tst_row.get("parent_chunk_name")) or safe_text(tst_row.get("qd_chunk_name"))
+        tst_row["parent_chunk_name"] = parent_name
+        tst_row["fat_chunk_name"] = parent_name
+        tst_rows.append(tst_row)
+
+    return {
+        "fat_rows": fat_rows,
+        "tst_rows": tst_rows,
+        "toc_sections": aggregated.get("toc_sections", []),
+    }
+
+
 # =========================================================
 # KG BUILDER
 # =========================================================
@@ -1396,8 +1455,18 @@ class QualificationKGBuilder:
             REQUIRE n.semantic_id IS UNIQUE
             """,
             """
+            CREATE CONSTRAINT factory_acceptance_test_document_semantic_id_unique IF NOT EXISTS
+            FOR (n:FactoryAcceptanceTestDocumentation)
+            REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
             CREATE CONSTRAINT qdchunk_name_unique IF NOT EXISTS
             FOR (n:QDChunk)
+            REQUIRE n.name IS UNIQUE
+            """,
+            """
+            CREATE CONSTRAINT fatchunk_name_unique IF NOT EXISTS
+            FOR (n:FATChunk)
             REQUIRE n.name IS UNIQUE
             """,
             """
@@ -1417,12 +1486,14 @@ class QualificationKGBuilder:
         self,
         document_id: str,
         file_path: str,
+        doc_type: Optional[str] = None,
         discipline: Optional[str] = None,
     ):
         file_name = os.path.basename(file_path)
+        doc_type = normalize_doc_type(doc_type)
         discipline = normalize_discipline(discipline)
-        primary_label = get_document_primary_label()
-        secondary_label = get_document_secondary_label(discipline)
+        primary_label = get_document_primary_label(doc_type)
+        secondary_label = get_document_secondary_label(discipline, doc_type=doc_type)
         secondary_label_set = f"SET d:{secondary_label}" if secondary_label else ""
 
         props = {
@@ -1431,6 +1502,8 @@ class QualificationKGBuilder:
             "source": file_path,
             "discipline": discipline,
         }
+        if doc_type != "QD":
+            props["doc_type"] = doc_type
 
         query = f"""
         MERGE (d:{primary_label} {{semantic_id: $document_id}})
@@ -1445,7 +1518,7 @@ class QualificationKGBuilder:
         with self.driver.session(database=self.database) as session:
             session.run(
                 """
-                MATCH (d:QualificationDocumentation {semantic_id: $document_id})
+                MATCH (d {semantic_id: $document_id})
                 OPTIONAL MATCH (t:TSTChunk)
                 WHERE t.name STARTS WITH $name_prefix
                 WITH collect(DISTINCT t) AS tst_nodes
@@ -1459,7 +1532,7 @@ class QualificationKGBuilder:
 
             session.run(
                 """
-                MATCH (d:QualificationDocumentation {semantic_id: $document_id})
+                MATCH (d {semantic_id: $document_id})
                 OPTIONAL MATCH (q:QDChunk)
                 WHERE q.name STARTS WITH $name_prefix
                 WITH collect(DISTINCT q) AS qd_nodes
@@ -1473,7 +1546,21 @@ class QualificationKGBuilder:
 
             session.run(
                 """
-                MATCH (d:QualificationDocumentation {semantic_id: $document_id})
+                MATCH (d {semantic_id: $document_id})
+                OPTIONAL MATCH (f:FATChunk)
+                WHERE f.name STARTS WITH $name_prefix
+                WITH collect(DISTINCT f) AS fat_nodes
+                UNWIND fat_nodes AS f
+                WITH f WHERE f IS NOT NULL
+                DETACH DELETE f
+                """,
+                document_id=document_id,
+                name_prefix=name_prefix,
+            )
+
+            session.run(
+                """
+                MATCH (d {semantic_id: $document_id})
                 OPTIONAL MATCH (d)-[:HAS_CHAPTER|HAS_SECTION|HAS_SUBSECTION|HAS_SUBSUBSECTION*1..]->(n)
                 WITH collect(DISTINCT n) AS nodes
                 UNWIND nodes AS node
@@ -1541,7 +1628,13 @@ class QualificationKGBuilder:
             tags.append(safe_text(sec.get("full_text")) or clean_line(f"{number} {safe_text(sec.get('title'))}"))
         return unique_keep_order(tags)
 
-    def import_section_nodes(self, document_id: str, toc_sections: List[Dict[str, Any]], batch_size: int = 100):
+    def import_section_nodes(
+        self,
+        document_id: str,
+        toc_sections: List[Dict[str, Any]],
+        batch_size: int = 100,
+        document_label: str = "QualificationDocumentation",
+    ):
         rows = self._collect_section_node_rows(document_id, toc_sections)
         if not rows:
             print("[INFO] No section hierarchy rows to import")
@@ -1576,10 +1669,10 @@ class QualificationKGBuilder:
                 if level == 1:
                     rel_query = """
                     UNWIND $rows AS row
-                    MATCH (d:QualificationDocumentation {semantic_id: $document_id})
+                    MATCH (d:%s {semantic_id: $document_id})
                     MATCH (n:Chapter {semantic_id: row.semantic_id})
                     MERGE (d)-[:HAS_CHAPTER]->(n)
-                    """
+                    """ % document_label
                 else:
                     parent_label = get_section_node_label(level - 1)
                     rel_name = get_section_relationship_name(level)
@@ -1627,7 +1720,12 @@ class QualificationKGBuilder:
                 session.run(query, rows=batch, document_id=document_id)
                 print(f"[INFO] Imported QDChunk batch {i + 1} - {i + len(batch)} / {len(qd_rows)}")
 
-    def import_tstchunks(self, tst_rows: List[Dict], batch_size: int = 100):
+    def import_tstchunks(
+        self,
+        tst_rows: List[Dict],
+        batch_size: int = 100,
+        parent_label: str = "QDChunk",
+    ):
         if not tst_rows:
             print("[INFO] No TSTChunk rows to import")
             return
@@ -1638,6 +1736,7 @@ class QualificationKGBuilder:
         SET t = {
             name: row.name,
             tst_id: row.tst_id,
+            parent_chunk_name: row.parent_chunk_name,
             discipline: row.discipline,
             verified_ids: row.verified_ids,
             refs: row.refs,
@@ -1655,9 +1754,9 @@ class QualificationKGBuilder:
             type: row.type
         }
         WITH t, row
-        MATCH (q:QDChunk {name: row.qd_chunk_name})
+        MATCH (q:%s {name: row.parent_chunk_name})
         MERGE (t)-[:BELONGS_TO]->(q)
-        """
+        """ % parent_label
 
         with self.driver.session(database=self.database) as session:
             for i in range(0, len(tst_rows), batch_size):
@@ -1665,7 +1764,12 @@ class QualificationKGBuilder:
                 session.run(query, rows=batch)
                 print(f"[INFO] Imported TSTChunk batch {i + 1} - {i + len(batch)} / {len(tst_rows)}")
 
-    def import_tst_verified_links(self, tst_rows: List[Dict], batch_size: int = 100):
+    def import_tst_verified_links(
+        self,
+        tst_rows: List[Dict],
+        batch_size: int = 100,
+        target_match: str = "TSChunk:ESWTSChunk",
+    ):
         rows = []
 
         for row in tst_rows:
@@ -1684,9 +1788,9 @@ class QualificationKGBuilder:
         query = """
         UNWIND $rows AS row
         MATCH (t:TSTChunk {name: row.tst_name})
-        MATCH (ts:TSChunk:ESWTSChunk {primary_requirement_id: row.verified_id})
+        MATCH (ts:%s {primary_requirement_id: row.verified_id})
         MERGE (t)-[:VERIFIED]->(ts)
-        """
+        """ % target_match
 
         with self.driver.session(database=self.database) as session:
             for i in range(0, len(rows), batch_size):
@@ -1723,6 +1827,68 @@ class QualificationKGBuilder:
                 session.run(query, rows=batch)
                 print(f"[INFO] Imported QD VERIFIED batch {i + 1} - {i + len(batch)} / {len(rows)}")
 
+    def import_fatchunks(self, fat_rows: List[Dict], batch_size: int = 100):
+        if not fat_rows:
+            print("[INFO] No FATChunk rows to import")
+            return
+
+        query = """
+        UNWIND $rows AS row
+        MERGE (f:FATChunk {name: row.name})
+        SET f = {
+            name: row.name,
+            fat_id: row.fat_id,
+            verified_ids: row.verified_ids,
+            refs: row.refs,
+            fat_title: row.fat_title,
+            objectives: row.objectives,
+            preconditions: row.preconditions,
+            text: row.text,
+            embedding: row.embedding,
+            pages: row.pages,
+            section_tag: row.section_tag,
+            section_level: row.section_level,
+            section_node_id: row.section_node_id,
+            doc_type: row.doc_type,
+            type: row.type
+        }
+        """
+
+        with self.driver.session(database=self.database) as session:
+            for i in range(0, len(fat_rows), batch_size):
+                batch = fat_rows[i:i + batch_size]
+                session.run(query, rows=batch)
+                print(f"[INFO] Imported FATChunk batch {i + 1} - {i + len(batch)} / {len(fat_rows)}")
+
+    def import_fat_verified_links(self, fat_rows: List[Dict], batch_size: int = 100):
+        rows = []
+
+        for row in fat_rows:
+            fat_name = row["name"]
+            for verified_id in row.get("verified_ids", []):
+                if verified_id:
+                    rows.append({
+                        "fat_name": fat_name,
+                        "verified_id": verified_id,
+                    })
+
+        if not rows:
+            print("[INFO] No FAT VERIFIED links to import")
+            return
+
+        query = """
+        UNWIND $rows AS row
+        MATCH (f:FATChunk {name: row.fat_name})
+        MATCH (fs:FSChunk {primary_requirement_id: row.verified_id})
+        MERGE (f)-[:VERIFIED]->(fs)
+        """
+
+        with self.driver.session(database=self.database) as session:
+            for i in range(0, len(rows), batch_size):
+                batch = rows[i:i + batch_size]
+                session.run(query, rows=batch)
+                print(f"[INFO] Imported FAT VERIFIED batch {i + 1} - {i + len(batch)} / {len(rows)}")
+
     def refresh_qualification_document(
         self,
         file_path: str,
@@ -1735,18 +1901,46 @@ class QualificationKGBuilder:
         document_id = make_qualification_document_id(file_path)
         discipline = normalize_discipline(discipline)
 
-        self.upsert_document_node(document_id, file_path, discipline=discipline)
+        self.upsert_document_node(document_id, file_path, doc_type="QD", discipline=discipline)
         self.purge_document_subgraph(document_id)
 
-        self.import_section_nodes(document_id, toc_sections, batch_size=batch_size)
-        self.upsert_document_node(document_id, file_path, discipline=discipline)
+        self.import_section_nodes(document_id, toc_sections, batch_size=batch_size, document_label="QualificationDocumentation")
+        self.upsert_document_node(document_id, file_path, doc_type="QD", discipline=discipline)
         self.import_qdchunks(document_id, qd_rows, batch_size=batch_size)
-        self.import_tstchunks(tst_rows, batch_size=batch_size)
+        self.import_tstchunks(tst_rows, batch_size=batch_size, parent_label="QDChunk")
         self.import_qd_verified_links(qd_rows, batch_size=batch_size)
-        self.import_tst_verified_links(tst_rows, batch_size=batch_size)
-        
+        self.import_tst_verified_links(tst_rows, batch_size=batch_size, target_match="TSChunk:ESWTSChunk")
 
         print(f"[INFO] Refreshed qualification document: {document_id}")
+
+    def refresh_factory_acceptance_test_document(
+        self,
+        file_path: str,
+        fat_rows: List[Dict],
+        tst_rows: List[Dict],
+        toc_sections: List[Dict[str, Any]],
+        discipline: Optional[str] = None,
+        batch_size: int = 100,
+    ):
+        document_id = make_qualification_document_id(file_path)
+        discipline = normalize_discipline(discipline)
+
+        self.upsert_document_node(document_id, file_path, doc_type="FAT", discipline=discipline)
+        self.purge_document_subgraph(document_id)
+
+        self.import_section_nodes(
+            document_id,
+            toc_sections,
+            batch_size=batch_size,
+            document_label="FactoryAcceptanceTestDocumentation",
+        )
+        self.upsert_document_node(document_id, file_path, doc_type="FAT", discipline=discipline)
+        self.import_fatchunks(fat_rows, batch_size=batch_size)
+        self.import_tstchunks(tst_rows, batch_size=batch_size, parent_label="FATChunk")
+        self.import_fat_verified_links(fat_rows, batch_size=batch_size)
+        self.import_tst_verified_links(tst_rows, batch_size=batch_size, target_match="FSChunk")
+
+        print(f"[INFO] Refreshed FAT document: {document_id}")
 
 
 # =========================================================
@@ -1774,9 +1968,14 @@ def print_summary(qd_rows: List[Dict], tst_rows: List[Dict]):
                 print(f"  - {t['tst_id']} -> {t['name']}")
 
 
-def print_section_qd_summary(toc_sections: List[Dict[str, Any]], qd_rows: List[Dict]):
+def print_section_doc_summary(
+    toc_sections: List[Dict[str, Any]],
+    rows: List[Dict[str, Any]],
+    id_key: str,
+    header_label: str,
+):
     print("\n" + "=" * 120)
-    print("[SECTION -> QD IDS]")
+    print(f"[SECTION -> {header_label} IDS]")
     print("=" * 120)
 
     if not toc_sections:
@@ -1793,40 +1992,48 @@ def print_section_qd_summary(toc_sections: List[Dict[str, Any]], qd_rows: List[D
         if section_key not in section_order:
             section_order.append(section_key)
 
-    section_to_qds: Dict[str, List[str]] = defaultdict(list)
+    section_to_ids: Dict[str, List[str]] = defaultdict(list)
     fallback_key = "[NO SECTION]"
 
-    for q in qd_rows:
-        section_key = safe_text(q.get("section_tag")) or fallback_key
-        qd_id = safe_text(q.get("qd_id"))
-        if not qd_id:
+    for row in rows:
+        section_key = safe_text(row.get("section_tag")) or fallback_key
+        item_id = safe_text(row.get(id_key))
+        if not item_id:
             continue
-        section_to_qds[section_key].append(qd_id)
+        section_to_ids[section_key].append(item_id)
 
     for section_key in section_order:
-        qd_ids = unique_keep_order(section_to_qds.get(section_key, []))
-        if not qd_ids:
+        item_ids = unique_keep_order(section_to_ids.get(section_key, []))
+        if not item_ids:
             continue
         sec = section_meta.get(section_key, {})
         page = sec.get("page")
         level = sec.get("level")
         print(f"{section_key} -> page {page} -> level {level}")
-        for qd_id in qd_ids:
-            print(f"  - {qd_id}")
+        for item_id in item_ids:
+            print(f"  - {item_id}")
 
-    extra_keys = [k for k in section_to_qds.keys() if k not in section_meta and k != fallback_key]
+    extra_keys = [k for k in section_to_ids.keys() if k not in section_meta and k != fallback_key]
     for section_key in extra_keys:
-        qd_ids = unique_keep_order(section_to_qds.get(section_key, []))
-        if not qd_ids:
+        item_ids = unique_keep_order(section_to_ids.get(section_key, []))
+        if not item_ids:
             continue
         print(section_key)
-        for qd_id in qd_ids:
-            print(f"  - {qd_id}")
+        for item_id in item_ids:
+            print(f"  - {item_id}")
 
-    if section_to_qds.get(fallback_key):
+    if section_to_ids.get(fallback_key):
         print(fallback_key)
-        for qd_id in unique_keep_order(section_to_qds.get(fallback_key, [])):
-            print(f"  - {qd_id}")
+        for item_id in unique_keep_order(section_to_ids.get(fallback_key, [])):
+            print(f"  - {item_id}")
+
+
+def print_section_qd_summary(toc_sections: List[Dict[str, Any]], qd_rows: List[Dict]):
+    print_section_doc_summary(toc_sections, qd_rows, id_key="qd_id", header_label="QD")
+
+
+def print_section_fat_summary(toc_sections: List[Dict[str, Any]], fat_rows: List[Dict]):
+    print_section_doc_summary(toc_sections, fat_rows, id_key="fat_id", header_label="FAT")
 
 
 def print_section_summary(toc_sections: List[Dict[str, Any]], page_tracks: List[Dict[str, Any]]):
@@ -1874,15 +2081,16 @@ def main():
     try:
         kg_builder.setup_schema()
 
-        for doc_cfg in QUALIFICATION_DOCS:
+        for doc_cfg in QUALIFICATION_DOCS + FAT_DOCS:
             file_path = doc_cfg["file_path"]
+            doc_type = normalize_doc_type(doc_cfg.get("doc_type"))
             discipline = normalize_discipline(doc_cfg.get("discipline"))
 
             if not os.path.isfile(file_path):
-                raise FileNotFoundError(f"Qualification PDF not found: {file_path}")
+                raise FileNotFoundError(f"{doc_type} PDF not found: {file_path}")
 
             print("\n" + "=" * 120)
-            print(f"[PROCESSING] {os.path.basename(file_path)} ({discipline or 'GENERIC'})")
+            print(f"[PROCESSING] {os.path.basename(file_path)} ({doc_type}, {discipline or 'GENERIC'})")
             print("=" * 120)
 
             parsed_data = extract_qd_tst_from_pdf(
@@ -1892,24 +2100,40 @@ def main():
             )
 
             if DEBUG_SAVE_PARSED_JSON:
-                parsed_json_path = make_parsed_json_path(file_path, discipline=discipline)
+                parsed_json_path = make_parsed_json_path(file_path, discipline=discipline, doc_type=doc_type)
                 save_json(parsed_data, parsed_json_path)
                 print(f"[INFO] Parsed JSON saved to: {parsed_json_path}")
 
-            aggregated = aggregate_qd_results(parsed_data, file_path)
-            qd_rows = aggregated["qd_rows"]
-            tst_rows = aggregated["tst_rows"]
-            toc_sections = aggregated.get("toc_sections", [])
-            print_section_qd_summary(toc_sections, qd_rows)
+            toc_sections = []
+            if doc_type == "FAT":
+                aggregated = aggregate_fat_results(parsed_data, file_path)
+                fat_rows = aggregated["fat_rows"]
+                tst_rows = aggregated["tst_rows"]
+                toc_sections = aggregated.get("toc_sections", [])
+                print_section_fat_summary(toc_sections, fat_rows)
+                kg_builder.refresh_factory_acceptance_test_document(
+                    file_path=file_path,
+                    fat_rows=fat_rows,
+                    tst_rows=tst_rows,
+                    toc_sections=toc_sections,
+                    discipline=discipline,
+                    batch_size=BATCH_SIZE,
+                )
+            else:
+                aggregated = aggregate_qd_results(parsed_data, file_path)
+                qd_rows = aggregated["qd_rows"]
+                tst_rows = aggregated["tst_rows"]
+                toc_sections = aggregated.get("toc_sections", [])
+                print_section_qd_summary(toc_sections, qd_rows)
 
-            kg_builder.refresh_qualification_document(
-                file_path=file_path,
-                qd_rows=qd_rows,
-                tst_rows=tst_rows,
-                toc_sections=toc_sections,
-                discipline=discipline,
-                batch_size=BATCH_SIZE,
-            )
+                kg_builder.refresh_qualification_document(
+                    file_path=file_path,
+                    qd_rows=qd_rows,
+                    tst_rows=tst_rows,
+                    toc_sections=toc_sections,
+                    discipline=discipline,
+                    batch_size=BATCH_SIZE,
+                )
 
         print("[DONE]")
     finally:
