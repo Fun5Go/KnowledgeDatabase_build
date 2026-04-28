@@ -136,6 +136,13 @@ def get_document_secondary_label(discipline: Optional[str], doc_type: Optional[s
     return None
 
 
+def get_ts_target_match(discipline: Optional[str]) -> str:
+    discipline = normalize_discipline(discipline)
+    if discipline:
+        return f"TSChunk:{discipline}TSChunk"
+    return "TSChunk"
+
+
 def unique_keep_order(items: List[str]) -> List[str]:
     seen = set()
     out = []
@@ -1768,8 +1775,12 @@ class QualificationKGBuilder:
         self,
         tst_rows: List[Dict],
         batch_size: int = 100,
-        target_match: str = "TSChunk:ESWTSChunk",
+        target_match: str = "TSChunk",
+        rel_type: str = "VERIFIED",
     ):
+        if rel_type not in {"VERIFIED", "ACCEPTED"}:
+            raise ValueError(f"Unsupported relationship type: {rel_type}")
+
         rows = []
 
         for row in tst_rows:
@@ -1782,23 +1793,28 @@ class QualificationKGBuilder:
                     })
 
         if not rows:
-            print("[INFO] No VERIFIED links to import")
+            print(f"[INFO] No {rel_type} links to import")
             return
 
         query = """
         UNWIND $rows AS row
         MATCH (t:TSTChunk {name: row.tst_name})
         MATCH (ts:%s {primary_requirement_id: row.verified_id})
-        MERGE (t)-[:VERIFIED]->(ts)
-        """ % target_match
+        MERGE (t)-[:%s]->(ts)
+        """ % (target_match, rel_type)
 
         with self.driver.session(database=self.database) as session:
             for i in range(0, len(rows), batch_size):
                 batch = rows[i:i + batch_size]
                 session.run(query, rows=batch)
-                print(f"[INFO] Imported VERIFIED batch {i + 1} - {i + len(batch)} / {len(rows)}")
+                print(f"[INFO] Imported {rel_type} batch {i + 1} - {i + len(batch)} / {len(rows)}")
 
-    def import_qd_verified_links(self, qd_rows: List[Dict], batch_size: int = 100):
+    def import_qd_verified_links(
+        self,
+        qd_rows: List[Dict],
+        batch_size: int = 100,
+        target_match: str = "TSChunk",
+    ):
         rows = []
 
         for row in qd_rows:
@@ -1817,9 +1833,9 @@ class QualificationKGBuilder:
         query = """
         UNWIND $rows AS row
         MATCH (q:QDChunk {name: row.qd_name})
-        MATCH (ts:TSChunk:ESWTSChunk {primary_requirement_id: row.verified_id})
+        MATCH (ts:%s {primary_requirement_id: row.verified_id})
         MERGE (q)-[:VERIFIED]->(ts)
-        """
+        """ % target_match
 
         with self.driver.session(database=self.database) as session:
             for i in range(0, len(rows), batch_size):
@@ -1860,7 +1876,7 @@ class QualificationKGBuilder:
                 session.run(query, rows=batch)
                 print(f"[INFO] Imported FATChunk batch {i + 1} - {i + len(batch)} / {len(fat_rows)}")
 
-    def import_fat_verified_links(self, fat_rows: List[Dict], batch_size: int = 100):
+    def import_fat_accepted_links(self, fat_rows: List[Dict], batch_size: int = 100):
         rows = []
 
         for row in fat_rows:
@@ -1873,21 +1889,21 @@ class QualificationKGBuilder:
                     })
 
         if not rows:
-            print("[INFO] No FAT VERIFIED links to import")
+            print("[INFO] No FAT ACCEPTED links to import")
             return
 
         query = """
         UNWIND $rows AS row
         MATCH (f:FATChunk {name: row.fat_name})
         MATCH (fs:FSChunk {primary_requirement_id: row.verified_id})
-        MERGE (f)-[:VERIFIED]->(fs)
+        MERGE (f)-[:ACCEPTED]->(fs)
         """
 
         with self.driver.session(database=self.database) as session:
             for i in range(0, len(rows), batch_size):
                 batch = rows[i:i + batch_size]
                 session.run(query, rows=batch)
-                print(f"[INFO] Imported FAT VERIFIED batch {i + 1} - {i + len(batch)} / {len(rows)}")
+                print(f"[INFO] Imported FAT ACCEPTED batch {i + 1} - {i + len(batch)} / {len(rows)}")
 
     def refresh_qualification_document(
         self,
@@ -1908,8 +1924,9 @@ class QualificationKGBuilder:
         self.upsert_document_node(document_id, file_path, doc_type="QD", discipline=discipline)
         self.import_qdchunks(document_id, qd_rows, batch_size=batch_size)
         self.import_tstchunks(tst_rows, batch_size=batch_size, parent_label="QDChunk")
-        self.import_qd_verified_links(qd_rows, batch_size=batch_size)
-        self.import_tst_verified_links(tst_rows, batch_size=batch_size, target_match="TSChunk:ESWTSChunk")
+        ts_target_match = get_ts_target_match(discipline)
+        self.import_qd_verified_links(qd_rows, batch_size=batch_size, target_match=ts_target_match)
+        self.import_tst_verified_links(tst_rows, batch_size=batch_size, target_match=ts_target_match)
 
         print(f"[INFO] Refreshed qualification document: {document_id}")
 
@@ -1937,8 +1954,13 @@ class QualificationKGBuilder:
         self.upsert_document_node(document_id, file_path, doc_type="FAT", discipline=discipline)
         self.import_fatchunks(fat_rows, batch_size=batch_size)
         self.import_tstchunks(tst_rows, batch_size=batch_size, parent_label="FATChunk")
-        self.import_fat_verified_links(fat_rows, batch_size=batch_size)
-        self.import_tst_verified_links(tst_rows, batch_size=batch_size, target_match="FSChunk")
+        self.import_fat_accepted_links(fat_rows, batch_size=batch_size)
+        self.import_tst_verified_links(
+            tst_rows,
+            batch_size=batch_size,
+            target_match="FSChunk",
+            rel_type="ACCEPTED",
+        )
 
         print(f"[INFO] Refreshed FAT document: {document_id}")
 

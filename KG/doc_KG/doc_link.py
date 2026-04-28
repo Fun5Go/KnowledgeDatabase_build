@@ -22,6 +22,7 @@ NEO4J_PASSWORD = "password"
 NEO4J_DATABASE = "neo4j"
 
 SECTION_LABELS = ["Chapter", "Section", "Subsection", "Subsubsection"]
+SECTION_REL_TYPE = "SHARED"
 
 
 # =========================================================
@@ -156,7 +157,12 @@ class DocumentLinker:
             rows = [dict(record) for record in result]
             return rows
 
-    def link_section_nodes(self, source_document_id: str, target_document_id: str, rel_type: str) -> int:
+    def link_section_nodes(
+        self,
+        source_document_id: str,
+        target_document_id: str,
+        rel_type: str = SECTION_REL_TYPE,
+    ) -> int:
         rows = self.fetch_section_rows([source_document_id, target_document_id])
         source_rows = [row for row in rows if row["document_id"] == source_document_id]
         target_rows = [row for row in rows if row["document_id"] == target_document_id]
@@ -258,12 +264,13 @@ class DocumentLinker:
         target_document_id = document_id_from_path(target_path)
 
         root_linked = self.link_documents(source_document_id, target_document_id, rel_type)
-        section_link_count = self.link_section_nodes(source_document_id, target_document_id, rel_type)
+        section_link_count = self.link_section_nodes(source_document_id, target_document_id)
 
         return {
             "source_document_id": source_document_id,
             "target_document_id": target_document_id,
-            "rel_type": rel_type,
+            "rel_type": SECTION_REL_TYPE,
+            "root_rel_type": rel_type,
             "root_linked": root_linked,
             "section_link_count": section_link_count,
         }

@@ -96,6 +96,7 @@ class ChunkRetriever:
         RETURN
             elementId(node) AS node_id,
             labels(node) AS labels,
+            coalesce(node.name, "") AS name,
             coalesce(node.text, "") AS text,
             score AS score,
             "dense" AS source
@@ -141,6 +142,7 @@ class ChunkRetriever:
         RETURN
             elementId(node) AS node_id,
             labels(node) AS labels,
+            coalesce(node.name, "") AS name,
             coalesce(node.text, "") AS text,
             score AS score,
             "sparse" AS source
@@ -170,6 +172,7 @@ class ChunkRetriever:
                     fused[node_id] = {
                         "node_id": node_id,
                         "labels": item.get("labels", []),
+                        "name": item.get("name", ""),
                         "text": item.get("text", ""),
                         "rrf_score": 0.0,
                         "sources": set(),
