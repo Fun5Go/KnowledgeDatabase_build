@@ -1,6 +1,9 @@
+import math
+import re
 from typing import Any, Dict, List, Optional
 
 from .fmea_retrieverV2 import CrossEncoderScorer, FMEASentenceRetrieverV2
+from .neo4j_retriever import ChunkRetriever, get_query_embedding
 
 
 def build_sentence_doc_chunk_query(sentence: str) -> Dict[str, Any]:
@@ -40,8 +43,12 @@ def query_doc_chunks_for_sentence(
     use_cross_encoder_rerank: bool = False,
     cross_encoder_scorer: Optional[CrossEncoderScorer] = None,
     cross_encoder_top_n: int = 20,
+    use_section_tag_bonus: bool = True,
+    section_bonus_mode: str = "hybrid",
+    section_bonus_weight: float = 0.05,
 ) -> Dict[str, Any]:
     retrieval_mode = retriever._normalize_retrieval_mode(retrieval_mode)
+    section_bonus_mode = retriever._normalize_retrieval_mode(section_bonus_mode)
     allowed_labels = normalize_discipline_labels(disciplines)
     dense_queries = build_dense_queries(query_spec)
     sparse_queries = build_sparse_queries(retriever, query_spec)
@@ -84,6 +91,16 @@ def query_doc_chunks_for_sentence(
             cross_encoder_scorer=cross_encoder_scorer,
             top_n=cross_encoder_top_n,
         )
+        ranked = ranked[:cross_encoder_top_n]
+
+    if use_section_tag_bonus:
+        ranked = apply_section_tag_bonus(
+            retriever=retriever,
+            query_spec=query_spec,
+            candidates=ranked,
+            bonus_mode=section_bonus_mode,
+            bonus_weight=section_bonus_weight,
+        )
 
     return {
         "query_spec": query_spec,
@@ -92,9 +109,115 @@ def query_doc_chunks_for_sentence(
         "rerank_modes": {
             "cross_encoder": use_cross_encoder_rerank,
             "cross_encoder_top_n": cross_encoder_top_n if use_cross_encoder_rerank else 0,
+            "section_tag_bonus": use_section_tag_bonus,
+            "section_bonus_mode": section_bonus_mode if use_section_tag_bonus else "",
+            "section_bonus_weight": section_bonus_weight if use_section_tag_bonus else 0.0,
         },
         "evidence": package_top_k_candidates(retriever, ranked[:top_k]),
     }
+
+
+def apply_section_tag_bonus(
+    retriever: FMEASentenceRetrieverV2,
+    query_spec: Dict[str, Any],
+    candidates: List[Dict[str, Any]],
+    bonus_mode: str = "hybrid",
+    bonus_weight: float = 0.05,
+) -> List[Dict[str, Any]]:
+    query_text = query_spec.get("sentence", "")
+
+    reranked = []
+    for item in candidates:
+        section_tag = clean_section_tag(item.get("section_tag", ""))
+        section_score = score_section_tag_match(
+            query_text=query_text,
+            section_tag=section_tag,
+            mode=bonus_mode,
+        )
+        section_bonus = bonus_weight * section_score
+
+        new_item = dict(item)
+        new_item["section_tag"] = section_tag
+        new_item["section_tag_score"] = section_score
+        new_item["section_tag_bonus"] = section_bonus
+        new_item["score_breakdown"] = {
+            **dict(item.get("score_breakdown", {})),
+            "section_tag_score": section_score,
+            "section_tag_bonus": section_bonus,
+        }
+        new_item["final_score"] = float(item.get("final_score", item.get("rrf_score", 0.0))) + section_bonus
+        reranked.append(new_item)
+
+    reranked.sort(key=lambda item: item.get("final_score", 0.0), reverse=True)
+    return reranked
+
+
+def score_section_tag_match(
+    query_text: str,
+    section_tag: str,
+    mode: str,
+) -> float:
+    if not query_text or not section_tag:
+        return 0.0
+
+    if mode == "dense":
+        return dense_text_similarity(query_text, section_tag)
+    if mode == "sparse":
+        return sparse_text_similarity(query_text, section_tag)
+
+    dense_score = dense_text_similarity(query_text, section_tag)
+    sparse_score = sparse_text_similarity(query_text, section_tag)
+    return 0.5 * dense_score + 0.5 * sparse_score
+
+
+def clean_section_tag(section_tag: str) -> str:
+    section_tag = " ".join((section_tag or "").split())
+    return re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", section_tag).strip()
+
+
+def dense_text_similarity(left_text: str, right_text: str) -> float:
+    left_embedding = get_query_embedding(left_text)
+    right_embedding = get_query_embedding(right_text)
+    return cosine_similarity(left_embedding, right_embedding)
+
+
+def sparse_text_similarity(left_text: str, right_text: str) -> float:
+    left_norm = ChunkRetriever._normalize_text(left_text)
+    right_norm = ChunkRetriever._normalize_text(right_text)
+    left_tokens = set(ChunkRetriever._meaningful_tokens(left_text, min_len=3))
+    right_tokens = set(ChunkRetriever._meaningful_tokens(right_text, min_len=3))
+
+    if not left_tokens or not right_tokens:
+        return 0.0
+
+    overlap = left_tokens.intersection(right_tokens)
+    score = len(overlap) / math.sqrt(len(left_tokens) * len(right_tokens))
+
+    if right_norm and right_norm in left_norm:
+        score += 1.0
+    if left_norm and left_norm in right_norm:
+        score += 1.0
+
+    return score
+
+
+def cosine_similarity(left: Any, right: Any) -> float:
+    if left is None or right is None:
+        return 0.0
+
+    left_values = list(left)
+    right_values = list(right)
+    if not left_values or not right_values:
+        return 0.0
+
+    pair_values = list(zip(left_values, right_values))
+    numerator = sum(a * b for a, b in pair_values)
+    left_norm = math.sqrt(sum(a * a for a, _ in pair_values))
+    right_norm = math.sqrt(sum(b * b for _, b in pair_values))
+    if not left_norm or not right_norm:
+        return 0.0
+
+    return numerator / (left_norm * right_norm)
 
 
 def cross_encoder_rerank_sentence_candidates(
@@ -158,9 +281,12 @@ def package_top_k_candidates(
                 "node_id": node_id,
                 "label": label,
                 "name": item.get("name", ""),
+                "section_tag": item.get("section_tag", ""),
                 "text": item.get("text", ""),
                 "score": item.get("final_score", item.get("rrf_score", 0.0)),
                 "cross_encoder_score": item.get("cross_encoder_score"),
+                "section_tag_score": item.get("section_tag_score"),
+                "section_tag_bonus": item.get("section_tag_bonus"),
                 "score_breakdown": item.get("score_breakdown", {}),
             }
         )
@@ -229,6 +355,12 @@ def print_doc_chunk_results(result: Dict[str, Any]) -> None:
         )
         if item.get("cross_encoder_score") is not None:
             print(f"      cross_encoder_score={item.get('cross_encoder_score', 0.0):.4f}")
+        if item.get("section_tag_score") is not None:
+            print(
+                f"      section_tag={item.get('section_tag', '')} "
+                f"section_score={item.get('section_tag_score', 0.0):.4f} "
+                f"section_bonus={item.get('section_tag_bonus', 0.0):.4f}"
+            )
         print(f"      text={item.get('text', '')}")
 
 
@@ -245,7 +377,7 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-    Welded relay
+    Soft starter has component breaks
     """
 
     retriever = FMEASentenceRetrieverV2()
@@ -255,12 +387,15 @@ def main():
         result = query_doc_chunks_for_sentence(
             retriever=retriever,
             query_spec=query_spec,
-            top_k=10,
+            top_k=15,
             per_label_k=30,
             retrieval_mode="hybrid",
             disciplines=None,
             use_cross_encoder_rerank=True,
             cross_encoder_top_n=30,
+            use_section_tag_bonus=True,
+            section_bonus_mode="hybrid",
+            section_bonus_weight=5,
         )
         print_doc_chunk_results(result)
     finally:

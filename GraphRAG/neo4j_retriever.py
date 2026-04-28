@@ -97,6 +97,7 @@ class ChunkRetriever:
             elementId(node) AS node_id,
             labels(node) AS labels,
             coalesce(node.name, "") AS name,
+            coalesce(node.section_tag, "") AS section_tag,
             coalesce(node.text, "") AS text,
             score AS score,
             "dense" AS source
@@ -143,6 +144,7 @@ class ChunkRetriever:
             elementId(node) AS node_id,
             labels(node) AS labels,
             coalesce(node.name, "") AS name,
+            coalesce(node.section_tag, "") AS section_tag,
             coalesce(node.text, "") AS text,
             score AS score,
             "sparse" AS source
@@ -173,6 +175,7 @@ class ChunkRetriever:
                         "node_id": node_id,
                         "labels": item.get("labels", []),
                         "name": item.get("name", ""),
+                        "section_tag": item.get("section_tag", ""),
                         "text": item.get("text", ""),
                         "rrf_score": 0.0,
                         "sources": set(),

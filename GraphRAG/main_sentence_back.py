@@ -333,7 +333,7 @@ def print_sentence_to_fmea_results(result: Dict[str, Any]) -> None:
 def main():
     node_names = [
         # Put Graph node names here. Their node.text will be used as queries.
-        "TS6303220021R05_CHO_245",
+        "TS6303220029R09_CHO_27*",
     ]
 
     sentence_texts = [
