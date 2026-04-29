@@ -377,7 +377,9 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-    Soft starter has component breaks
+The purpose of this qualification test is to ensure that the components do not break because of
+overvoltage during the disconnection of the motor. the components that are at risk are the
+thyristors and the LNK
     """
 
     retriever = FMEASentenceRetrieverV2()
@@ -391,11 +393,11 @@ def main():
             per_label_k=30,
             retrieval_mode="hybrid",
             disciplines=None,
-            use_cross_encoder_rerank=True,
-            cross_encoder_top_n=30,
+            use_cross_encoder_rerank=False,
+            cross_encoder_top_n=50,
             use_section_tag_bonus=True,
             section_bonus_mode="hybrid",
-            section_bonus_weight=5,
+            section_bonus_weight=0.05,
         )
         print_doc_chunk_results(result)
     finally:

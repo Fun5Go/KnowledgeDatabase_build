@@ -191,15 +191,14 @@ def build_structure_query_items(structure_input: dict[str, Any]) -> list[dict[st
 def build_function_mode_query_text(function_text: str, mode_text: str) -> str:
     """Format the retrieval query for Function text + failure mode text."""
 
-    return f"Function: {function_text}\nFailure mode: {mode_text}"
+    return f"{function_text} has {mode_text}"
 
 
 def build_cause_query_text(cause_text: str, discipline: str) -> str:
     """Format the retrieval query for cause text with discipline."""
 
-    if discipline:
-        return f"Discipline: {discipline}\nCause: {cause_text}"
-    return f"Cause: {cause_text}"
+
+    return f"{cause_text}"
 
 
 def map_cause_discipline_to_retrieval_labels(discipline: str) -> list[str] | None:
@@ -274,11 +273,11 @@ def run_retrieval_for_analysis_item(
     top_k: int = 15,
     per_label_k: int = 30,
     retrieval_mode: str = "hybrid",
-    use_cross_encoder_rerank: bool = True,
+    use_cross_encoder_rerank: bool = False,
     cross_encoder_top_n: int = 30,
     use_section_tag_bonus: bool = True,
     section_bonus_mode: str = "hybrid",
-    section_bonus_weight: float = 5.0,
+    section_bonus_weight: float = 0.05,
 ) -> dict[str, Any]:
     """Run the existing main_sentence.py query function for one structure item."""
 
@@ -425,6 +424,14 @@ def save_results(results: list[dict[str, Any]], output_path: Path) -> None:
     )
 
 
+def output_path_with_query_number(output_path: Path, query_number: int | None) -> Path:
+    """Add a query-number suffix to the default output path."""
+
+    if query_number is None:
+        return output_path
+    return output_path.with_name(f"{output_path.stem}_query_{query_number}{output_path.suffix}")
+
+
 def build_analysis_id(*parts: str) -> str:
     """Build a stable readable id from structure query parts."""
 
@@ -458,7 +465,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_OUTPUT_PATH,
+        default=None,
         help="Path for the JSON output file.",
     )
     parser.add_argument(
@@ -477,8 +484,13 @@ def main() -> None:
         print(json.dumps(list_query_items(), indent=2, ensure_ascii=False))
         return
 
+    output_path = args.output or output_path_with_query_number(
+        DEFAULT_OUTPUT_PATH,
+        args.query_number,
+    )
+
     run_chunk_selection_pipeline(
-        output_path=args.output,
+        output_path=output_path,
         use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,
         query_number=args.query_number,
     )

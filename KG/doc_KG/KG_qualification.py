@@ -1719,6 +1719,10 @@ class QualificationKGBuilder:
             section_node_id: row.section_node_id,
             type: row.type
         }
+        WITH q, row
+        WHERE row.section_node_id IS NOT NULL AND row.section_node_id <> ""
+        MATCH (s {semantic_id: row.section_node_id})
+        MERGE (q)-[:PART_OF]->(s)
         """
 
         with self.driver.session(database=self.database) as session:

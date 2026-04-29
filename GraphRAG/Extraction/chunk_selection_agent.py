@@ -66,19 +66,13 @@ def build_output_schema() -> dict[str, Any]:
     return {
         "analysis_id": "string",
         "query_type": "function_mode | cause",
-        "function_text": "string",
-        "query_mode": "string",
-        "query_cause": "string",
-        "cause_discipline": "string",
         "top_chunks": [
             {
-                "rank": 1,
-                "node_id": "string",
+                "rank": "integer rank among selected chunks",
                 "label": "string",
                 "name": "string",
                 "support_capability": "weak | moderate | strong",
                 "reason": "short explanation",
-                "evidence_span": "short verbatim span",
             }
         ],
     }
@@ -93,29 +87,35 @@ def build_agent_payload(
     """Build the LLM input from the GraphRAG query result."""
 
     analysis_item = analysis_item or {}
-    query_spec = query_result.get("query_spec", {})
     evidence = query_result.get("evidence", [])
+    query_type = normalize_text(analysis_item.get("query_type"))
 
     payload = {
-        "analysis_item": analysis_item,
-        "query_spec": query_spec,
-        "query_type": normalize_text(analysis_item.get("query_type")),
-        "function_text": normalize_text(analysis_item.get("function_text")),
-        "query_mode": normalize_text(analysis_item.get("query_mode")),
-        "query_cause": normalize_text(analysis_item.get("query_cause")),
-        "cause_discipline": normalize_text(analysis_item.get("cause_discipline")),
-        "query_text": normalize_text(query_spec.get("query_text") or query_spec.get("sentence")),
-        "retrieval": {
-            "dense_queries": query_result.get("dense_queries", []),
-            "sparse_queries": query_result.get("sparse_queries", []),
-            "rerank_modes": query_result.get("rerank_modes", {}),
-        },
+        "analysis_id": normalize_text(analysis_item.get("analysis_id")),
+        "query_type": query_type,
+        "query": build_llm_query_payload(analysis_item),
         "candidate_chunks": [
             normalize_candidate_chunk(item, index, max_chunk_text_length)
             for index, item in enumerate(evidence, start=1)
         ],
     }
     return enforce_prompt_input_token_limit(payload, max_prompt_input_tokens)
+
+
+def build_llm_query_payload(analysis_item: dict[str, Any]) -> dict[str, str]:
+    """Build the compact query payload shown to the LLM."""
+
+    query_type = normalize_text(analysis_item.get("query_type"))
+    if query_type == "cause":
+        return {
+            "Failure cause": normalize_text(analysis_item.get("query_cause")),
+            "Discipline": normalize_text(analysis_item.get("cause_discipline")),
+        }
+
+    return {
+        "Function": normalize_text(analysis_item.get("function_text")),
+        "Failure mode": normalize_text(analysis_item.get("query_mode")),
+    }
 
 
 def enforce_prompt_input_token_limit(
@@ -164,11 +164,9 @@ def normalize_candidate_chunk(
 
     return {
         "rank": rank,
-        "node_id": normalize_text(item.get("node_id")),
         "label": normalize_text(item.get("label")),
         "name": normalize_text(item.get("name")),
         "section_tag": normalize_text(item.get("section_tag")),
-        "score": json_safe(item.get("score")),
         "text": trim_text(item.get("text"), max_text_length),
     }
 
@@ -243,39 +241,32 @@ class ChunkSelectionAgent:
         """Offline fallback that selects the highest ranked chunks."""
 
         candidates = payload.get("candidate_chunks", [])
-        selected = candidates[:3]
 
         return {
-            "analysis_id": normalize_text(payload.get("analysis_item", {}).get("analysis_id")),
+            "analysis_id": normalize_text(payload.get("analysis_id")),
             "query_type": payload.get("query_type", ""),
-            "function_text": payload.get("function_text", ""),
-            "query_mode": payload.get("query_mode", ""),
-            "query_cause": payload.get("query_cause", ""),
-            "cause_discipline": payload.get("cause_discipline", ""),
             "top_chunks": [
                 {
                     "rank": index,
-                    "node_id": item.get("node_id", ""),
                     "label": item.get("label", ""),
                     "name": item.get("name", ""),
                     "support_capability": placeholder_support_capability(index),
                     "reason": "Placeholder selected this chunk from the highest-ranked retrieval results.",
-                    "evidence_span": trim_text(item.get("text", ""), 240),
                 }
-                for index, item in enumerate(selected, start=1)
+                for index, item in enumerate(candidates, start=1)
             ],
         }
 
 
 def normalize_selection_response(response: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    """Normalize the LLM response to the required Top-3 output contract."""
+    """Normalize the LLM response to the required selected-chunk output contract."""
 
     chunks = response.get("top_chunks") or response.get("selected_chunks") or []
     if not isinstance(chunks, list):
         chunks = []
 
     normalized_chunks: list[dict[str, Any]] = []
-    for index, chunk in enumerate(chunks[:3], start=1):
+    for index, chunk in enumerate(chunks, start=1):
         if not isinstance(chunk, dict):
             continue
         capability = normalize_text(chunk.get("support_capability")).lower()
@@ -285,29 +276,18 @@ def normalize_selection_response(response: dict[str, Any], payload: dict[str, An
         normalized_chunks.append(
             {
                 "rank": index,
-                "node_id": normalize_text(chunk.get("node_id")),
                 "label": normalize_text(chunk.get("label")),
                 "name": normalize_text(chunk.get("name")),
                 "support_capability": capability,
                 "reason": normalize_text(chunk.get("reason")),
-                "evidence_span": normalize_text(
-                    chunk.get("evidence_span")
-                    or first_list_value(chunk.get("evidence_spans"))
-                ),
             }
         )
 
     return {
         "analysis_id": normalize_text(
-            response.get("analysis_id") or payload.get("analysis_item", {}).get("analysis_id")
+            response.get("analysis_id") or payload.get("analysis_id")
         ),
         "query_type": normalize_text(response.get("query_type") or payload.get("query_type")),
-        "function_text": normalize_text(response.get("function_text") or payload.get("function_text")),
-        "query_mode": normalize_text(response.get("query_mode") or payload.get("query_mode")),
-        "query_cause": normalize_text(response.get("query_cause") or payload.get("query_cause")),
-        "cause_discipline": normalize_text(
-            response.get("cause_discipline") or payload.get("cause_discipline")
-        ),
         "top_chunks": normalized_chunks,
     }
 
@@ -320,14 +300,6 @@ def placeholder_support_capability(rank: int) -> str:
     if rank == 2:
         return "moderate"
     return "weak"
-
-
-def first_list_value(value: Any) -> str:
-    """Return the first string from a list-like value."""
-
-    if isinstance(value, list) and value:
-        return normalize_text(value[0])
-    return ""
 
 
 def normalize_text(value: Any) -> str:

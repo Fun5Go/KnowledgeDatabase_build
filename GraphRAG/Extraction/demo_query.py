@@ -4,9 +4,19 @@ import argparse
 from pathlib import Path
 
 try:
-    from .main import DEFAULT_OUTPUT_PATH, list_query_items, run_chunk_selection_pipeline
+    from .main import (
+        DEFAULT_OUTPUT_PATH,
+        list_query_items,
+        output_path_with_query_number,
+        run_chunk_selection_pipeline,
+    )
 except ImportError:  # pragma: no cover - supports direct script execution
-    from main import DEFAULT_OUTPUT_PATH, list_query_items, run_chunk_selection_pipeline
+    from main import (
+        DEFAULT_OUTPUT_PATH,
+        list_query_items,
+        output_path_with_query_number,
+        run_chunk_selection_pipeline,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_OUTPUT_PATH.with_name("demo_chunk_selection_result.json"),
+        default=None,
         help="Path for the demo JSON output file.",
     )
     parser.add_argument(
@@ -52,12 +62,17 @@ def main() -> None:
     if args.query_number is None:
         raise SystemExit("Please provide query_number, or use --list-queries.")
 
+    output_path = args.output or output_path_with_query_number(
+        DEFAULT_OUTPUT_PATH.with_name("demo_chunk_selection_result.json"),
+        args.query_number,
+    )
+
     results = run_chunk_selection_pipeline(
-        output_path=args.output,
+        output_path=output_path,
         use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,
         query_number=args.query_number,
     )
-    print(f"Wrote demo result for query {args.query_number} to {args.output}")
+    print(f"Wrote demo result for query {args.query_number} to {output_path}")
     print(f"Selected chunks: {len(results[0].get('selection', {}).get('top_chunks', []))}")
 
 
