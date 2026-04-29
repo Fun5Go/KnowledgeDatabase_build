@@ -42,6 +42,14 @@ SUBSECTION_HEADING_PATTERN = re.compile(
 TOC_ENTRY_PATTERN = re.compile(
     r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\.{2,}\s*(\d+)\s*$"
 )
+TABLE_CAPTION_PATTERN = re.compile(
+    r"^\s*(Table)\s+(\d+(?:[.-]\d+)*)(?:\s*[:.-]\s*|\s+)(.+?)\s*$",
+    re.IGNORECASE,
+)
+FIGURE_CAPTION_PATTERN = re.compile(
+    r"^\s*(?:Figure|Fig\.)\s+\d+(?:[.-]\d+)*(?:\s*[:.-]\s*|\s+).+?\s*$",
+    re.IGNORECASE,
+)
 
 
 # ---- normal text chunking ----
@@ -51,6 +59,7 @@ NORMAL_CHUNK_OVERLAP = 150
 # ---- debug ----
 DEBUG_HEADER_FOOTER = True
 DEBUG_PREVIEW_CHUNKS = False
+DEBUG_TABLE_EXTRACTION_ONLY = True
 PREVIEW_CHUNK_COUNT = 20
 
 # ---- batch ----
@@ -440,6 +449,28 @@ def parse_toc_line(text: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def parse_table_caption(text: str) -> Optional[Dict[str, str]]:
+    match = TABLE_CAPTION_PATTERN.match(clean_line(text))
+    if not match:
+        return None
+
+    number = match.group(2)
+    title = clean_line(match.group(3))
+    return {
+        "number": number,
+        "title": title,
+        "caption": clean_line(f"Table {number} {title}"),
+    }
+
+
+def looks_like_table_caption(text: str) -> bool:
+    return parse_table_caption(text) is not None
+
+
+def looks_like_figure_caption(text: str) -> bool:
+    return bool(FIGURE_CAPTION_PATTERN.match(clean_line(text)))
+
+
 def extract_toc_entries_from_pdf(pdf) -> Dict[str, Dict[str, Any]]:
     entries: Dict[str, Dict[str, Any]] = {}
     in_toc = False
@@ -621,6 +652,164 @@ def extract_region_text(page, bbox, label: str = "") -> str:
         return txt
     except Exception as e:
         return f"[ERROR extracting {label}: {e}]"
+
+
+def table_rows_to_text(rows: List[List[Any]]) -> str:
+    cleaned_rows = []
+    for row in rows or []:
+        cleaned = [clean_line(cell or "") for cell in row]
+        if any(cleaned):
+            cleaned_rows.append(cleaned)
+
+    if not cleaned_rows:
+        return ""
+
+    col_count = max(len(row) for row in cleaned_rows)
+    normalized_rows = [
+        row + [""] * (col_count - len(row))
+        for row in cleaned_rows
+    ]
+    return "\n".join(" | ".join(row).strip() for row in normalized_rows)
+
+
+def extract_table_text_below_caption(page, caption_line: Dict) -> str:
+    caption_bottom = caption_line["bottom"]
+    candidate_tables = []
+
+    try:
+        for table in page.find_tables():
+            x0, top, x1, bottom = table.bbox
+            if top >= caption_bottom - 2:
+                candidate_tables.append((top, bottom, table))
+    except Exception:
+        candidate_tables = []
+
+    if candidate_tables:
+        candidate_tables.sort(key=lambda item: item[0])
+        _, _, table = candidate_tables[0]
+        return table_rows_to_text(table.extract())
+
+    # Fallback for borderless tables: collect only lines after the caption.
+    page_bottom = page.height - FOOTER_CROP
+    fallback_bbox = (0, caption_bottom, page.width, page_bottom)
+    fallback_text = extract_region_text(page, fallback_bbox, "table fallback")
+    fallback_lines = []
+
+    for line in fallback_text.splitlines():
+        line = clean_line(line)
+        if not line:
+            continue
+        if (
+            looks_like_table_caption(line)
+            or looks_like_figure_caption(line)
+            or looks_like_section_heading(line)
+            or parse_requirement_ids(line)
+            or looks_like_rationale_label(line)
+        ):
+            break
+        fallback_lines.append(line)
+
+    return "\n".join(fallback_lines).strip()
+
+
+def extract_tables_from_pdf(file_path: str, discipline: Optional[str] = None) -> List[ChunkDoc]:
+    tables: List[ChunkDoc] = []
+    spec_type = infer_spec_type(file_path)
+    discipline = normalize_discipline(discipline)
+
+    with pdfplumber.open(file_path) as pdf:
+        toc_entries = extract_toc_entries_from_pdf(pdf)
+        started = False
+        current_section_tag: Optional[str] = None
+        current_major_section_tag: Optional[str] = None
+
+        for page_idx, page in enumerate(pdf.pages):
+            page_no = page_idx + 1
+            cropped = page.crop((0, HEADER_CROP, page.width, page.height - FOOTER_CROP))
+            words = cropped.extract_words(
+                use_text_flow=False,
+                keep_blank_chars=False,
+                extra_attrs=["fontname", "size"],
+            )
+            if not words:
+                continue
+
+            line_infos = [
+                line_to_info(line_words)
+                for line_words in group_words_to_lines(words, y_tolerance=3.0)
+            ]
+
+            for line_info in line_infos:
+                full_text = line_info["text"]
+                if not full_text or is_noise_line(full_text) or parse_toc_line(full_text):
+                    continue
+
+                toc_entry = find_toc_entry_for_heading(full_text, toc_entries=toc_entries)
+                if not started:
+                    if should_start_from_section(full_text, toc_entries=toc_entries) and toc_entry is not None:
+                        started = True
+                        canonical_section_tag = safe_text(toc_entry.get("full_text")) or full_text
+                        current_major_section_tag = canonical_section_tag
+                        current_section_tag = canonical_section_tag
+                    continue
+
+                heading_level = get_section_heading_level(full_text, toc_entries=toc_entries)
+                if heading_level is not None:
+                    canonical_section_tag = safe_text(toc_entry.get("full_text")) if toc_entry else full_text
+                    current_section_tag = canonical_section_tag
+                    if heading_level == 1:
+                        current_major_section_tag = canonical_section_tag
+                    continue
+
+                caption_info = parse_table_caption(full_text)
+                if not caption_info:
+                    continue
+
+                table_text = extract_table_text_below_caption(cropped, line_info)
+                tables.append(
+                    ChunkDoc(
+                        page_content=table_text,
+                        metadata={
+                            "source": file_path,
+                            "file_name": os.path.basename(file_path),
+                            "pages": [page_no],
+                            "type": f"{spec_type}_table",
+                            "spec_type": spec_type,
+                            "discipline": discipline,
+                            "chunk_mode": "table",
+                            "table_number": caption_info["number"],
+                            "table_title": caption_info["title"],
+                            "table_caption": caption_info["caption"],
+                            "section_tag": get_effective_section_tag(current_section_tag, current_major_section_tag),
+                        },
+                    )
+                )
+
+    print(f"[INFO] Extracted {len(tables)} tables from PDF ({spec_type})")
+    return tables
+
+
+def print_table_debug(tables: List[ChunkDoc], label: str):
+    print("\n" + "=" * 120)
+    print(f"[DEBUG] TABLE CONTENT - {label}")
+    print("=" * 120)
+
+    if not tables:
+        print("[DEBUG] No tables found")
+        return
+
+    for idx, table in enumerate(tables, start=1):
+        caption = safe_text(table.metadata.get("table_caption"))
+        pages = table.metadata.get("pages", [])
+        section_tag = safe_text(table.metadata.get("section_tag")) or "[EMPTY]"
+        content = safe_text(table.page_content) or "[EMPTY TABLE CONTENT]"
+
+        print(f"\n--- TABLE {idx} ---")
+        print(f"CAPTION: {caption}")
+        print(f"PAGES: {pages}")
+        print(f"SECTION: {section_tag}")
+        print("CONTENT:")
+        print(content)
 
 
 def print_pdf_header_footer_debug(file_path: str, max_pages: Optional[int] = None):
@@ -2012,6 +2201,17 @@ def main():
 
     if DEBUG_HEADER_FOOTER and HW_TS_PATH.lower().endswith(".pdf"):
         print_pdf_header_footer_debug(HW_TS_PATH, max_pages=5)
+
+    if DEBUG_TABLE_EXTRACTION_ONLY:
+        fs_tables = extract_tables_from_pdf(FS_PATH)
+        esw_ts_tables = extract_tables_from_pdf(ESW_TS_PATH, discipline="ESW")
+        hw_ts_tables = extract_tables_from_pdf(HW_TS_PATH, discipline="HW")
+
+        print_table_debug(fs_tables, "FS")
+        print_table_debug(esw_ts_tables, "ESW TS")
+        print_table_debug(hw_ts_tables, "HW TS")
+        print("[DONE] Table extraction debug only; KG import skipped.")
+        return
 
     fs_chunks = prepare_spec_chunks(FS_PATH)
     esw_ts_chunks = prepare_spec_chunks(ESW_TS_PATH, discipline="ESW")
