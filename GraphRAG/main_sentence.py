@@ -46,6 +46,7 @@ def query_doc_chunks_for_sentence(
     use_section_tag_bonus: bool = True,
     section_bonus_mode: str = "hybrid",
     section_bonus_weight: float = 0.05,
+    is_QD: bool = False,
 ) -> Dict[str, Any]:
     retrieval_mode = retriever._normalize_retrieval_mode(retrieval_mode)
     section_bonus_mode = retriever._normalize_retrieval_mode(section_bonus_mode)
@@ -54,29 +55,52 @@ def query_doc_chunks_for_sentence(
     sparse_queries = build_sparse_queries(retriever, query_spec)
 
     result_sets: List[List[Dict[str, Any]]] = []
-    for label, vector_index_name, fulltext_index_name in retriever.SEARCH_SPECS:
+    for spec in build_search_specs(retriever, is_QD=is_QD):
+        label = spec["label"]
+        vector_index_name = spec["vector_index_name"]
+        fulltext_index_name = spec["fulltext_index_name"]
+        text_property = spec["text_property"]
+
         if retrieval_mode in {"dense", "hybrid"}:
             for query_text in dense_queries:
-                rows = retriever.dense_search_chunks(
-                    query_text=query_text,
-                    label=label,
-                    vector_index_name=vector_index_name,
-                    top_k=per_label_k,
-                )
-                rows = filter_rows_by_labels(rows, allowed_labels)
+                if label == "QDChunk":
+                    rows = dense_search_qd_chunks(
+                        retriever=retriever,
+                        query_text=query_text,
+                        vector_index_name=vector_index_name,
+                        top_k=per_label_k,
+                    )
+                else:
+                    rows = retriever.dense_search_chunks(
+                        query_text=query_text,
+                        label=label,
+                        vector_index_name=vector_index_name,
+                        top_k=per_label_k,
+                        text_property=text_property,
+                    )
+                rows = filter_rows_by_labels(rows, allowed_labels, label=label)
                 for row in rows:
                     row["label"] = label
                 result_sets.append(rows)
 
         if retrieval_mode in {"sparse", "hybrid"}:
             for lucene_query in sparse_queries:
-                rows = retriever.sparse_search_chunks(
-                    lucene_query=lucene_query,
-                    label=label,
-                    fulltext_index_name=fulltext_index_name,
-                    top_k=per_label_k,
-                )
-                rows = filter_rows_by_labels(rows, allowed_labels)
+                if label == "QDChunk":
+                    rows = sparse_search_qd_chunks(
+                        retriever=retriever,
+                        lucene_query=lucene_query,
+                        fulltext_index_name=fulltext_index_name,
+                        top_k=per_label_k,
+                    )
+                else:
+                    rows = retriever.sparse_search_chunks(
+                        lucene_query=lucene_query,
+                        label=label,
+                        fulltext_index_name=fulltext_index_name,
+                        top_k=per_label_k,
+                        text_property=text_property,
+                    )
+                rows = filter_rows_by_labels(rows, allowed_labels, label=label)
                 for row in rows:
                     row["label"] = label
                 result_sets.append(rows)
@@ -112,9 +136,97 @@ def query_doc_chunks_for_sentence(
             "section_tag_bonus": use_section_tag_bonus,
             "section_bonus_mode": section_bonus_mode if use_section_tag_bonus else "",
             "section_bonus_weight": section_bonus_weight if use_section_tag_bonus else 0.0,
+            "QD": is_QD,
         },
         "evidence": package_top_k_candidates(retriever, ranked[:top_k]),
     }
+
+
+def build_search_specs(
+    retriever: FMEASentenceRetrieverV2,
+    is_QD: bool = False,
+) -> List[Dict[str, str]]:
+    if is_QD:
+        return [
+            {
+                "label": "QDChunk",
+                "vector_index_name": "qd_embedding_idx",
+                "fulltext_index_name": "qd_objectives_idx",
+                "text_property": "objectives",
+            }
+        ]
+
+    return [
+        {
+            "label": label,
+            "vector_index_name": vector_index_name,
+            "fulltext_index_name": fulltext_index_name,
+            "text_property": "text",
+        }
+        for label, vector_index_name, fulltext_index_name in retriever.SEARCH_SPECS
+    ]
+
+
+def dense_search_qd_chunks(
+    retriever: FMEASentenceRetrieverV2,
+    query_text: str,
+    vector_index_name: str,
+    top_k: int = 10,
+) -> List[Dict[str, Any]]:
+    query_embedding = get_query_embedding(query_text)
+
+    cypher = f"""
+    CALL db.index.vector.queryNodes('{vector_index_name}', $top_k, $query_embedding)
+    YIELD node, score
+    WHERE node:QDChunk
+    RETURN
+        elementId(node) AS node_id,
+        labels(node) AS labels,
+        coalesce(node.name, "") AS name,
+        coalesce(node.section_tag, "") AS section_tag,
+        coalesce(node.qd_id, "") AS qd_id,
+        coalesce(node.qd_title, "") AS qd_title,
+        trim(coalesce(node.qd_title, "") + " " + coalesce(node.objectives, "")) AS text,
+        score AS score,
+        "dense" AS source
+    ORDER BY score DESC
+    LIMIT $top_k
+    """
+    return retriever.run_query(
+        cypher,
+        query_embedding=query_embedding,
+        top_k=top_k,
+    )
+
+
+def sparse_search_qd_chunks(
+    retriever: FMEASentenceRetrieverV2,
+    lucene_query: str,
+    fulltext_index_name: str,
+    top_k: int = 10,
+) -> List[Dict[str, Any]]:
+    cypher = f"""
+    CALL db.index.fulltext.queryNodes('{fulltext_index_name}', $lucene_query)
+    YIELD node, score
+    WHERE node:QDChunk
+    RETURN
+        elementId(node) AS node_id,
+        labels(node) AS labels,
+        coalesce(node.name, "") AS name,
+        coalesce(node.section_tag, "") AS section_tag,
+        coalesce(node.qd_id, "") AS qd_id,
+        coalesce(node.qd_title, "") AS qd_title,
+        trim(coalesce(node.qd_title, "") + " " + coalesce(node.objectives, "")) AS text,
+        score AS score,
+        "sparse" AS source
+    ORDER BY score DESC
+    LIMIT $top_k
+    """
+    return retriever.run_query(
+        cypher,
+        lucene_query=lucene_query,
+        top_k=top_k,
+    )
 
 
 def apply_section_tag_bonus(
@@ -282,6 +394,8 @@ def package_top_k_candidates(
                 "label": label,
                 "name": item.get("name", ""),
                 "section_tag": item.get("section_tag", ""),
+                "qd_id": item.get("qd_id", ""),
+                "qd_title": item.get("qd_title", ""),
                 "text": item.get("text", ""),
                 "score": item.get("final_score", item.get("rrf_score", 0.0)),
                 "cross_encoder_score": item.get("cross_encoder_score"),
@@ -319,8 +433,9 @@ def normalize_discipline_labels(disciplines: Any) -> List[str]:
 def filter_rows_by_labels(
     rows: List[Dict[str, Any]],
     allowed_labels: List[str],
+    label: str = "",
 ) -> List[Dict[str, Any]]:
-    if not allowed_labels:
+    if not allowed_labels or label == "QDChunk":
         return rows
 
     allowed = set(allowed_labels)
@@ -353,6 +468,11 @@ def print_doc_chunk_results(result: Dict[str, Any]) -> None:
             f"node_id={item.get('node_id', '')} "
             f"name={item.get('name', '')}"
         )
+        if item.get("qd_id") or item.get("qd_title"):
+            print(
+                f"      qd_id={item.get('qd_id', '')} "
+                f"qd_title={item.get('qd_title', '')}"
+            )
         if item.get("cross_encoder_score") is not None:
             print(f"      cross_encoder_score={item.get('cross_encoder_score', 0.0):.4f}")
         if item.get("section_tag_score") is not None:
@@ -377,9 +497,7 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-The purpose of this qualification test is to ensure that the components do not break because of
-overvoltage during the disconnection of the motor. the components that are at risk are the
-thyristors and the LNK
+    Overvoltage due to motor disconnect
     """
 
     retriever = FMEASentenceRetrieverV2()
@@ -398,6 +516,7 @@ thyristors and the LNK
             use_section_tag_bonus=True,
             section_bonus_mode="hybrid",
             section_bonus_weight=0.05,
+            is_QD=True,
         )
         print_doc_chunk_results(result)
     finally:

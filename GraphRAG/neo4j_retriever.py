@@ -66,7 +66,8 @@ class ChunkRetriever:
         query_text: str,
         label: str,
         vector_index_name: str,
-        top_k: int = 10
+        top_k: int = 10,
+        text_property: str = "text",
     ) -> List[Dict[str, Any]]:
         """
         Generic dense retrieval for chunk nodes.
@@ -81,6 +82,8 @@ class ChunkRetriever:
             Neo4j vector index name.
         top_k : int
             Number of candidates to return.
+        text_property : str
+            Node property to expose as text in the result.
 
         Returns
         -------
@@ -88,6 +91,7 @@ class ChunkRetriever:
             Retrieved nodes with dense score.
         """
         query_embedding = get_query_embedding(query_text)
+        text_property_expr = self._safe_property_name(text_property)
 
         cypher = f"""
         CALL db.index.vector.queryNodes('{vector_index_name}', $top_k, $query_embedding)
@@ -98,7 +102,9 @@ class ChunkRetriever:
             labels(node) AS labels,
             coalesce(node.name, "") AS name,
             coalesce(node.section_tag, "") AS section_tag,
-            coalesce(node.text, "") AS text,
+            coalesce(node.qd_id, "") AS qd_id,
+            coalesce(node.qd_title, "") AS qd_title,
+            coalesce(node.{text_property_expr}, "") AS text,
             score AS score,
             "dense" AS source
         ORDER BY score DESC
@@ -115,7 +121,8 @@ class ChunkRetriever:
         lucene_query: str,
         label: str,
         fulltext_index_name: str,
-        top_k: int = 10
+        top_k: int = 10,
+        text_property: str = "text",
     ) -> List[Dict[str, Any]]:
         """
         Generic sparse retrieval for chunk nodes using Neo4j fulltext index.
@@ -130,12 +137,15 @@ class ChunkRetriever:
             Neo4j fulltext index name.
         top_k : int
             Number of candidates to return.
+        text_property : str
+            Node property to expose as text in the result.
 
         Returns
         -------
         List[Dict[str, Any]]
             Retrieved nodes with sparse score.
         """
+        text_property_expr = self._safe_property_name(text_property)
         cypher = f"""
         CALL db.index.fulltext.queryNodes('{fulltext_index_name}', $lucene_query)
         YIELD node, score
@@ -145,7 +155,9 @@ class ChunkRetriever:
             labels(node) AS labels,
             coalesce(node.name, "") AS name,
             coalesce(node.section_tag, "") AS section_tag,
-            coalesce(node.text, "") AS text,
+            coalesce(node.qd_id, "") AS qd_id,
+            coalesce(node.qd_title, "") AS qd_title,
+            coalesce(node.{text_property_expr}, "") AS text,
             score AS score,
             "sparse" AS source
         ORDER BY score DESC
@@ -156,6 +168,12 @@ class ChunkRetriever:
             lucene_query=lucene_query,
             top_k=top_k
         )
+
+    @staticmethod
+    def _safe_property_name(property_name: str) -> str:
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", property_name or ""):
+            raise ValueError(f"Unsafe property name: {property_name}")
+        return property_name
     
     @staticmethod
     def rrf_fusion(
@@ -176,6 +194,8 @@ class ChunkRetriever:
                         "labels": item.get("labels", []),
                         "name": item.get("name", ""),
                         "section_tag": item.get("section_tag", ""),
+                        "qd_id": item.get("qd_id", ""),
+                        "qd_title": item.get("qd_title", ""),
                         "text": item.get("text", ""),
                         "rrf_score": 0.0,
                         "sources": set(),

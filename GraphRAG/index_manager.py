@@ -47,6 +47,24 @@ class Neo4jIndexManager:
                 session.run(query)
                 print(f"[OK] Fulltext index checked/created: {index_name}")
 
+    def create_fulltext_indexes_for_properties(
+        self,
+        label_to_index: Dict[str, str],
+        text_properties,
+    ) -> None:
+        """
+        Create fulltext indexes for multiple node labels and properties.
+        """
+        property_list = ", ".join(f"n.{prop}" for prop in text_properties)
+        with self.driver.session(database=self.database) as session:
+            for label, index_name in label_to_index.items():
+                query = f"""
+                CREATE FULLTEXT INDEX {index_name} IF NOT EXISTS
+                FOR (n:{label}) ON EACH [{property_list}]
+                """
+                session.run(query)
+                print(f"[OK] Fulltext index checked/created: {index_name}")
+
     def create_document_kg_indexes(self) -> None:
         """
         Create recommended indexes for the chunk-centric document KG.
@@ -55,6 +73,7 @@ class Neo4jIndexManager:
             "FSChunk": "fs_embedding_idx",
             "TSChunk": "ts_embedding_idx",
             "RationaleChunk": "rationale_embedding_idx",
+            "QDChunk": "qd_embedding_idx",
         }
 
         fulltext_indexes = {
@@ -65,3 +84,7 @@ class Neo4jIndexManager:
 
         self.create_vector_indexes(vector_indexes)
         self.create_fulltext_indexes(fulltext_indexes)
+        self.create_fulltext_indexes_for_properties(
+            {"QDChunk": "qd_objectives_idx"},
+            text_properties=["qd_title", "objectives"],
+        )
