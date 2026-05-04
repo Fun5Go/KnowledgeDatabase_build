@@ -59,7 +59,7 @@ NORMAL_CHUNK_OVERLAP = 150
 # ---- debug ----
 DEBUG_HEADER_FOOTER = True
 DEBUG_PREVIEW_CHUNKS = False
-DEBUG_TABLE_EXTRACTION_ONLY = True
+DEBUG_TABLE_EXTRACTION_ONLY = False
 PREVIEW_CHUNK_COUNT = 20
 
 # ---- batch ----
@@ -459,7 +459,7 @@ def parse_table_caption(text: str) -> Optional[Dict[str, str]]:
     return {
         "number": number,
         "title": title,
-        "caption": clean_line(f"Table {number} {title}"),
+        "caption": clean_line(f"Table {number}: {title}"),
     }
 
 
@@ -672,7 +672,7 @@ def table_rows_to_text(rows: List[List[Any]]) -> str:
     return "\n".join(" | ".join(row).strip() for row in normalized_rows)
 
 
-def extract_table_text_below_caption(page, caption_line: Dict) -> str:
+def find_table_below_caption(page, caption_line: Dict):
     caption_bottom = caption_line["bottom"]
     candidate_tables = []
 
@@ -682,11 +682,19 @@ def extract_table_text_below_caption(page, caption_line: Dict) -> str:
             if top >= caption_bottom - 2:
                 candidate_tables.append((top, bottom, table))
     except Exception:
-        candidate_tables = []
+        return None
 
     if candidate_tables:
         candidate_tables.sort(key=lambda item: item[0])
-        _, _, table = candidate_tables[0]
+        return candidate_tables[0][2]
+
+    return None
+
+
+def extract_table_text_below_caption(page, caption_line: Dict) -> str:
+    caption_bottom = caption_line["bottom"]
+    table = find_table_below_caption(page, caption_line)
+    if table is not None:
         return table_rows_to_text(table.extract())
 
     # Fallback for borderless tables: collect only lines after the caption.
@@ -712,6 +720,67 @@ def extract_table_text_below_caption(page, caption_line: Dict) -> str:
     return "\n".join(fallback_lines).strip()
 
 
+def table_reaches_page_bottom(page, table) -> bool:
+    if table is None:
+        return False
+    return table.bbox[3] >= page.height - FOOTER_CROP - 20
+
+
+def extract_table_continuation_from_next_pages(
+    pdf,
+    start_page_idx: int,
+    toc_entries: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[str, List[int]]:
+    continuation_lines = []
+    continuation_pages = []
+
+    for next_page_idx in range(start_page_idx + 1, len(pdf.pages)):
+        raw_page = pdf.pages[next_page_idx]
+        page_no = next_page_idx + 1
+        cropped = raw_page.crop((0, HEADER_CROP, raw_page.width, raw_page.height - FOOTER_CROP))
+        words = cropped.extract_words(
+            use_text_flow=False,
+            keep_blank_chars=False,
+            extra_attrs=["fontname", "size"],
+        )
+        if not words:
+            continue
+
+        line_infos = [
+            line_to_info(line_words)
+            for line_words in group_words_to_lines(words, y_tolerance=3.0)
+        ]
+
+        for line_info in line_infos:
+            full_text = line_info["text"]
+            if not full_text or is_noise_line(full_text) or parse_toc_line(full_text):
+                continue
+
+            left_text, right_text = split_line_left_right(line_info["words"], LEFT_ID_THRESHOLD)
+            stop_continuation = (
+                looks_like_table_caption(right_text)
+                or looks_like_table_caption(full_text)
+                or looks_like_figure_caption(right_text)
+                or looks_like_figure_caption(full_text)
+                or looks_like_section_heading(full_text, toc_entries=toc_entries)
+                or (
+                    parse_requirement_ids(left_text)
+                    and is_requirement_label_text(left_text)
+                )
+                or looks_like_rationale_label(left_text)
+            )
+            if stop_continuation:
+                return "\n".join(continuation_lines).strip(), continuation_pages
+
+            continuation = right_text if right_text else full_text
+            if continuation:
+                continuation_lines.append(continuation)
+                if page_no not in continuation_pages:
+                    continuation_pages.append(page_no)
+
+    return "\n".join(continuation_lines).strip(), continuation_pages
+
+
 def extract_tables_from_pdf(file_path: str, discipline: Optional[str] = None) -> List[ChunkDoc]:
     tables: List[ChunkDoc] = []
     spec_type = infer_spec_type(file_path)
@@ -722,6 +791,7 @@ def extract_tables_from_pdf(file_path: str, discipline: Optional[str] = None) ->
         started = False
         current_section_tag: Optional[str] = None
         current_major_section_tag: Optional[str] = None
+        current_left_ids: List[str] = []
 
         for page_idx, page in enumerate(pdf.pages):
             page_no = page_idx + 1
@@ -743,6 +813,7 @@ def extract_tables_from_pdf(file_path: str, discipline: Optional[str] = None) ->
                 full_text = line_info["text"]
                 if not full_text or is_noise_line(full_text) or parse_toc_line(full_text):
                     continue
+                left_text, right_text = split_line_left_right(line_info["words"], LEFT_ID_THRESHOLD)
 
                 toc_entry = find_toc_entry_for_heading(full_text, toc_entries=toc_entries)
                 if not started:
@@ -753,40 +824,85 @@ def extract_tables_from_pdf(file_path: str, discipline: Optional[str] = None) ->
                         current_section_tag = canonical_section_tag
                     continue
 
+                left_ids = parse_requirement_ids(left_text)
+                if left_ids and is_requirement_label_text(left_text):
+                    if current_left_ids and (
+                        not right_text or looks_like_continuation(right_text)
+                    ):
+                        for rid in left_ids:
+                            if rid not in current_left_ids:
+                                current_left_ids.append(rid)
+                    elif right_text or not current_left_ids:
+                        current_left_ids = left_ids[:]
+                    else:
+                        for rid in left_ids:
+                            if rid not in current_left_ids:
+                                current_left_ids.append(rid)
+
                 heading_level = get_section_heading_level(full_text, toc_entries=toc_entries)
                 if heading_level is not None:
                     canonical_section_tag = safe_text(toc_entry.get("full_text")) if toc_entry else full_text
                     current_section_tag = canonical_section_tag
                     if heading_level == 1:
                         current_major_section_tag = canonical_section_tag
+                    current_left_ids = []
                     continue
 
-                caption_info = parse_table_caption(full_text)
+                caption_info = parse_table_caption(right_text) or parse_table_caption(full_text)
                 if not caption_info:
                     continue
 
                 table_text = extract_table_text_below_caption(cropped, line_info)
+                table = find_table_below_caption(cropped, line_info)
+                table_pages = [page_no]
+                if table_reaches_page_bottom(cropped, table):
+                    continuation_text, continuation_pages = extract_table_continuation_from_next_pages(
+                        pdf,
+                        page_idx,
+                        toc_entries=toc_entries,
+                    )
+                    if continuation_text:
+                        table_text = "\n".join(
+                            part for part in [table_text, continuation_text]
+                            if safe_text(part)
+                        )
+                        table_pages.extend(
+                            p for p in continuation_pages
+                            if p not in table_pages
+                        )
+                file_name = os.path.basename(file_path)
+                section_tag = get_effective_section_tag(current_section_tag, current_major_section_tag)
+                parent_chunk_id = current_left_ids[0] if current_left_ids else ""
                 tables.append(
                     ChunkDoc(
                         page_content=table_text,
                         metadata={
                             "source": file_path,
-                            "file_name": os.path.basename(file_path),
-                            "pages": [page_no],
+                            "file_name": file_name,
+                            "pages": table_pages,
                             "type": f"{spec_type}_table",
                             "spec_type": spec_type,
                             "discipline": discipline,
                             "chunk_mode": "table",
+                            "parent_chunk_id": parent_chunk_id,
+                            "parent_requirement_ids": current_left_ids[:],
                             "table_number": caption_info["number"],
                             "table_title": caption_info["title"],
                             "table_caption": caption_info["caption"],
-                            "section_tag": get_effective_section_tag(current_section_tag, current_major_section_tag),
+                            "section_tag": section_tag,
                         },
                     )
                 )
 
     print(f"[INFO] Extracted {len(tables)} tables from PDF ({spec_type})")
     return tables
+
+
+def make_table_node_name(file_name: str, parent_chunk_id: str, table_number: str) -> str:
+    base_name = os.path.splitext(file_name)[0]
+    parent_chunk_id = safe_text(parent_chunk_id) or "UNLINKED"
+    table_number = safe_text(table_number).replace(".", "_").replace("-", "_")
+    return f"{base_name}_{parent_chunk_id}_Table_{table_number}"
 
 
 def print_table_debug(tables: List[ChunkDoc], label: str):
@@ -800,11 +916,13 @@ def print_table_debug(tables: List[ChunkDoc], label: str):
 
     for idx, table in enumerate(tables, start=1):
         caption = safe_text(table.metadata.get("table_caption"))
+        parent_chunk_id = safe_text(table.metadata.get("parent_chunk_id")) or "[EMPTY]"
         pages = table.metadata.get("pages", [])
         section_tag = safe_text(table.metadata.get("section_tag")) or "[EMPTY]"
         content = safe_text(table.page_content) or "[EMPTY TABLE CONTENT]"
 
         print(f"\n--- TABLE {idx} ---")
+        print(f"CHUNK ID: {parent_chunk_id}")
         print(f"CAPTION: {caption}")
         print(f"PAGES: {pages}")
         print(f"SECTION: {section_tag}")
@@ -967,6 +1085,7 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
     current_req_pages: List[int] = []
     current_section_tag: Optional[str] = None
     current_major_section_tag: Optional[str] = None
+    skip_table_text_mode = False
 
     with pdfplumber.open(file_path) as pdf:
         toc_entries = extract_toc_entries_from_pdf(pdf)
@@ -989,6 +1108,7 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
             line_infos = [line_to_info(line_words) for line_words in lines]
 
             prev_line_info = None
+            skip_table_until_bottom: Optional[float] = None
 
             for line_info in line_infos:
                 full_text = line_info["text"]
@@ -1002,6 +1122,30 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
                     prev_line_info = line_info
                     continue
 
+                if skip_table_until_bottom is not None:
+                    if line_info["top"] <= skip_table_until_bottom + 2:
+                        prev_line_info = line_info
+                        continue
+                    skip_table_until_bottom = None
+
+                if skip_table_text_mode:
+                    stop_skipping = (
+                        looks_like_table_caption(right_text)
+                        or looks_like_table_caption(full_text)
+                        or looks_like_figure_caption(right_text)
+                        or looks_like_figure_caption(full_text)
+                        or looks_like_section_heading(full_text, toc_entries=toc_entries)
+                        or (
+                            parse_requirement_ids(left_text)
+                            and is_requirement_label_text(left_text)
+                        )
+                        or looks_like_rationale_label(left_text)
+                    )
+                    if not stop_skipping:
+                        prev_line_info = line_info
+                        continue
+                    skip_table_text_mode = False
+
                 if not started:
                     toc_entry = find_toc_entry_for_heading(full_text, toc_entries=toc_entries)
                     if should_start_from_section(full_text, toc_entries=toc_entries) and toc_entry is not None:
@@ -1013,6 +1157,17 @@ def extract_spec_chunks_from_pdf(file_path: str, discipline: Optional[str] = Non
                     continue
 
                 left_ids = parse_requirement_ids(left_text)
+
+                table_caption = parse_table_caption(right_text) or parse_table_caption(full_text)
+                if table_caption:
+                    table = find_table_below_caption(cropped, line_info)
+                    if table is not None:
+                        skip_table_until_bottom = table.bbox[3]
+                    skip_table_text_mode = True
+                    if page_no not in current_req_pages:
+                        current_req_pages.append(page_no)
+                    prev_line_info = line_info
+                    continue
 
                 # -------------------------------------------------
                 # Case 1: 左侧是 requirement prefix
@@ -1323,6 +1478,8 @@ def prepare_spec_chunks(file_path: str, discipline: Optional[str] = None) -> Lis
 
     if lower.endswith(".pdf"):
         chunks = extract_spec_chunks_from_pdf(file_path, discipline=discipline)
+        table_chunks = extract_tables_from_pdf(file_path, discipline=discipline)
+        chunks.extend(table_chunks)
     elif lower.endswith(".docx"):
         chunks = extract_spec_chunks_from_docx(file_path, discipline=discipline)
     else:
@@ -1336,10 +1493,15 @@ def prepare_spec_chunks(file_path: str, discipline: Optional[str] = None) -> Lis
         ch for ch in chunks
         if ch.metadata.get("chunk_mode") == "section"
     ]
+    table_chunks = [
+        ch for ch in chunks
+        if ch.metadata.get("chunk_mode") == "table"
+    ]
 
     spec_type = infer_spec_type(file_path)
     print(f"[INFO] Total requirement chunks ready for KG import ({spec_type}): {len(requirement_chunks)}")
     print(f"[INFO] Total section chunks ready for KG import ({spec_type}): {len(section_chunks)}")
+    print(f"[INFO] Total table chunks ready for KG import ({spec_type}): {len(table_chunks)}")
     return chunks
 
 
@@ -1475,6 +1637,11 @@ class VectorKGBuilder:
             REQUIRE n.name IS UNIQUE
             """,
             """
+            CREATE CONSTRAINT table_semantic_id_unique IF NOT EXISTS
+            FOR (n:Table)
+            REQUIRE n.semantic_id IS UNIQUE
+            """,
+            """
             CREATE CONSTRAINT chapter_semantic_id_unique IF NOT EXISTS
             FOR (n:Chapter)
             REQUIRE n.semantic_id IS UNIQUE
@@ -1527,6 +1694,16 @@ class VectorKGBuilder:
 
     def purge_document_subgraph(self, document_id: str):
         with self.driver.session(database=self.database) as session:
+            session.run(
+                """
+                MATCH (d {semantic_id: $document_id})-[:HAS_CHAPTER|HAS_SECTION|HAS_SUBSECTION|HAS_SUBSUBSECTION*1..]->(section)
+                MATCH (c)-[:PART_OF]->(section)
+                MATCH (c)-[:HAS_TABLE]->(t:Table)
+                DETACH DELETE t
+                """,
+                document_id=document_id,
+            )
+
             session.run(
                 """
                 MATCH (ra:RationaleChunk)-[:RATIONALE_FOR]->(fs:FSChunk)-[:PART_OF]->(d {semantic_id: $document_id})
@@ -1714,6 +1891,47 @@ class VectorKGBuilder:
             "section_tag": section_tag,
             "section_node_semantic_id": make_section_node_semantic_id(document_id, section_info["section_prefix"]) if section_info else None,
             "chunk_mode": "requirement",
+        }
+
+    def _build_table_row(self, document_id: str, chunk, spec_kind: str) -> Optional[Dict[str, Any]]:
+        file_name = safe_text(chunk.metadata.get("file_name"))
+        parent_chunk_id = safe_text(chunk.metadata.get("parent_chunk_id"))
+        table_number = safe_text(chunk.metadata.get("table_number"))
+        table_caption = safe_text(chunk.metadata.get("table_caption"))
+        table_title = safe_text(chunk.metadata.get("table_title"))
+        pages = chunk.metadata.get("pages", [])
+        chunk_type = safe_text(chunk.metadata.get("type", f"{spec_kind}_table"))
+        discipline = normalize_discipline(chunk.metadata.get("discipline"))
+        table_text = clean_chunk_text(chunk.page_content)
+
+        if not isinstance(pages, list):
+            pages = []
+
+        if not file_name or not parent_chunk_id or not table_number or not table_caption or not table_text:
+            return None
+
+        cleaned_file_name = os.path.splitext(file_name)[0]
+        if spec_kind == "FS":
+            parent_chunk_name = make_fschunk_name(cleaned_file_name, parent_chunk_id)
+        elif spec_kind == "TS":
+            parent_chunk_name = make_tschunk_name(cleaned_file_name, parent_chunk_id)
+        else:
+            return None
+
+        semantic_id = make_table_node_name(file_name, parent_chunk_id, table_number)
+
+        return {
+            "semantic_id": semantic_id,
+            "name": table_caption,
+            "parent_chunk_name": parent_chunk_name,
+            "parent_chunk_id": parent_chunk_id,
+            "table_number": table_number,
+            "table_title": table_title,
+            "embedding": embed(table_text),
+            "text": table_text,
+            "pages": pages,
+            "type": chunk_type,
+            "discipline": discipline,
         }
 
     def _build_rationale_row(self, document_id: str, chunk, spec_kind: str, seq: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -1959,6 +2177,51 @@ class VectorKGBuilder:
                     session.run(query, rows=batch, document_id=document_id)
                     print(f"[INFO] Imported TSChunk batch {i + 1} - {i + len(batch)} / {len(discipline_rows)} ({discipline or 'GENERIC'})")
 
+    def import_table_chunks(
+        self,
+        document_id: str,
+        chunks: List[Any],
+        parent_label: str,
+        spec_kind: str,
+        batch_size: int = 100,
+    ):
+        rows = []
+        for ch in chunks:
+            if safe_text(ch.metadata.get("chunk_mode")) != "table":
+                continue
+            row = self._build_table_row(document_id, ch, spec_kind=spec_kind)
+            if row is not None:
+                rows.append(row)
+
+        if not rows:
+            print(f"[INFO] No {spec_kind} Table rows to import")
+            return
+
+        query = f"""
+        UNWIND $rows AS row
+        MATCH (c:{parent_label} {{name: row.parent_chunk_name}})
+        MERGE (t:Table {{semantic_id: row.semantic_id}})
+        SET t = {{
+            semantic_id: row.semantic_id,
+            name: row.name,
+            table_number: row.table_number,
+            table_title: row.table_title,
+            parent_chunk_id: row.parent_chunk_id,
+            embedding: row.embedding,
+            text: row.text,
+            pages: row.pages,
+            type: row.type,
+            discipline: row.discipline
+        }}
+        MERGE (c)-[:HAS_TABLE]->(t)
+        """
+
+        with self.driver.session(database=self.database) as session:
+            for i in range(0, len(rows), batch_size):
+                batch = rows[i:i + batch_size]
+                session.run(query, rows=batch, document_id=document_id)
+                print(f"[INFO] Imported {spec_kind} Table batch {i + 1} - {i + len(batch)} / {len(rows)}")
+
     def import_rationale_chunks(
         self,
         document_id: str,
@@ -2139,6 +2402,13 @@ class VectorKGBuilder:
 
         self.import_section_hierarchy(document_id, file_path, chunks, batch_size=batch_size)
         self.import_fschunks(document_id, chunks, batch_size=batch_size)
+        self.import_table_chunks(
+            document_id=document_id,
+            chunks=chunks,
+            parent_label="FSChunk",
+            spec_kind="FS",
+            batch_size=batch_size,
+        )
         self.import_related_links(chunks, batch_size=batch_size)
         self.import_rationale_chunks(
             document_id=document_id,
@@ -2168,6 +2438,13 @@ class VectorKGBuilder:
 
         self.import_section_hierarchy(document_id, ts_file_path, ts_chunks, batch_size=batch_size)
         self.import_tschunks(document_id, ts_chunks, batch_size=batch_size)
+        self.import_table_chunks(
+            document_id=document_id,
+            chunks=ts_chunks,
+            parent_label="TSChunk",
+            spec_kind="TS",
+            batch_size=batch_size,
+        )
         self.import_rationale_chunks(
             document_id=document_id,
             chunks=ts_chunks,

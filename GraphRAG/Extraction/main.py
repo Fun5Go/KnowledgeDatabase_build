@@ -270,7 +270,7 @@ def redact_runtime_trace_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 def run_retrieval_for_analysis_item(
     retriever: Any,
     analysis_item: dict[str, Any],
-    top_k: int = 15,
+    top_k: int = 20,
     per_label_k: int = 30,
     retrieval_mode: str = "hybrid",
     use_cross_encoder_rerank: bool = False,

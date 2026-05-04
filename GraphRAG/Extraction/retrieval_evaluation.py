@@ -6,27 +6,10 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.append(str(Path(__file__).resolve().parents[2]))
-
-try:
-    from .main import (
-        build_query_text as build_main_query_text,
-        iter_structure_analysis_items,
-        json_safe,
-        normalize_text,
-        run_retrieval_for_analysis_item,
-    )
-except ImportError:  # pragma: no cover - supports direct script execution
-    from main import (
-        build_query_text as build_main_query_text,
-        iter_structure_analysis_items,
-        json_safe,
-        normalize_text,
-        run_retrieval_for_analysis_item,
-    )
 
 
 EXTRACTION_DIR = Path(__file__).resolve().parent
@@ -41,12 +24,302 @@ DEFAULT_SELECTION_GLOB = "chunk_selection_results_query_*.json"
 # {failure_element}, {function_text}, {query_mode}, {mode_text},
 # {query_cause}, {cause_text}, {cause_discipline}, {discipline},
 # {element_id}, {analysis_id}, {query_type}
-FUNCTION_MODE_QUERY_TEMPLATE = "{query_mode}"
+FUNCTION_MODE_QUERY_TEMPLATE = "{function_text} with {query_mode}"
 CAUSE_QUERY_TEMPLATE: str | None = None
 
 # Examples:
 # FUNCTION_MODE_QUERY_TEMPLATE = "{function_text} failure mode: {query_mode}"
 # CAUSE_QUERY_TEMPLATE = "{cause_discipline} cause: {query_cause}"
+
+structure_input_motorcontrol = {
+    "product_domain": "motor_drives",
+    "nodes": [
+        {
+            "element_id": "E1",
+            "failure_element": "Motor control",
+            "modes": {
+                "Soft starter": [
+                    "Component break-down",
+                    "Unbalanced motor currents",
+                ],
+                "Zero-crossing detection": [
+                    "Incorrect interpretation zero-crossing",
+                    "Soft start too long",
+                    "No detection",
+                ],
+                "Relay switching": [
+                    "Welded relay",
+                    "Relay cannot close",
+                    "False turn-on / turn-off",
+                ],
+            },
+            "causes": {
+                "mechanics": [
+                    "Cooling insufficient",
+                    "Compressor vibrations",
+                ],
+                "hardware": [
+                    "(Starting) Motor current too high for chosen components",
+                    "Overvoltage due to motor disconnect",
+                    "Under Voltage due to incorrect triggering",
+                    "Live switching of relays",
+                ],
+                "software": [
+                    "Priority zero-crossing interrupt too low",
+                    "Open loop control",
+                ],
+                "other": [
+                    "No (correctly designed) snubber design",
+                    "Too high dT junction as a result of power cycling of component",
+                ],
+            },
+            "effects": [
+                "Motor cannot start",
+                "Overcurrent towards motor",
+                "Motor starts without soft start",
+                "Short-circuit",
+            ],
+        }
+    ],
+}
+
+
+def normalize_text(value: Any) -> str:
+    """Normalize values to safe strings without importing Extraction/main.py."""
+
+    if value is None:
+        return ""
+    return str(value).replace("\x00", " ").strip()
+
+
+def json_safe(value: Any) -> Any:
+    """Convert values such as NumPy scalars into JSON-serializable objects."""
+
+    if isinstance(value, dict):
+        return {normalize_text(key): json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [json_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "item"):
+        try:
+            return json_safe(value.item())
+        except Exception:
+            pass
+    if hasattr(value, "tolist"):
+        try:
+            return json_safe(value.tolist())
+        except Exception:
+            pass
+    return normalize_text(value)
+
+
+def load_structure_input() -> dict[str, Any]:
+    """Return the structure analysis input used by this evaluation pass."""
+
+    return structure_input_motorcontrol
+
+
+def build_function_mode_query_text(function_text: str, mode_text: str) -> str:
+    """Default main.py-compatible query text for Function + failure mode."""
+
+    return f"{function_text} has {mode_text}"
+
+
+def build_cause_query_text(cause_text: str, discipline: str) -> str:
+    """Default main.py-compatible query text for cause queries."""
+
+    return f"{cause_text}"
+
+
+def build_analysis_id(*parts: str) -> str:
+    """Build a stable readable id from structure query parts."""
+
+    cleaned = [normalize_text(part).lower().replace(" ", "-") for part in parts if normalize_text(part)]
+    return ":".join(cleaned)
+
+
+def map_cause_discipline_to_retrieval_labels(discipline: str) -> list[str] | None:
+    """Map structure cause discipline to GraphRAG retrieval labels."""
+
+    discipline_key = normalize_text(discipline).lower()
+    mapping = {
+        "hardware": ["HW"],
+        "hw": ["HW"],
+        "software": ["ESW"],
+        "sw": ["ESW"],
+        "esw": ["ESW"],
+        "fs": ["FS"],
+        "functional safety": ["FS"],
+        "mechanics": ["MCH"],
+    }
+    return mapping.get(discipline_key)
+
+
+def build_function_mode_query_items(structure_input: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build Function text + failure mode text query items."""
+
+    items: list[dict[str, Any]] = []
+    for node in structure_input.get("nodes", []):
+        element_id = normalize_text(node.get("element_id"))
+        failure_element = normalize_text(node.get("failure_element"))
+        modes = node.get("modes", {})
+        if not isinstance(modes, dict):
+            continue
+
+        for function_text, mode_texts in modes.items():
+            function_text = normalize_text(function_text)
+            if not isinstance(mode_texts, list):
+                continue
+
+            for mode_text in mode_texts:
+                mode_text = normalize_text(mode_text)
+                if not function_text or not mode_text:
+                    continue
+
+                items.append(
+                    {
+                        "analysis_id": build_analysis_id(
+                            element_id,
+                            "function_mode",
+                            function_text,
+                            mode_text,
+                        ),
+                        "query_type": "function_mode",
+                        "element_id": element_id,
+                        "failure_element": failure_element,
+                        "function_text": function_text,
+                        "query_mode": mode_text,
+                        "query_cause": "",
+                        "cause_discipline": "",
+                        "query_text": build_function_mode_query_text(function_text, mode_text),
+                        "disciplines": None,
+                    }
+                )
+
+    return items
+
+
+def build_cause_query_items(structure_input: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build cause text query items with their discipline/category."""
+
+    items: list[dict[str, Any]] = []
+    for node in structure_input.get("nodes", []):
+        element_id = normalize_text(node.get("element_id"))
+        failure_element = normalize_text(node.get("failure_element"))
+        causes = node.get("causes", {})
+        if not isinstance(causes, dict):
+            continue
+
+        for discipline, cause_texts in causes.items():
+            discipline = normalize_text(discipline)
+            if not isinstance(cause_texts, list):
+                continue
+
+            for cause_text in cause_texts:
+                cause_text = normalize_text(cause_text)
+                if not cause_text:
+                    continue
+
+                items.append(
+                    {
+                        "analysis_id": build_analysis_id(
+                            element_id,
+                            "cause",
+                            discipline,
+                            cause_text,
+                        ),
+                        "query_type": "cause",
+                        "element_id": element_id,
+                        "failure_element": failure_element,
+                        "function_text": "",
+                        "query_mode": "",
+                        "query_cause": cause_text,
+                        "cause_discipline": discipline,
+                        "query_text": build_cause_query_text(cause_text, discipline),
+                        "disciplines": map_cause_discipline_to_retrieval_labels(discipline),
+                    }
+                )
+
+    return items
+
+
+def build_structure_query_items(structure_input: dict[str, Any]) -> list[dict[str, Any]]:
+    """Split structure input into function-mode and cause query items."""
+
+    return build_function_mode_query_items(structure_input) + build_cause_query_items(structure_input)
+
+
+def iter_structure_analysis_items() -> Iterable[dict[str, Any]]:
+    """Loop the evaluation structure query items without importing main.py."""
+
+    yield from build_structure_query_items(load_structure_input())
+
+
+def build_query_text(analysis_item: dict[str, Any]) -> str:
+    """Return the default main.py-compatible retrieval query text."""
+
+    query_text = normalize_text(analysis_item.get("query_text"))
+    if query_text:
+        return query_text
+
+    if analysis_item.get("query_type") == "function_mode":
+        return build_function_mode_query_text(
+            normalize_text(analysis_item.get("function_text")),
+            normalize_text(analysis_item.get("query_mode")),
+        )
+
+    if analysis_item.get("query_type") == "cause":
+        return build_cause_query_text(
+            normalize_text(analysis_item.get("query_cause")),
+            normalize_text(analysis_item.get("cause_discipline")),
+        )
+
+    return ""
+
+
+def run_retrieval_for_analysis_item(
+    retriever: Any,
+    analysis_item: dict[str, Any],
+    top_k: int = 15,
+    per_label_k: int = 30,
+    retrieval_mode: str = "hybrid",
+    use_cross_encoder_rerank: bool = False,
+    cross_encoder_top_n: int = 30,
+    use_section_tag_bonus: bool = True,
+    section_bonus_mode: str = "hybrid",
+    section_bonus_weight: float = 0.05,
+) -> dict[str, Any]:
+    """Run retrieval without LangSmith tracing from Extraction/main.py."""
+
+    from GraphRAG.main_sentence import (
+        build_sentence_doc_chunk_query,
+        query_doc_chunks_for_sentence,
+    )
+
+    query_text = build_query_text(analysis_item)
+    query_spec = build_sentence_doc_chunk_query(sentence=query_text)
+    query_spec["query_type"] = analysis_item.get("query_type", "")
+    query_spec["function_text"] = analysis_item.get("function_text", "")
+    query_spec["query_mode"] = analysis_item.get("query_mode", "")
+    query_spec["query_cause"] = analysis_item.get("query_cause", "")
+    query_spec["cause_discipline"] = analysis_item.get("cause_discipline", "")
+
+    return query_doc_chunks_for_sentence(
+        retriever=retriever,
+        query_spec=query_spec,
+        top_k=top_k,
+        per_label_k=per_label_k,
+        retrieval_mode=retrieval_mode,
+        disciplines=analysis_item.get("disciplines"),
+        use_cross_encoder_rerank=use_cross_encoder_rerank,
+        cross_encoder_top_n=cross_encoder_top_n,
+        use_section_tag_bonus=use_section_tag_bonus,
+        section_bonus_mode=section_bonus_mode,
+        section_bonus_weight=section_bonus_weight,
+    )
 
 
 @dataclass(frozen=True)
@@ -110,7 +383,7 @@ class QueryTextBuilder:
             return render_query_template(self.function_mode_template, analysis_item)
         if query_type == "cause" and self.cause_template:
             return render_query_template(self.cause_template, analysis_item)
-        return build_main_query_text(analysis_item)
+        return build_query_text(analysis_item)
 
 
 def render_query_template(template: str, analysis_item: dict[str, Any]) -> str:
@@ -196,7 +469,6 @@ def build_ground_truth_from_selection_results(
     for path in sorted(EXTRACTION_DIR.glob(selection_glob), key=query_result_sort_key):
         for result in load_result_list(path):
             analysis_item = result.get("analysis_item", {})
-            evidence = result.get("query_result", {}).get("evidence", [])
             top_chunks = result.get("selection", {}).get("top_chunks", [])
             strong_chunks = [
                 chunk
@@ -206,14 +478,13 @@ def build_ground_truth_from_selection_results(
 
             ground_truth_chunks: list[dict[str, Any]] = []
             for chunk in strong_chunks:
-                key = selected_chunk_key(chunk, evidence)
-                if not key:
+                name = normalize_text(chunk.get("name"))
+                if not name:
                     continue
                 ground_truth_chunks.append(
                     {
-                        "chunk_id": key,
                         "label": normalize_text(chunk.get("label")),
-                        "name": normalize_text(chunk.get("name")),
+                        "name": name,
                     }
                 )
 
@@ -227,8 +498,8 @@ def build_ground_truth_from_selection_results(
                     "cause_text": normalize_text(analysis_item.get("query_cause")),
                     "cause_discipline": normalize_text(analysis_item.get("cause_discipline")),
                     "current_query_text": normalize_text(analysis_item.get("query_text")),
-                    "ground_truth_chunk_ids": [
-                        chunk["chunk_id"] for chunk in ground_truth_chunks
+                    "ground_truth_chunk_names": [
+                        chunk["name"] for chunk in ground_truth_chunks if chunk["name"]
                     ],
                     "ground_truth_chunks": ground_truth_chunks,
                     "source_file": path.name,
@@ -309,21 +580,15 @@ def evaluate_config(
     for index, analysis_item in enumerate(query_items, start=1):
         analysis_id = normalize_text(analysis_item.get("analysis_id"))
         truth = ground_truth_by_id.get(analysis_id, {})
-        true_ids = [
-            normalize_text(value)
-            for value in truth.get("ground_truth_chunk_ids", [])
-            if normalize_text(value)
-        ]
-        true_names = ground_truth_display_names(truth)
+        true_names = ground_truth_names(truth)
         query_result = run_retrieval_for_analysis_item(
             retriever=retriever,
             analysis_item=analysis_item,
             **config.to_kwargs(),
         )
         evidence = query_result.get("evidence", [])
-        ranked_ids = [chunk_key(chunk) for chunk in evidence]
         ranked_names = [chunk_display_name(chunk) for chunk in evidence]
-        metrics = calculate_retrieval_metrics(ranked_ids, true_ids)
+        metrics = calculate_retrieval_metrics(ranked_names, true_names)
         per_query.append(
             {
                 "query_number": truth.get("query_number", index),
@@ -348,8 +613,16 @@ def evaluate_config(
     }
 
 
-def ground_truth_display_names(truth: dict[str, Any]) -> list[str]:
-    """Return readable ground-truth chunk names for result output."""
+def ground_truth_names(truth: dict[str, Any]) -> list[str]:
+    """Return ground-truth chunk names used for matching and result output."""
+
+    explicit_names = [
+        normalize_text(value)
+        for value in truth.get("ground_truth_chunk_names", [])
+        if normalize_text(value)
+    ]
+    if explicit_names:
+        return explicit_names
 
     chunks = truth.get("ground_truth_chunks", [])
     if isinstance(chunks, list):
@@ -361,6 +634,8 @@ def ground_truth_display_names(truth: dict[str, Any]) -> list[str]:
         if names:
             return names
 
+    # Backward compatibility for older ground-truth files. New files should use
+    # ground_truth_chunk_names, because evaluation now matches by chunk name.
     return [
         normalize_text(value)
         for value in truth.get("ground_truth_chunk_ids", [])
@@ -369,13 +644,13 @@ def ground_truth_display_names(truth: dict[str, Any]) -> list[str]:
 
 
 def calculate_retrieval_metrics(
-    ranked_chunk_ids: list[str],
-    ground_truth_chunk_ids: list[str],
+    ranked_chunk_names: list[str],
+    ground_truth_chunk_names: list[str],
 ) -> dict[str, Any]:
     """Calculate MRR and recall for one query."""
 
-    true_ids = [item for item in ground_truth_chunk_ids if item]
-    true_set = set(true_ids)
+    true_names = [item for item in ground_truth_chunk_names if item]
+    true_set = set(true_names)
     if not true_set:
         return {
             "mrr": 0.0,
@@ -388,10 +663,10 @@ def calculate_retrieval_metrics(
     hit_count = 0
     first_relevant_rank: int | None = None
     seen_hits: set[str] = set()
-    for rank, chunk_id in enumerate(ranked_chunk_ids, start=1):
-        if chunk_id not in true_set or chunk_id in seen_hits:
+    for rank, chunk_name in enumerate(ranked_chunk_names, start=1):
+        if chunk_name not in true_set or chunk_name in seen_hits:
             continue
-        seen_hits.add(chunk_id)
+        seen_hits.add(chunk_name)
         hit_count += 1
         if first_relevant_rank is None:
             first_relevant_rank = rank

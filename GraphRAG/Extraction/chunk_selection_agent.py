@@ -18,14 +18,14 @@ except Exception:  # pragma: no cover - optional dependency
         return decorator
 
 
-LANGSMITH_PROJECT_NAME = configure_langsmith()
+LANGSMITH_PROJECT_NAME = "FaiureChunkSelection"
 
 PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent / "chunk_selection_prompt.txt"
 LLM_BACKEND = os.getenv("LLM_BACKEND", "openai")
-LLM_MODEL = os.getenv("LLM_MODEL", "azure/gpt-4.1")
+LLM_MODEL = os.getenv("LLM_MODEL", "azure/gpt-5.2")
 LLM_TEMPERATURE = 0.0
 LLM_JSON_MODE = True
-MAX_PROMPT_INPUT_TOKENS = int(os.getenv("GRAPHRAG_EXTRACTION_MAX_INPUT_TOKENS", "4000"))
+MAX_PROMPT_INPUT_TOKENS = int(os.getenv("GRAPHRAG_EXTRACTION_MAX_INPUT_TOKENS", "8000"))
 USE_PLACEHOLDER_LLM = os.getenv("GRAPHRAG_EXTRACTION_USE_PLACEHOLDER", "0").lower() in {
     "1",
     "true",
@@ -68,9 +68,11 @@ def build_output_schema() -> dict[str, Any]:
         "query_type": "function_mode | cause",
         "top_chunks": [
             {
-                "rank": "integer rank among selected chunks",
+                "rank": "integer retrieval rank copied from the selected candidate chunk",
                 "label": "string",
                 "name": "string",
+                "raw text": "string copied from the selected candidate chunk text",
+                "relationship": "upstream | downstream | self",
                 "support_capability": "weak | moderate | strong",
                 "reason": "short explanation",
             }
@@ -157,13 +159,13 @@ def enforce_prompt_input_token_limit(
 
 def normalize_candidate_chunk(
     item: dict[str, Any],
-    rank: int,
+    retrieval_rank: int,
     max_text_length: int,
 ) -> dict[str, Any]:
     """Keep only stable, prompt-friendly candidate fields."""
 
     return {
-        "rank": rank,
+        "retrieval rank": retrieval_rank,
         "label": normalize_text(item.get("label")),
         "name": normalize_text(item.get("name")),
         "section_tag": normalize_text(item.get("section_tag")),
@@ -247,9 +249,11 @@ class ChunkSelectionAgent:
             "query_type": payload.get("query_type", ""),
             "top_chunks": [
                 {
-                    "rank": index,
+                    "rank": item.get("retrieval rank", index),
                     "label": item.get("label", ""),
                     "name": item.get("name", ""),
+                    "raw text": item.get("text", ""),
+                    "relationship": "self",
                     "support_capability": placeholder_support_capability(index),
                     "reason": "Placeholder selected this chunk from the highest-ranked retrieval results.",
                 }
@@ -266,18 +270,38 @@ def normalize_selection_response(response: dict[str, Any], payload: dict[str, An
         chunks = []
 
     normalized_chunks: list[dict[str, Any]] = []
-    for index, chunk in enumerate(chunks, start=1):
+    candidate_by_key = build_candidate_lookup(payload)
+    for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
         capability = normalize_text(chunk.get("support_capability")).lower()
         if capability not in {"weak", "moderate", "strong"}:
             capability = "weak"
 
+        label = normalize_text(chunk.get("label"))
+        name = normalize_text(chunk.get("name"))
+        rank = normalize_int(chunk.get("rank"))
+        if rank is None:
+            rank = normalize_int(chunk.get("retrieval rank"))
+        candidate = candidate_by_key.get(("rank", normalize_text(rank))) if rank is not None else None
+        if rank is None:
+            candidate = candidate_by_key.get(("label_name", label, name))
+            if candidate:
+                rank = normalize_int(candidate.get("retrieval rank"))
+        if rank is None:
+            continue
+        if candidate is None:
+            candidate = candidate_by_key.get(("label_name", label, name))
+
         normalized_chunks.append(
             {
-                "rank": index,
-                "label": normalize_text(chunk.get("label")),
-                "name": normalize_text(chunk.get("name")),
+                "rank": rank,
+                "label": label,
+                "name": name,
+                "raw text": normalize_text(
+                    candidate.get("text") if candidate else chunk.get("raw text") or chunk.get("text")
+                ),
+                "relationship": normalize_relationship(chunk.get("relationship")),
                 "support_capability": capability,
                 "reason": normalize_text(chunk.get("reason")),
             }
@@ -290,6 +314,45 @@ def normalize_selection_response(response: dict[str, Any], payload: dict[str, An
         "query_type": normalize_text(response.get("query_type") or payload.get("query_type")),
         "top_chunks": normalized_chunks,
     }
+
+
+def build_candidate_lookup(payload: dict[str, Any]) -> dict[tuple[str, ...], dict[str, Any]]:
+    """Map candidate identifiers to candidate payloads."""
+
+    candidate_by_key: dict[tuple[str, ...], dict[str, Any]] = {}
+    for candidate in payload.get("candidate_chunks", []):
+        if not isinstance(candidate, dict):
+            continue
+        rank = normalize_int(candidate.get("retrieval rank"))
+        label_name_key = (
+            "label_name",
+            normalize_text(candidate.get("label")),
+            normalize_text(candidate.get("name")),
+        )
+        candidate_by_key[label_name_key] = candidate
+        if rank is not None:
+            candidate_by_key[("rank", normalize_text(rank))] = candidate
+    return candidate_by_key
+
+
+def normalize_relationship(value: Any) -> str:
+    """Normalize selected-chunk relationship labels."""
+
+    relationship = normalize_text(value).lower()
+    if relationship in {"upstream", "downstream", "self"}:
+        return relationship
+    return "self"
+
+
+def normalize_int(value: Any) -> int | None:
+    """Normalize integer-like values."""
+
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def placeholder_support_capability(rank: int) -> str:

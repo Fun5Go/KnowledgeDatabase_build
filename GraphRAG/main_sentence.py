@@ -497,7 +497,7 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-    Overvoltage due to motor disconnect
+    Soft starter
     """
 
     retriever = FMEASentenceRetrieverV2()
@@ -516,7 +516,7 @@ def main():
             use_section_tag_bonus=True,
             section_bonus_mode="hybrid",
             section_bonus_weight=0.05,
-            is_QD=True,
+            is_QD=False,
         )
         print_doc_chunk_results(result)
     finally:
