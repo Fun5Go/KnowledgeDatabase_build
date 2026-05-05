@@ -186,6 +186,7 @@ def dense_search_qd_chunks(
         coalesce(node.section_tag, "") AS section_tag,
         coalesce(node.qd_id, "") AS qd_id,
         coalesce(node.qd_title, "") AS qd_title,
+        coalesce(node.objectives, "") AS objectives,
         trim(coalesce(node.qd_title, "") + " " + coalesce(node.objectives, "")) AS text,
         score AS score,
         "dense" AS source
@@ -216,6 +217,7 @@ def sparse_search_qd_chunks(
         coalesce(node.section_tag, "") AS section_tag,
         coalesce(node.qd_id, "") AS qd_id,
         coalesce(node.qd_title, "") AS qd_title,
+        coalesce(node.objectives, "") AS objectives,
         trim(coalesce(node.qd_title, "") + " " + coalesce(node.objectives, "")) AS text,
         score AS score,
         "sparse" AS source
@@ -396,6 +398,7 @@ def package_top_k_candidates(
                 "section_tag": item.get("section_tag", ""),
                 "qd_id": item.get("qd_id", ""),
                 "qd_title": item.get("qd_title", ""),
+                "objectives": item.get("objectives", ""),
                 "text": item.get("text", ""),
                 "score": item.get("final_score", item.get("rrf_score", 0.0)),
                 "cross_encoder_score": item.get("cross_encoder_score"),
