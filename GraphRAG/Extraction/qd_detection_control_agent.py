@@ -70,16 +70,18 @@ def build_output_schema() -> dict[str, Any]:
     return {
         "analysis_id": "string",
         "query_type": "function_mode | cause",
-        "selected_qd_chunk": {
-            "rank": "integer retrieval rank copied from the selected candidate chunk",
-            "label": "QDChunk",
-            "name": "string",
-            "qd_id": "string",
-            "qd_title": "string",
-            "objectives": "string copied from the selected candidate chunk objectives",
-            "support_capability": "weak | moderate | strong",
-            "reason": "short explanation of why this is the best detection control",
-        },
+        "selected_qd_chunks": [
+            {
+                "rank": "integer retrieval rank copied from the selected candidate chunk",
+                "label": "QDChunk",
+                "name": "string",
+                "qd_id": "string",
+                "qd_title": "string",
+                "objectives": "string copied from the selected candidate chunk objectives",
+                "support_capability": "weak | moderate | strong",
+                "reason": "short explanation of why this is a detection control",
+            }
+        ],
     }
 
 
@@ -182,7 +184,7 @@ class QDDetectionControlAgent:
         query_result: dict[str, Any],
         analysis_item: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Select one detection-control QD chunk from a QD-only query result."""
+        """Select up to three detection-control QD chunks from a QD-only query result."""
 
         payload = build_agent_payload(query_result=query_result, analysis_item=analysis_item)
         if self.use_placeholder:
@@ -215,24 +217,34 @@ class QDDetectionControlAgent:
         return {
             "analysis_id": normalize_text(payload.get("analysis_id")),
             "query_type": normalize_text(payload.get("query_type")),
-            "selected_qd_chunk": normalize_selected_candidate(
-                selected,
-                support_capability="strong",
-                reason="Placeholder selected the highest-ranked QD retrieval result.",
-            ) if selected else None,
+            "selected_qd_chunks": [
+                normalize_selected_candidate(
+                    item,
+                    support_capability="strong" if index == 1 else "moderate",
+                    reason="Placeholder selected this QD retrieval result by rank.",
+                )
+                for index, item in enumerate(candidates[:3], start=1)
+            ],
         }
 
 
 def normalize_selection_response(response: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    """Normalize an LLM response to a single selected QD chunk or None."""
+    """Normalize an LLM response to up to three selected QD chunks."""
 
     candidate_by_key = build_candidate_lookup(payload)
-    selected = response.get("selected_qd_chunk")
-    if selected is None:
-        selected = first_list_item(response.get("top_chunks") or response.get("selected_chunks"))
+    selected_items = response.get("selected_qd_chunks")
+    if selected_items is None:
+        selected_items = response.get("top_chunks") or response.get("selected_chunks")
+    if selected_items is None and isinstance(response.get("selected_qd_chunk"), dict):
+        selected_items = [response.get("selected_qd_chunk")]
+    if not isinstance(selected_items, list):
+        selected_items = []
 
-    normalized_selected = None
-    if isinstance(selected, dict):
+    normalized_selected: list[dict[str, Any]] = []
+    seen_ranks: set[int] = set()
+    for selected in selected_items:
+        if not isinstance(selected, dict):
+            continue
         rank = normalize_int(selected.get("rank"))
         if rank is None:
             rank = normalize_int(selected.get("retrieval rank"))
@@ -245,17 +257,26 @@ def normalize_selection_response(response: dict[str, Any], payload: dict[str, An
                     normalize_text(selected.get("name")),
                 )
             )
-        if candidate is not None:
-            normalized_selected = normalize_selected_candidate(
+        if candidate is None:
+            continue
+        candidate_rank = normalize_int(candidate.get("retrieval rank"))
+        if candidate_rank is None or candidate_rank in seen_ranks:
+            continue
+        seen_ranks.add(candidate_rank)
+        normalized_selected.append(
+            normalize_selected_candidate(
                 candidate,
                 support_capability=normalize_support_capability(selected.get("support_capability")),
                 reason=normalize_text(selected.get("reason")),
             )
+        )
+        if len(normalized_selected) >= 3:
+            break
 
     return {
         "analysis_id": normalize_text(response.get("analysis_id") or payload.get("analysis_id")),
         "query_type": normalize_text(response.get("query_type") or payload.get("query_type")),
-        "selected_qd_chunk": normalized_selected,
+        "selected_qd_chunks": normalized_selected,
     }
 
 
@@ -276,14 +297,6 @@ def normalize_selected_candidate(
         "support_capability": normalize_support_capability(support_capability),
         "reason": normalize_text(reason),
     }
-
-
-def first_list_item(value: Any) -> Any:
-    """Return the first item from a list-like value."""
-
-    if isinstance(value, list) and value:
-        return value[0]
-    return None
 
 
 def normalize_support_capability(value: Any) -> str:

@@ -39,7 +39,7 @@ LANGSMITH_PROJECT_NAME = configure_langsmith()
 prompt = textwrap.dedent("""\
 Extract entities from the specification text into these exact-span labels:
 
-1. component: the equipment, module, function block, system part, or associated component being specified
+1. element: the equipment, module, function block, system part, or associated component being specified
 2. function: the action, capability, behavior, or required operation
 3. object: the target, item, signal, error, current, voltage, input, output, or thing involved in the function
 4. constraint: the condition, scope, limit, duration, trigger, range, threshold, or context introduced by words like "when", "if", "while", "for", "during", "after", "before", or similar phrases

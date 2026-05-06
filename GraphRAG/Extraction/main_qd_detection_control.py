@@ -126,7 +126,7 @@ def run_qd_detection_control_for_item(
     agent: QDDetectionControlAgent,
     analysis_item: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run QD-only retrieval and select one detection-control chunk."""
+    """Run QD-only retrieval and select up to three detection-control chunks."""
 
     query_result = run_qd_retrieval_for_analysis_item(
         retriever=retriever,
