@@ -500,7 +500,7 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-    Soft starter
+     The ESP32-S3 has two cores with 32 interrupt each. Each interrupt has a  xed priority. In\ncase an interrupt is required for a peripheral any of these interrupts can be used, i.e. in\nrelation to a ARM Cortex the ESP32 has no dedicated interrupts assigned for each peripheral\nwith a con gurable priority.\nAn interrupt enabled by code running a speci c core shall be associated with this core and\nrun the interrupt on that core.\nSee [7] for more details.
     """
 
     retriever = FMEASentenceRetrieverV2()
