@@ -191,7 +191,7 @@ def build_structure_query_items(structure_input: dict[str, Any]) -> list[dict[st
 def build_function_mode_query_text(function_text: str, mode_text: str) -> str:
     """Format the retrieval query for Function text + failure mode text."""
 
-    return f"{function_text} has {mode_text}"
+    return f"{function_text} with {mode_text}"
 
 
 def build_cause_query_text(cause_text: str, discipline: str) -> str:

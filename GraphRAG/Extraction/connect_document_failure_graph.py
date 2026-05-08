@@ -14,7 +14,11 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script execution
 from neo4j import GraphDatabase
 
 
-DEFAULT_PATTERNS = ("query.json", "chunk_selection_results_query_*.json")
+DEFAULT_PATTERNS = (
+    "query.json",
+    "chunk_selection_results_query_*.json",
+    "qd_detection_control_results_query_*.json",
+)
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
@@ -30,7 +34,8 @@ QUERY_TYPE_TO_TEXT_FIELD = {
     "mode": "query_mode",
     "cause": "query_cause",
 }
-ALLOWED_RELATIONSHIPS = {"upstream", "downstream", "self"}
+ALLOWED_EVIDENCE_LABELS = {"control", "reason", "specification", "detection"}
+LEGACY_RELATIONSHIP_TYPES = ("upstream", "downstream", "self")
 
 
 def normalize_text(value: Any) -> str:
@@ -43,11 +48,25 @@ def normalize_query_type(value: Any) -> str:
     return normalize_text(value).lower()
 
 
-def normalize_relationship(value: Any) -> str:
-    relationship = normalize_text(value).lower()
-    if relationship not in ALLOWED_RELATIONSHIPS:
+def normalize_evidence_label(value: Any) -> str:
+    evidence_label = normalize_text(value).lower()
+    if evidence_label not in ALLOWED_EVIDENCE_LABELS:
         return ""
-    return relationship
+    return evidence_label
+
+
+def iter_selected_qd_chunks(selection: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return selected QD detection-control chunks from supported JSON shapes."""
+
+    selected = selection.get("selected_qd_chunks")
+    if isinstance(selected, list):
+        return [item for item in selected if isinstance(item, dict)]
+
+    selected_one = selection.get("selected_qd_chunk")
+    if isinstance(selected_one, dict):
+        return [selected_one]
+
+    return []
 
 
 def iter_input_files(input_dir: Path, patterns: list[str]) -> list[Path]:
@@ -127,18 +146,18 @@ def build_link_rows_from_query_item(
     if not target_text:
         return []
 
+    rows: list[dict[str, str]] = []
     top_chunks = selection.get("top_chunks")
     if not isinstance(top_chunks, list):
-        return []
+        top_chunks = []
 
-    rows: list[dict[str, str]] = []
     for chunk in top_chunks:
         if not isinstance(chunk, dict):
             continue
 
         chunk_name = normalize_text(chunk.get("name"))
-        relationship = normalize_relationship(chunk.get("relationship"))
-        if not chunk_name or not relationship:
+        evidence_label = normalize_evidence_label(chunk.get("evidence_label"))
+        if not chunk_name or not evidence_label:
             continue
 
         rows.append(
@@ -146,15 +165,43 @@ def build_link_rows_from_query_item(
                 "chunk_name": chunk_name,
                 "failure_label": failure_label,
                 "failure_text": target_text,
-                "relationship": relationship,
+                "evidence_label": evidence_label,
+                "evidence_span": normalize_text(chunk.get("evidence_span")),
                 "support_capability": normalize_text(chunk.get("support_capability")),
-                "reason": normalize_text(chunk.get("reason")),
+                "justification": normalize_text(chunk.get("justification") or chunk.get("reason")),
                 "analysis_id": normalize_text(
                     selection.get("analysis_id") or analysis_item.get("analysis_id")
                 ),
                 "query_type": query_type,
                 "query_text": get_query_text(item),
                 "source_file": str(source_file) if source_file else "",
+                "qd_id": "",
+                "qd_title": "",
+            }
+        )
+
+    for chunk in iter_selected_qd_chunks(selection):
+        chunk_name = normalize_text(chunk.get("name"))
+        if not chunk_name:
+            continue
+
+        rows.append(
+            {
+                "chunk_name": chunk_name,
+                "failure_label": failure_label,
+                "failure_text": target_text,
+                "evidence_label": "detection",
+                "evidence_span": normalize_text(chunk.get("objectives")),
+                "support_capability": normalize_text(chunk.get("support_capability")),
+                "justification": normalize_text(chunk.get("justification") or chunk.get("reason")),
+                "analysis_id": normalize_text(
+                    selection.get("analysis_id") or analysis_item.get("analysis_id")
+                ),
+                "query_type": query_type,
+                "query_text": get_query_text(item),
+                "source_file": str(source_file) if source_file else "",
+                "qd_id": normalize_text(chunk.get("qd_id")),
+                "qd_title": normalize_text(chunk.get("qd_title")),
             }
         )
 
@@ -170,18 +217,18 @@ def build_link_rows_from_query_files(input_files: list[Path]) -> list[dict[str, 
     return rows
 
 
-def group_rows_by_label_and_relationship(
+def group_rows_by_failure_and_evidence_label(
     rows: list[dict[str, str]],
 ) -> dict[tuple[str, str], list[dict[str, str]]]:
     grouped: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for row in rows:
         label = row["failure_label"]
-        relationship = row["relationship"]
+        evidence_label = row["evidence_label"]
         if label not in set(QUERY_TYPE_TO_FAILURE_LABEL.values()):
             continue
-        if relationship not in ALLOWED_RELATIONSHIPS:
+        if evidence_label not in ALLOWED_EVIDENCE_LABELS:
             continue
-        grouped[(label, relationship)].append(row)
+        grouped[(label, evidence_label)].append(row)
     return dict(grouped)
 
 
@@ -193,7 +240,7 @@ def connect_rows(
     database: str = NEO4J_DATABASE,
     batch_size: int = 100,
     dry_run: bool = False,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """
     Connect selected document chunks to Mode/Cause failure nodes.
 
@@ -201,25 +248,31 @@ def connect_rows(
     - function_mode/mode -> (:Mode {text: query_mode})
     - cause -> (:Cause {text: query_cause})
 
-    Relationship type is copied from selection.relationship
-    (upstream/downstream/self). Each relationship stores support_capability
-    and reason, plus trace fields for repeatable imports.
+    Evidence edge type is copied from selection.evidence_label.
+    QD detection-control selections are connected with a detection edge.
+    Each edge stores support_capability, evidence_span, and justification,
+    plus trace fields for repeatable imports.
     """
 
     stats = {
         "input_rows": len(rows),
-        "created_or_matched_relationships": 0,
+        "created_or_matched_edges": 0,
         "missing_chunks": 0,
         "missing_failure_nodes": 0,
+        "missing_failure_node_details": [],
     }
 
-    if dry_run or not rows:
+    if not rows:
+        return stats
+
+    if dry_run:
+        stats["missing_failure_node_details"] = []
         return stats
 
     driver = GraphDatabase.driver(uri, auth=(user, password))
     try:
         with driver.session(database=database) as session:
-            for (failure_label, relationship), group_rows in group_rows_by_label_and_relationship(rows).items():
+            for (failure_label, evidence_label), group_rows in group_rows_by_failure_and_evidence_label(rows).items():
                 query = f"""
                 UNWIND $rows AS row
                 OPTIONAL MATCH (chunk {{name: row.chunk_name}})
@@ -229,12 +282,15 @@ def connect_rows(
                     WITH row, chunk, failure
                     WITH row, chunk, failure
                     WHERE chunk IS NOT NULL AND failure IS NOT NULL
-                    MERGE (chunk)-[rel:{relationship} {{
+                    MERGE (chunk)-[rel:{evidence_label} {{
                         analysis_id: row.analysis_id,
                         query_text: row.query_text
                     }}]->(failure)
                     SET rel.support_capability = row.support_capability,
-                        rel.reason = row.reason,
+                        rel.evidence_span = row.evidence_span,
+                        rel.justification = row.justification,
+                        rel.qd_id = row.qd_id,
+                        rel.qd_title = row.qd_title,
                         rel.query_type = row.query_type,
                         rel.source_file = row.source_file
                     RETURN count(rel) AS linked
@@ -242,20 +298,94 @@ def connect_rows(
                 RETURN
                     sum(linked) AS linked_count,
                     count(CASE WHEN chunk IS NULL THEN 1 END) AS missing_chunks,
-                    count(CASE WHEN failure IS NULL THEN 1 END) AS missing_failure_nodes
+                    count(CASE WHEN failure IS NULL THEN 1 END) AS missing_failure_nodes,
+                    collect(DISTINCT CASE
+                        WHEN failure IS NULL THEN {{
+                            failure_label: row.failure_label,
+                            failure_text: row.failure_text,
+                            query_type: row.query_type,
+                            analysis_id: row.analysis_id,
+                            query_text: row.query_text,
+                            source_file: row.source_file
+                        }}
+                    END) AS missing_failure_node_details
                 """
                 for start in range(0, len(group_rows), batch_size):
                     batch = group_rows[start : start + batch_size]
                     record = session.run(query, rows=batch).single()
                     if not record:
                         continue
-                    stats["created_or_matched_relationships"] += int(record["linked_count"] or 0)
+                    stats["created_or_matched_edges"] += int(record["linked_count"] or 0)
                     stats["missing_chunks"] += int(record["missing_chunks"] or 0)
                     stats["missing_failure_nodes"] += int(record["missing_failure_nodes"] or 0)
+                    stats["missing_failure_node_details"].extend(
+                        item
+                        for item in record["missing_failure_node_details"]
+                        if isinstance(item, dict)
+                    )
     finally:
         driver.close()
 
+    stats["missing_failure_node_details"] = dedupe_missing_failure_details(
+        stats["missing_failure_node_details"]
+    )
     return stats
+
+
+def dedupe_missing_failure_details(items: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Deduplicate missing failure-node diagnostics while preserving order."""
+
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[dict[str, str]] = []
+    for item in items:
+        failure_label = normalize_text(item.get("failure_label"))
+        failure_text = normalize_text(item.get("failure_text"))
+        analysis_id = normalize_text(item.get("analysis_id"))
+        key = (failure_label, failure_text, analysis_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(
+            {
+                "failure_label": failure_label,
+                "failure_text": failure_text,
+                "query_type": normalize_text(item.get("query_type")),
+                "analysis_id": analysis_id,
+                "query_text": normalize_text(item.get("query_text")),
+                "source_file": normalize_text(item.get("source_file")),
+            }
+        )
+    return deduped
+
+
+def delete_legacy_relationships(
+    uri: str = NEO4J_URI,
+    user: str = NEO4J_USER,
+    password: str = NEO4J_PASSWORD,
+    database: str = NEO4J_DATABASE,
+    dry_run: bool = False,
+) -> int:
+    """Delete old upstream/downstream/self chunk-to-failure relationships."""
+
+    if dry_run:
+        return 0
+
+    query = """
+    MATCH (chunk)-[rel:upstream|downstream|self]->(failure)
+    WHERE (failure:Mode OR failure:Cause)
+    WITH collect(rel) AS legacy_rels
+    WITH legacy_rels, size(legacy_rels) AS deleted_count
+    UNWIND legacy_rels AS rel
+    DELETE rel
+    RETURN deleted_count
+    """
+    driver = GraphDatabase.driver(uri, auth=(user, password))
+    try:
+        with driver.session(database=database) as session:
+            record = session.run(query).single()
+            return int(record["deleted_count"] or 0) if record else 0
+    finally:
+        driver.close()
 
 
 def connect_document_chunk_graph_to_failure_graph(
@@ -267,11 +397,23 @@ def connect_document_chunk_graph_to_failure_graph(
     database: str = NEO4J_DATABASE,
     batch_size: int = 100,
     dry_run: bool = False,
-) -> dict[str, int]:
-    """Scan query JSON files and write chunk-to-failure relationships."""
+    delete_legacy_edges: bool = True,
+) -> dict[str, Any]:
+    """Scan query JSON files and write chunk-to-failure evidence edges."""
 
     input_files = iter_input_files(input_dir, patterns or list(DEFAULT_PATTERNS))
     rows = build_link_rows_from_query_files(input_files)
+    legacy_deleted = (
+        delete_legacy_relationships(
+            uri=uri,
+            user=user,
+            password=password,
+            database=database,
+            dry_run=dry_run,
+        )
+        if delete_legacy_edges
+        else 0
+    )
     stats = connect_rows(
         rows=rows,
         uri=uri,
@@ -282,15 +424,13 @@ def connect_document_chunk_graph_to_failure_graph(
         dry_run=dry_run,
     )
     stats["input_files"] = len(input_files)
+    stats["legacy_edges_deleted"] = legacy_deleted
     return stats
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Connect selected document chunk nodes to failure graph Mode/Cause nodes "
-            "using chunk selection query JSON files."
-        )
+        description="Connect selected document chunk nodes to failure graph Mode/Cause nodes."
     )
     parser.add_argument(
         "--input-dir",
@@ -304,7 +444,8 @@ def parse_args() -> argparse.Namespace:
         dest="patterns",
         help=(
             "Glob pattern to scan recursively. Can be passed multiple times. "
-            "Defaults to query.json and chunk_selection_results_query_*.json."
+            "Defaults to query.json, chunk_selection_results_query_*.json, "
+            "and qd_detection_control_results_query_*.json."
         ),
     )
     parser.add_argument("--uri", default=NEO4J_URI)
@@ -315,7 +456,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Parse query JSON and report counts without writing Neo4j relationships.",
+        help="Parse query JSON and report counts without writing Neo4j evidence edges.",
+    )
+    parser.add_argument(
+        "--keep-legacy-edges",
+        action="store_true",
+        help="Do not delete old upstream/downstream/self edges before writing new edges.",
     )
     return parser.parse_args()
 
@@ -331,6 +477,7 @@ def main() -> None:
         database=args.database,
         batch_size=args.batch_size,
         dry_run=args.dry_run,
+        delete_legacy_edges=not args.keep_legacy_edges,
     )
     print(json.dumps(stats, ensure_ascii=False, indent=2))
 

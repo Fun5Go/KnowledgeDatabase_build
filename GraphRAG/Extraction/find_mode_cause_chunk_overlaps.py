@@ -112,8 +112,9 @@ def collect_selected_chunks(input_files: list[Path]) -> dict[str, dict[str, list
                 chunks_by_name.setdefault(name, {"mode": [], "cause": []})[output_key].append(
                     {
                         "query text": query_text,
-                        "relationship": normalize_text(chunk.get("relationship")),
-                        "reason": normalize_text(chunk.get("reason")),
+                        "evidence_label": normalize_text(chunk.get("evidence_label")),
+                        "evidence_span": normalize_text(chunk.get("evidence_span")),
+                        "justification": normalize_text(chunk.get("justification") or chunk.get("reason")),
                     }
                 )
 
@@ -153,7 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Find chunks whose names appear in both function-mode and cause "
-            "query selections, keeping only name, query text, relationship, and reason."
+            "query selections, keeping only name, query text, evidence label, span, and justification."
         )
     )
     parser.add_argument(

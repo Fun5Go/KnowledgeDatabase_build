@@ -31,6 +31,8 @@ USE_PLACEHOLDER_LLM = os.getenv("GRAPHRAG_EXTRACTION_USE_PLACEHOLDER", "0").lowe
     "true",
     "yes",
 }
+ALLOWED_EVIDENCE_LABELS = {"control", "reason", "specification"}
+ALLOWED_SUPPORT_CAPABILITIES = {"weak", "moderate", "strong"}
 
 
 def load_prompt_template(path: Path = PROMPT_TEMPLATE_PATH) -> str:
@@ -71,12 +73,15 @@ def build_output_schema() -> dict[str, Any]:
                 "rank": "integer retrieval rank copied from the selected candidate chunk",
                 "label": "string",
                 "name": "string",
-                "raw text": "string copied from the selected candidate chunk text",
-                "relationship": "upstream | downstream | self",
+                "raw_text": "string copied exactly from the selected candidate chunk text",
+                "evidence_span": "exact substring copied from raw_text",
+                "evidence_label": "control | reason | specification",
                 "support_capability": "weak | moderate | strong",
-                "reason": "short explanation",
+                "justification": "short explanation",
             }
         ],
+        "affected_objects": ["string"],
+        "causal_subjects": ["string"],
     }
 
 
@@ -252,13 +257,16 @@ class ChunkSelectionAgent:
                     "rank": item.get("retrieval rank", index),
                     "label": item.get("label", ""),
                     "name": item.get("name", ""),
-                    "raw text": item.get("text", ""),
-                    "relationship": "self",
+                    "raw_text": item.get("text", ""),
+                    "evidence_span": shortest_placeholder_span(item.get("text", "")),
+                    "evidence_label": placeholder_evidence_label(item.get("text", "")),
                     "support_capability": placeholder_support_capability(index),
-                    "reason": "Placeholder selected this chunk from the highest-ranked retrieval results.",
+                    "justification": "Placeholder selected this chunk from the highest-ranked retrieval results.",
                 }
                 for index, item in enumerate(candidates, start=1)
             ],
+            "affected_objects": [],
+            "causal_subjects": [],
         }
 
 
@@ -274,10 +282,6 @@ def normalize_selection_response(response: dict[str, Any], payload: dict[str, An
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
-        capability = normalize_text(chunk.get("support_capability")).lower()
-        if capability not in {"weak", "moderate", "strong"}:
-            capability = "weak"
-
         label = normalize_text(chunk.get("label"))
         name = normalize_text(chunk.get("name"))
         rank = normalize_int(chunk.get("rank"))
@@ -293,26 +297,39 @@ def normalize_selection_response(response: dict[str, Any], payload: dict[str, An
         if candidate is None:
             candidate = candidate_by_key.get(("label_name", label, name))
 
+        if candidate:
+            label = normalize_text(candidate.get("label"))
+            name = normalize_text(candidate.get("name"))
+
+        raw_text = normalize_text(
+            candidate.get("text")
+            if candidate
+            else chunk.get("raw_text") or chunk.get("raw" + " text") or chunk.get("text")
+        )
+        evidence_label = normalize_evidence_label(chunk.get("evidence_label"))
+        evidence_span = normalize_evidence_span(chunk.get("evidence_span"), raw_text)
         normalized_chunks.append(
             {
                 "rank": rank,
                 "label": label,
                 "name": name,
-                "raw text": normalize_text(
-                    candidate.get("text") if candidate else chunk.get("raw text") or chunk.get("text")
-                ),
-                "relationship": normalize_relationship(chunk.get("relationship")),
-                "support_capability": capability,
-                "reason": normalize_text(chunk.get("reason")),
+                "raw_text": raw_text,
+                "evidence_span": evidence_span,
+                "evidence_label": evidence_label,
+                "support_capability": normalize_support_capability(chunk.get("support_capability")),
+                "justification": normalize_text(chunk.get("justification") or chunk.get("reason")),
             }
         )
 
+    selected_texts = [chunk["raw_text"] for chunk in normalized_chunks]
     return {
         "analysis_id": normalize_text(
             response.get("analysis_id") or payload.get("analysis_id")
         ),
         "query_type": normalize_text(response.get("query_type") or payload.get("query_type")),
         "top_chunks": normalized_chunks,
+        "affected_objects": normalize_top_level_terms(response.get("affected_objects"), selected_texts),
+        "causal_subjects": normalize_top_level_terms(response.get("causal_subjects"), selected_texts),
     }
 
 
@@ -335,13 +352,65 @@ def build_candidate_lookup(payload: dict[str, Any]) -> dict[tuple[str, ...], dic
     return candidate_by_key
 
 
-def normalize_relationship(value: Any) -> str:
-    """Normalize selected-chunk relationship labels."""
+def normalize_evidence_label(value: Any) -> str:
+    """Normalize selected-chunk evidence labels."""
 
-    relationship = normalize_text(value).lower()
-    if relationship in {"upstream", "downstream", "self"}:
-        return relationship
-    return "self"
+    evidence_label = normalize_text(value).lower()
+    if evidence_label in ALLOWED_EVIDENCE_LABELS:
+        return evidence_label
+    return "specification"
+
+
+def normalize_support_capability(value: Any) -> str:
+    """Normalize selected-chunk support strength."""
+
+    capability = normalize_text(value).lower()
+    if capability in ALLOWED_SUPPORT_CAPABILITIES:
+        return capability
+    return "weak"
+
+
+def normalize_evidence_span(value: Any, raw_text: str) -> str:
+    """Return an exact selected span, allowing same-text joins with ellipses."""
+
+    span = normalize_text(value)
+    if span and evidence_span_is_valid(span, raw_text):
+        return span
+    return shortest_placeholder_span(raw_text)
+
+
+def evidence_span_is_valid(span: str, raw_text: str) -> bool:
+    """Check that every span segment is copied exactly from the chunk text."""
+
+    if not span or not raw_text:
+        return False
+    parts = [part.strip() for part in span.split(" ... ")]
+    if not parts or any(not part for part in parts):
+        return False
+    return all(part in raw_text for part in parts)
+
+
+def normalize_top_level_terms(value: Any, selected_texts: Sequence[str]) -> list[str]:
+    """Deduplicate top-level noun phrases and keep only terms present in selected text."""
+
+    if not isinstance(value, list):
+        return []
+
+    selected_text = "\n".join(selected_texts).lower()
+    terms: list[str] = []
+    seen_terms: set[str] = set()
+    for item in value:
+        term = normalize_text(item)
+        if not term:
+            continue
+        if term.lower() not in selected_text:
+            continue
+        dedupe_key = term.lower()
+        if dedupe_key in seen_terms:
+            continue
+        seen_terms.add(dedupe_key)
+        terms.append(term)
+    return terms
 
 
 def normalize_int(value: Any) -> int | None:
@@ -363,6 +432,50 @@ def placeholder_support_capability(rank: int) -> str:
     if rank == 2:
         return "moderate"
     return "weak"
+
+
+def placeholder_evidence_label(text: Any) -> str:
+    """Assign a simple evidence label for offline placeholder output."""
+
+    lowered = normalize_text(text).lower()
+    control_terms = (
+        "detect",
+        "protect",
+        "prevent",
+        "mitigat",
+        "shutdown",
+        "reset",
+        "watchdog",
+        "derat",
+        "debounce",
+        "filter",
+        "error",
+        "recover",
+        "diagnos",
+    )
+    reason_terms = (
+        "because",
+        "risk",
+        "damage",
+        "safety",
+        "reliability",
+        "unstable",
+        "avoid",
+    )
+    if any(term in lowered for term in control_terms):
+        return "control"
+    if any(term in lowered for term in reason_terms):
+        return "reason"
+    return "specification"
+
+
+def shortest_placeholder_span(text: Any, max_length: int = 240) -> str:
+    """Use an exact prefix as a valid fallback evidence span."""
+
+    normalized = normalize_text(text)
+    if len(normalized) <= max_length:
+        return normalized
+    return normalized[:max_length].rstrip()
 
 
 def normalize_text(value: Any) -> str:
