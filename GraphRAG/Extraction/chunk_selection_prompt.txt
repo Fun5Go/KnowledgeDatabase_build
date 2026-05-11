@@ -9,6 +9,12 @@ Query types:
 
 Grounding rules:
 - Use only the query fields and provided candidate_chunks.
+- When connected_chunk_groups are present, use their graph relationships only as context for how retrieved chunks connect to each other.
+- candidate_chunks with the same connected_group_id belong to connected_chunk_groups[connected_group_id].
+- RELATED means two FS chunks are directly linked; IMPLEMENT means a TS/ESW/HW technical chunk implements or links to an FS chunk.
+- A relationship can strengthen interpretation across connected chunks, but the selected chunk's own raw_text must still contain text-grounded evidence.
+- If a candidate chunk name contains "Reason:", that reason text came from a retrieved rationale chunk linked to the candidate.
+- Use Reason text as context only; raw_text and evidence_span must still come from the selected candidate chunk's text.
 - Do not use external engineering knowledge or unstated assumptions.
 - Select a chunk only when its own text is technically relevant to the target condition.
 - Do not select chunks merely because they share a section, product, component, subsystem, or generic engineering words.
@@ -33,10 +39,11 @@ Choose exactly one evidence_label per selected chunk:
    For cause queries, use control when the chunk links the failure cause to a consequence and also
    describes a concrete mitigation or response.
 
-2. reason
-   Use only when the chunk explains why the target condition is risky, harmful, damaging, unstable,
-   unreliable, safety-relevant, timing-critical, or must be avoided, without describing a concrete
-   control, mitigation, response, or operating rule.
+2. cause
+   Use when the chunk explicitly or implicitly indicates the target failure mode or failure cause.
+   This includes text that describes a mechanism, condition, dependency, constraint, trigger,
+   abnormal state, or technical factor that can cause, expose, aggravate, or explain the target
+   condition, without describing a concrete control, mitigation, response, or operating rule.
 
 3. specification
    Use when the chunk states nominal required behavior, parameters, timing, thresholds, priorities,
@@ -46,11 +53,11 @@ Choose exactly one evidence_label per selected chunk:
    Do not use specification for responses to abnormal conditions; use control instead.
 
 Label precedence:
-control first, then reason, then specification.
+control first, then cause, then specification.
 If a chunk contains both rationale and a concrete mitigation/response, choose control.
 
 Label precedence:
-control first, then reason, then specification.
+control first, then cause, then specification.
 
 support_capability:
 - strong: direct explicit support for the target condition or a clear equivalent.

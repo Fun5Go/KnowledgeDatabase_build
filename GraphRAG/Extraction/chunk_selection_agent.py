@@ -31,7 +31,7 @@ USE_PLACEHOLDER_LLM = os.getenv("GRAPHRAG_EXTRACTION_USE_PLACEHOLDER", "0").lowe
     "true",
     "yes",
 }
-ALLOWED_EVIDENCE_LABELS = {"control", "reason", "specification"}
+ALLOWED_EVIDENCE_LABELS = {"control", "cause", "specification"}
 ALLOWED_SUPPORT_CAPABILITIES = {"weak", "moderate", "strong"}
 
 
@@ -75,7 +75,7 @@ def build_output_schema() -> dict[str, Any]:
                 "name": "string",
                 "raw_text": "string copied exactly from the selected candidate chunk text",
                 "evidence_span": "exact substring copied from raw_text",
-                "evidence_label": "control | reason | specification",
+                "evidence_label": "control | cause | specification",
                 "support_capability": "weak | moderate | strong",
                 "justification": "short explanation",
             }
@@ -94,7 +94,13 @@ def build_agent_payload(
     """Build the LLM input from the GraphRAG query result."""
 
     analysis_item = analysis_item or {}
-    evidence = query_result.get("evidence", [])
+    evidence = order_evidence_by_connected_groups(
+        query_result.get("evidence", []),
+        query_result.get("connected_evidence_groups", []),
+    )
+    group_id_by_node_id = build_connected_group_id_by_node_id(
+        query_result.get("connected_evidence_groups", [])
+    )
     query_type = normalize_text(analysis_item.get("query_type"))
 
     payload = {
@@ -102,9 +108,18 @@ def build_agent_payload(
         "query_type": query_type,
         "query": build_llm_query_payload(analysis_item),
         "candidate_chunks": [
-            normalize_candidate_chunk(item, index, max_chunk_text_length)
+            normalize_candidate_chunk(
+                item,
+                index,
+                max_chunk_text_length,
+                connected_group_id=group_id_by_node_id.get(normalize_text(item.get("node_id"))),
+            )
             for index, item in enumerate(evidence, start=1)
         ],
+        "connected_chunk_groups": normalize_connected_chunk_groups(
+            query_result.get("connected_evidence_groups", []),
+            evidence,
+        ),
     }
     return enforce_prompt_input_token_limit(payload, max_prompt_input_tokens)
 
@@ -137,14 +152,20 @@ def enforce_prompt_input_token_limit(
     candidate_chunks = list(payload.get("candidate_chunks", []))
     limited_payload = dict(payload)
     limited_payload["candidate_chunks"] = []
+    limited_payload["connected_chunk_groups"] = {}
 
     for chunk in candidate_chunks:
         trial_chunk = dict(chunk)
         trial_payload = dict(limited_payload)
         trial_payload["candidate_chunks"] = limited_payload["candidate_chunks"] + [trial_chunk]
+        trial_payload["connected_chunk_groups"] = filter_connected_chunk_groups(
+            payload.get("connected_chunk_groups", []),
+            trial_payload["candidate_chunks"],
+        )
         trial_tokens = estimate_json_tokens(trial_payload)
         if trial_tokens <= max_prompt_input_tokens:
             limited_payload["candidate_chunks"].append(trial_chunk)
+            limited_payload["connected_chunk_groups"] = trial_payload["connected_chunk_groups"]
             continue
 
         remaining_tokens = max_prompt_input_tokens - estimate_json_tokens(limited_payload)
@@ -153,8 +174,13 @@ def enforce_prompt_input_token_limit(
 
         trial_chunk["text"] = trim_text_by_tokens(trial_chunk.get("text", ""), remaining_tokens)
         trial_payload["candidate_chunks"] = limited_payload["candidate_chunks"] + [trial_chunk]
+        trial_payload["connected_chunk_groups"] = filter_connected_chunk_groups(
+            payload.get("connected_chunk_groups", []),
+            trial_payload["candidate_chunks"],
+        )
         if estimate_json_tokens(trial_payload) <= max_prompt_input_tokens:
             limited_payload["candidate_chunks"].append(trial_chunk)
+            limited_payload["connected_chunk_groups"] = trial_payload["connected_chunk_groups"]
         break
 
     limited_payload["prompt_input_token_threshold"] = max_prompt_input_tokens
@@ -162,20 +188,210 @@ def enforce_prompt_input_token_limit(
     return limited_payload
 
 
+def order_evidence_by_connected_groups(
+    evidence: Any,
+    connected_groups: Any,
+) -> list[dict[str, Any]]:
+    """Place retrieved chunks from the same graph component next to each other."""
+
+    if not isinstance(evidence, list):
+        return []
+
+    evidence_items = [item for item in evidence if isinstance(item, dict)]
+    evidence_by_id = {
+        normalize_text(item.get("node_id")): item
+        for item in evidence_items
+        if normalize_text(item.get("node_id"))
+    }
+    if not isinstance(connected_groups, list) or not evidence_by_id:
+        return evidence_items
+
+    ordered: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for group in connected_groups:
+        if not isinstance(group, dict):
+            continue
+        group_ids = [
+            normalize_text(node_id)
+            for node_id in group.get("node_ids", [])
+            if normalize_text(node_id) in evidence_by_id
+        ]
+        group_ids.sort(
+            key=lambda node_id: normalize_int(evidence_by_id[node_id].get("retrieval_rank")) or 0
+        )
+        for node_id in group_ids:
+            if node_id in seen_ids:
+                continue
+            ordered.append(evidence_by_id[node_id])
+            seen_ids.add(node_id)
+
+    for item in evidence_items:
+        node_id = normalize_text(item.get("node_id"))
+        if node_id and node_id in seen_ids:
+            continue
+        ordered.append(item)
+    return ordered
+
+
+def build_connected_group_id_by_node_id(connected_groups: Any) -> dict[str, int]:
+    """Map only RELATED/IMPLEMENT graph-grouped chunks to their prompt group id."""
+
+    if not isinstance(connected_groups, list):
+        return {}
+
+    group_id_by_node_id: dict[str, int] = {}
+    for group in connected_groups:
+        if not isinstance(group, dict) or not group.get("has_relationships"):
+            continue
+        relationships = [
+            relationship
+            for relationship in group.get("relationships", [])
+            if isinstance(relationship, dict)
+            and normalize_text(relationship.get("relationship")) in {"RELATED", "IMPLEMENT"}
+        ]
+        if not relationships:
+            continue
+
+        group_id = normalize_int(group.get("group_id"))
+        if group_id is None:
+            continue
+        for node_id in group.get("node_ids", []):
+            node_id = normalize_text(node_id)
+            if node_id:
+                group_id_by_node_id[node_id] = group_id
+    return group_id_by_node_id
+
+
+def normalize_connected_chunk_groups(
+    connected_groups: Any,
+    evidence: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Build compact graph context for the LLM without duplicating chunk text."""
+
+    if not isinstance(connected_groups, list):
+        return {}
+
+    chunk_by_node_id = {
+        normalize_text(item.get("node_id")): {
+            "rank": normalize_int(item.get("retrieval_rank")) or index,
+            "name": normalize_text(item.get("name")),
+        }
+        for index, item in enumerate(evidence, start=1)
+        if normalize_text(item.get("node_id"))
+    }
+    groups: dict[str, dict[str, Any]] = {}
+    for group in connected_groups:
+        if not isinstance(group, dict) or not group.get("has_relationships"):
+            continue
+
+        node_ids = [
+            normalize_text(node_id)
+            for node_id in group.get("node_ids", [])
+            if normalize_text(node_id) in chunk_by_node_id
+        ]
+        if len(node_ids) < 2:
+            continue
+
+        chunks = [chunk_by_node_id[node_id] for node_id in node_ids]
+        relationships = []
+        for relationship in group.get("relationships", []):
+            if not isinstance(relationship, dict):
+                continue
+            source_id = normalize_text(relationship.get("source_id"))
+            target_id = normalize_text(relationship.get("target_id"))
+            if source_id not in chunk_by_node_id or target_id not in chunk_by_node_id:
+                continue
+            relationships.append(
+                {
+                    "source_rank": chunk_by_node_id[source_id]["rank"],
+                    "source_name": chunk_by_node_id[source_id]["name"],
+                    "relationship": normalize_text(relationship.get("relationship")),
+                    "target_rank": chunk_by_node_id[target_id]["rank"],
+                    "target_name": chunk_by_node_id[target_id]["name"],
+                }
+            )
+
+        if relationships:
+            group_id = normalize_int(group.get("group_id")) or len(groups) + 1
+            groups[str(group_id)] = {
+                "chunks": chunks,
+                "relationships": relationships,
+            }
+
+    return groups
+
+
+def filter_connected_chunk_groups(
+    connected_groups: Any,
+    candidate_chunks: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(connected_groups, dict):
+        return {}
+
+    available_ranks = {
+        normalize_int(chunk.get("retrieval rank"))
+        for chunk in candidate_chunks
+        if normalize_int(chunk.get("retrieval rank")) is not None
+    }
+    filtered_groups: dict[str, dict[str, Any]] = {}
+    for group_id, group in connected_groups.items():
+        if not isinstance(group, dict):
+            continue
+        chunks = [
+            chunk
+            for chunk in group.get("chunks", [])
+            if isinstance(chunk, dict) and normalize_int(chunk.get("rank")) in available_ranks
+        ]
+        relationships = [
+            relationship
+            for relationship in group.get("relationships", [])
+            if isinstance(relationship, dict)
+            and normalize_int(relationship.get("source_rank")) in available_ranks
+            and normalize_int(relationship.get("target_rank")) in available_ranks
+        ]
+        if len(chunks) >= 2 and relationships:
+            filtered_group = dict(group)
+            filtered_group["chunks"] = chunks
+            filtered_group["relationships"] = relationships
+            filtered_groups[normalize_text(group_id)] = filtered_group
+    return filtered_groups
+
+
 def normalize_candidate_chunk(
     item: dict[str, Any],
     retrieval_rank: int,
     max_text_length: int,
+    connected_group_id: int | None = None,
 ) -> dict[str, Any]:
     """Keep only stable, prompt-friendly candidate fields."""
 
-    return {
-        "retrieval rank": retrieval_rank,
+    chunk = {
+        "retrieval rank": normalize_int(item.get("retrieval_rank")) or retrieval_rank,
         "label": normalize_text(item.get("label")),
-        "name": normalize_text(item.get("name")),
+        "name": build_candidate_name_with_reason(item, max_text_length),
         "section_tag": normalize_text(item.get("section_tag")),
         "text": trim_text(item.get("text"), max_text_length),
     }
+    if connected_group_id is not None:
+        chunk["connected_group_id"] = connected_group_id
+    return chunk
+
+
+def build_candidate_name_with_reason(item: dict[str, Any], max_text_length: int) -> str:
+    name = normalize_text(item.get("name"))
+    rationale_texts = [
+        normalize_text(text)
+        for text in item.get("rationale_texts", [])
+        if normalize_text(text)
+    ]
+    if not rationale_texts:
+        return name
+
+    reason_text = " | ".join(rationale_texts)
+    reason_text = trim_text(reason_text, max(160, max_text_length // 3))
+    if not name:
+        return f"Reason: {reason_text}"
+    return f"{name}\nReason: {reason_text}"
 
 
 @traceable(
@@ -356,6 +572,8 @@ def normalize_evidence_label(value: Any) -> str:
     """Normalize selected-chunk evidence labels."""
 
     evidence_label = normalize_text(value).lower()
+    if evidence_label == "reason":
+        return "cause"
     if evidence_label in ALLOWED_EVIDENCE_LABELS:
         return evidence_label
     return "specification"
@@ -453,7 +671,7 @@ def placeholder_evidence_label(text: Any) -> str:
         "recover",
         "diagnos",
     )
-    reason_terms = (
+    cause_terms = (
         "because",
         "risk",
         "damage",
@@ -464,8 +682,8 @@ def placeholder_evidence_label(text: Any) -> str:
     )
     if any(term in lowered for term in control_terms):
         return "control"
-    if any(term in lowered for term in reason_terms):
-        return "reason"
+    if any(term in lowered for term in cause_terms):
+        return "cause"
     return "specification"
 
 

@@ -77,12 +77,19 @@ structure_input_motorcontrol = {
                     "Too high dT junction as a result of power cycling of component",
                 ],
             },
-            "effects": [
-                "Motor cannot start",
+            "effects": 
+            {
+                "Soft starter": [
+                 "Motor cannot start",
                 "Overcurrent towards motor",
                 "Motor starts without soft start",
+                ],
+                "Electrical failure":[
                 "Short-circuit",
-            ],
+                ],
+
+            },
+
         }
     ],
 }
@@ -139,7 +146,7 @@ def build_function_mode_query_items(structure_input: dict[str, Any]) -> list[dic
 
 
 def build_cause_query_items(structure_input: dict[str, Any]) -> list[dict[str, Any]]:
-    """Build cause text query items with their discipline/category."""
+    """Build cause text query items without discipline filtering."""
 
     items: list[dict[str, Any]] = []
     for node in structure_input.get("nodes", []):
@@ -175,7 +182,7 @@ def build_cause_query_items(structure_input: dict[str, Any]) -> list[dict[str, A
                         "query_cause": cause_text,
                         "cause_discipline": discipline,
                         "query_text": build_cause_query_text(cause_text, discipline),
-                        "disciplines": map_cause_discipline_to_retrieval_labels(discipline),
+                        "disciplines": None,
                     }
                 )
 
@@ -270,14 +277,14 @@ def redact_runtime_trace_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 def run_retrieval_for_analysis_item(
     retriever: Any,
     analysis_item: dict[str, Any],
-    top_k: int = 20,
-    per_label_k: int = 30,
+    top_k: int = 30,
+    per_label_k: int = 60,
     retrieval_mode: str = "hybrid",
     use_cross_encoder_rerank: bool = False,
     cross_encoder_top_n: int = 30,
     use_section_tag_bonus: bool = True,
     section_bonus_mode: str = "hybrid",
-    section_bonus_weight: float = 0.05,
+    section_bonus_weight: float = 0.005,
 ) -> dict[str, Any]:
     """Run the existing main_sentence.py query function for one structure item."""
 

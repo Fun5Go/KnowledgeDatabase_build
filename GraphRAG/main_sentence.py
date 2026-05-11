@@ -126,6 +126,10 @@ def query_doc_chunks_for_sentence(
             bonus_weight=section_bonus_weight,
         )
 
+    evidence = package_top_k_candidates(retriever, ranked[:top_k])
+    evidence_relationships = fetch_retrieved_chunk_relationships(retriever, evidence)
+    evidence = attach_retrieved_rationales_to_evidence(evidence, evidence_relationships)
+
     return {
         "query_spec": query_spec,
         "dense_queries": dense_queries,
@@ -138,7 +142,12 @@ def query_doc_chunks_for_sentence(
             "section_bonus_weight": section_bonus_weight if use_section_tag_bonus else 0.0,
             "QD": is_QD,
         },
-        "evidence": package_top_k_candidates(retriever, ranked[:top_k]),
+        "evidence": evidence,
+        "evidence_relationships": evidence_relationships,
+        "connected_evidence_groups": build_connected_evidence_groups(
+            evidence,
+            evidence_relationships,
+        ),
     }
 
 
@@ -387,11 +396,12 @@ def package_top_k_candidates(
     candidates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     evidence = []
-    for item in candidates:
+    for retrieval_rank, item in enumerate(candidates, start=1):
         label = retriever._resolve_candidate_label(item)
         node_id = item.get("node_id", "")
         evidence.append(
             {
+                "retrieval_rank": retrieval_rank,
                 "node_id": node_id,
                 "label": label,
                 "name": item.get("name", ""),
@@ -408,6 +418,193 @@ def package_top_k_candidates(
             }
         )
     return evidence
+
+
+def fetch_retrieved_chunk_relationships(
+    retriever: FMEASentenceRetrieverV2,
+    evidence: List[Dict[str, Any]],
+) -> List[Dict[str, str]]:
+    node_ids = dedupe_preserve_order(
+        [str(item.get("node_id", "")) for item in evidence if item.get("node_id")]
+    )
+    if len(node_ids) < 2:
+        return []
+
+    cypher = """
+    MATCH (source)-[rel]->(target)
+    WHERE elementId(source) IN $node_ids
+      AND elementId(target) IN $node_ids
+      AND elementId(source) <> elementId(target)
+      AND (
+        (type(rel) = "IMPLEMENT" AND (
+            ((source:TSChunk OR source:ESWTSChunk OR source:HWTSChunk) AND target:FSChunk) OR
+            (source:FSChunk AND (target:TSChunk OR target:ESWTSChunk OR target:HWTSChunk))
+        )) OR
+        (type(rel) = "RELATED" AND source:FSChunk AND target:FSChunk) OR
+        (type(rel) = "RATIONALE_FOR" AND (
+            ((source:RationaleChunk OR source:ESWRationaleChunk OR source:HWRationaleChunk OR source:TSRationaleChunk OR source:FSRationaleChunk)
+                AND (target:TSChunk OR target:ESWTSChunk OR target:HWTSChunk OR target:FSChunk)) OR
+            ((source:TSChunk OR source:ESWTSChunk OR source:HWTSChunk OR source:FSChunk)
+                AND (target:RationaleChunk OR target:ESWRationaleChunk OR target:HWRationaleChunk OR target:TSRationaleChunk OR target:FSRationaleChunk))
+        ))
+      )
+    RETURN DISTINCT
+        elementId(source) AS source_id,
+        elementId(target) AS target_id,
+        type(rel) AS relationship
+    """
+    return retriever.run_query(cypher, node_ids=node_ids)
+
+
+def build_connected_evidence_groups(
+    evidence: List[Dict[str, Any]],
+    relationships: List[Dict[str, str]],
+) -> List[Dict[str, Any]]:
+    evidence_by_id = {
+        str(item.get("node_id", "")): item
+        for item in evidence
+        if item.get("node_id")
+    }
+    if not evidence_by_id:
+        return []
+
+    adjacency = {node_id: set() for node_id in evidence_by_id}
+    relationship_by_pair: Dict[tuple[str, str], List[Dict[str, str]]] = {}
+    for rel in relationships:
+        source_id = str(rel.get("source_id", ""))
+        target_id = str(rel.get("target_id", ""))
+        relationship = str(rel.get("relationship", ""))
+        if relationship == "RATIONALE_FOR":
+            continue
+        if source_id not in evidence_by_id or target_id not in evidence_by_id or not relationship:
+            continue
+
+        adjacency[source_id].add(target_id)
+        adjacency[target_id].add(source_id)
+        pair = tuple(sorted((source_id, target_id)))
+        relationship_by_pair.setdefault(pair, [])
+        edge = {
+            "source_id": source_id,
+            "target_id": target_id,
+            "relationship": relationship,
+        }
+        if edge not in relationship_by_pair[pair]:
+            relationship_by_pair[pair].append(edge)
+
+    visited = set()
+    groups: List[Dict[str, Any]] = []
+    for node_id in evidence_by_id:
+        if node_id in visited:
+            continue
+
+        stack = [node_id]
+        component = []
+        visited.add(node_id)
+        while stack:
+            current = stack.pop()
+            component.append(current)
+            for neighbor in adjacency[current]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    stack.append(neighbor)
+
+        component.sort(
+            key=lambda item_id: int(evidence_by_id[item_id].get("retrieval_rank") or 0)
+        )
+        component_relationships = []
+        for index, source_id in enumerate(component):
+            for target_id in component[index + 1:]:
+                pair = tuple(sorted((source_id, target_id)))
+                component_relationships.extend(relationship_by_pair.get(pair, []))
+
+        groups.append(
+            {
+                "group_id": len(groups) + 1,
+                "node_ids": component,
+                "relationships": component_relationships,
+                "has_relationships": bool(component_relationships),
+                "best_retrieval_rank": min(
+                    int(evidence_by_id[item_id].get("retrieval_rank") or 0)
+                    for item_id in component
+                ),
+            }
+        )
+
+    groups.sort(key=lambda group: int(group.get("best_retrieval_rank") or 0))
+    for index, group in enumerate(groups, start=1):
+        group["group_id"] = index
+    return groups
+
+
+def attach_retrieved_rationales_to_evidence(
+    evidence: List[Dict[str, Any]],
+    relationships: List[Dict[str, str]],
+) -> List[Dict[str, Any]]:
+    evidence_by_id = {
+        str(item.get("node_id", "")): item
+        for item in evidence
+        if item.get("node_id")
+    }
+    if not evidence_by_id:
+        return evidence
+
+    rationale_by_target_id: Dict[str, List[Dict[str, str]]] = {}
+    for rel in relationships:
+        if str(rel.get("relationship", "")) != "RATIONALE_FOR":
+            continue
+
+        source_id = str(rel.get("source_id", ""))
+        target_id = str(rel.get("target_id", ""))
+        if source_id not in evidence_by_id or target_id not in evidence_by_id:
+            continue
+
+        source = evidence_by_id[source_id]
+        target = evidence_by_id[target_id]
+        if is_rationale_evidence(source) and not is_rationale_evidence(target):
+            rationale = source
+            rationale_target_id = target_id
+        elif is_rationale_evidence(target) and not is_rationale_evidence(source):
+            rationale = target
+            rationale_target_id = source_id
+        else:
+            continue
+
+        rationale_text = str(rationale.get("text", "")).strip()
+        if not rationale_text:
+            continue
+
+        rationale_by_target_id.setdefault(rationale_target_id, [])
+        rationale_item = {
+            "name": str(rationale.get("name", "")).strip(),
+            "label": str(rationale.get("label", "")).strip(),
+            "text": rationale_text,
+        }
+        if rationale_item not in rationale_by_target_id[rationale_target_id]:
+            rationale_by_target_id[rationale_target_id].append(rationale_item)
+
+    if not rationale_by_target_id:
+        return evidence
+
+    enriched = []
+    for item in evidence:
+        node_id = str(item.get("node_id", ""))
+        rationales = rationale_by_target_id.get(node_id, [])
+        if not rationales:
+            enriched.append(item)
+            continue
+
+        enriched_item = dict(item)
+        enriched_item["rationale_chunks"] = rationales
+        enriched_item["rationale_texts"] = [rationale["text"] for rationale in rationales]
+        enriched.append(enriched_item)
+
+    return enriched
+
+
+def is_rationale_evidence(item: Dict[str, Any]) -> bool:
+    label = str(item.get("label", ""))
+    labels = [str(value) for value in item.get("labels", [])]
+    return "RationaleChunk" in label or any("RationaleChunk" in value for value in labels)
 
 
 def normalize_discipline_labels(disciplines: Any) -> List[str]:
@@ -500,7 +697,7 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-     The ESP32-S3 has two cores with 32 interrupt each. Each interrupt has a  xed priority. In\ncase an interrupt is required for a peripheral any of these interrupts can be used, i.e. in\nrelation to a ARM Cortex the ESP32 has no dedicated interrupts assigned for each peripheral\nwith a con gurable priority.\nAn interrupt enabled by code running a speci c core shall be associated with this core and\nrun the interrupt on that core.\nSee [7] for more details.
+    Overvoltage due to motor disconnect
     """
 
     retriever = FMEASentenceRetrieverV2()
@@ -510,16 +707,16 @@ def main():
         result = query_doc_chunks_for_sentence(
             retriever=retriever,
             query_spec=query_spec,
-            top_k=15,
-            per_label_k=30,
-            retrieval_mode="hybrid",
+            top_k=20,
+            per_label_k=40,
+            retrieval_mode="dense",
             disciplines=None,
             use_cross_encoder_rerank=False,
             cross_encoder_top_n=50,
             use_section_tag_bonus=True,
             section_bonus_mode="hybrid",
-            section_bonus_weight=0.05,
-            is_QD=False,
+            section_bonus_weight=0.00,
+            is_QD=True,
         )
         print_doc_chunk_results(result)
     finally:

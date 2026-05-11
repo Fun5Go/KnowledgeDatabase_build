@@ -313,7 +313,7 @@ def run_retrieval_for_analysis_item(
         top_k=top_k,
         per_label_k=per_label_k,
         retrieval_mode=retrieval_mode,
-        disciplines=analysis_item.get("disciplines"),
+        disciplines=None,
         use_cross_encoder_rerank=use_cross_encoder_rerank,
         cross_encoder_top_n=cross_encoder_top_n,
         use_section_tag_bonus=use_section_tag_bonus,
@@ -816,7 +816,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--top-k",
-        default="15",
+        default="20",
         help="Comma-separated top_k values, e.g. 5,10,15.",
     )
     parser.add_argument(
@@ -826,7 +826,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cross-encoder",
-        default="false",
+        default="true",
         help="Comma-separated booleans for cross encoder reranking.",
     )
     parser.add_argument(
@@ -847,7 +847,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--section-bonus-weight",
-        default="0.05",
+        default="0.01",
         help="Comma-separated section bonus weights.",
     )
     parser.add_argument(
