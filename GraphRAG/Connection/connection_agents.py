@@ -10,11 +10,11 @@ from DocLLM.LLMs.llm_init import get_llm_backend
 try:
     from .prompts import CONNECTION_RERANK_PROMPT, EVIDENCE_RELATION_EXTRACTION_PROMPT
     from .schemas import build_evidence_output_schema, build_rerank_output_schema
-    from .validators import build_chunk_aggregates, normalize_int, normalize_text
+    from .validators import normalize_int, normalize_text
 except ImportError:  # pragma: no cover - supports direct script execution
     from prompts import CONNECTION_RERANK_PROMPT, EVIDENCE_RELATION_EXTRACTION_PROMPT
     from schemas import build_evidence_output_schema, build_rerank_output_schema
-    from validators import build_chunk_aggregates, normalize_int, normalize_text
+    from validators import normalize_int, normalize_text
 
 try:
     from langsmith import traceable
@@ -60,9 +60,10 @@ def extract_json(text: str) -> dict[str, Any]:
     project_name=LANGSMITH_PROJECT_NAME,
 )
 def build_rerank_prompt(payload: dict[str, Any], template_text: str = CONNECTION_RERANK_PROMPT) -> str:
+    prompt_payload = build_rerank_prompt_payload(payload)
     return template_text.format(
         output_schema_json=json.dumps(build_rerank_output_schema(), indent=2, ensure_ascii=False),
-        payload_json=json.dumps(json_safe(payload), indent=2, ensure_ascii=False),
+        payload_json=json.dumps(json_safe(prompt_payload), indent=2, ensure_ascii=False),
     )
 
 
@@ -73,9 +74,10 @@ def build_rerank_prompt(payload: dict[str, Any], template_text: str = CONNECTION
     project_name=LANGSMITH_PROJECT_NAME,
 )
 def build_evidence_prompt(payload: dict[str, Any], template_text: str = EVIDENCE_RELATION_EXTRACTION_PROMPT) -> str:
+    prompt_payload = build_evidence_prompt_payload(payload)
     return template_text.format(
         output_schema_json=json.dumps(build_evidence_output_schema(), indent=2, ensure_ascii=False),
-        payload_json=json.dumps(json_safe(payload), indent=2, ensure_ascii=False),
+        payload_json=json.dumps(json_safe(prompt_payload), indent=2, ensure_ascii=False),
     )
 
 
@@ -131,23 +133,21 @@ class ConnectionRerankAgent:
             chunks.append(
                 {
                     "rank": rank,
-                    "label": candidate.get("label", ""),
-                    "name": candidate.get("name", ""),
-                    "raw_text": text,
                     "rerank_tag": tag,
                     "reason": f"Placeholder assigned {tag} using the candidate text and retrieval rank.",
                 }
             )
-        return {
+        lightweight = {
             "analysis_id": normalize_text(payload.get("analysis_id")),
             "query_type": normalize_text(payload.get("query_type")),
             "stage": "rerank",
             "reranked_chunks": sort_by_rank(chunks),
         }
+        return normalize_rerank_response(lightweight, payload)
 
 
 class EvidenceRelationExtractionAgent:
-    """LLM agent that extracts exact evidence spans and relation labels."""
+    """LLM agent that extracts exact evidence spans and relation classifications."""
 
     def __init__(
         self,
@@ -197,14 +197,14 @@ class EvidenceRelationExtractionAgent:
             spans = placeholder_evidence_units(source, text)
             evidence_units.extend(spans)
 
-        aggregates = build_chunk_aggregates(source_chunks, evidence_units)
-        return {
+        lightweight = {
             "analysis_id": normalize_text(payload.get("analysis_id")),
             "query_type": normalize_text(payload.get("query_type")),
             "stage": "extract",
             "evidence_units": sort_by_rank(evidence_units),
-            "chunk_aggregates": aggregates,
+            "chunk_aggregates": placeholder_chunk_aggregates(source_chunks, evidence_units),
         }
+        return normalize_evidence_response(lightweight, payload)
 
 
 def normalize_rerank_response(response: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -229,8 +229,8 @@ def normalize_rerank_response(response: dict[str, Any], payload: dict[str, Any])
         normalized.append(
             {
                 "rank": rank,
-                "label": candidate.get("label", ""),
                 "name": candidate.get("name", ""),
+                "section_tag": candidate.get("section_tag", ""),
                 "raw_text": candidate.get("text", ""),
                 "rerank_tag": tag,
                 "reason": normalize_text(chunk.get("reason")) or "No grounded reason provided.",
@@ -243,8 +243,8 @@ def normalize_rerank_response(response: dict[str, Any], payload: dict[str, Any])
         normalized.append(
             {
                 "rank": rank,
-                "label": candidate.get("label", ""),
                 "name": candidate.get("name", ""),
+                "section_tag": candidate.get("section_tag", ""),
                 "raw_text": candidate.get("text", ""),
                 "rerank_tag": "suspect",
                 "reason": "Missing from model output; retained as suspect for high recall.",
@@ -257,6 +257,54 @@ def normalize_rerank_response(response: dict[str, Any], payload: dict[str, Any])
         "stage": "rerank",
         "reranked_chunks": sort_by_rank(normalized),
     }
+
+
+def build_rerank_prompt_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build the Stage 1 LLM input without graph-level connected context."""
+
+    prompt_payload = {
+        "analysis_id": normalize_text(payload.get("analysis_id")),
+        "query_type": normalize_text(payload.get("query_type")),
+        "query": payload.get("query") if isinstance(payload.get("query"), dict) else {},
+        "candidate_chunks": [],
+    }
+    for candidate in payload.get("candidate_chunks", []):
+        if not isinstance(candidate, dict):
+            continue
+        prompt_candidate = {
+            "retrieval rank": candidate.get("retrieval rank"),
+            "name": candidate.get("name", ""),
+            "section_tag": candidate.get("section_tag", ""),
+            "text": candidate.get("text", ""),
+        }
+        if "connected_group_id" in candidate:
+            prompt_candidate["connected_group_id"] = candidate.get("connected_group_id")
+        prompt_payload["candidate_chunks"].append(prompt_candidate)
+    return prompt_payload
+
+
+def build_evidence_prompt_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Build Stage 2 LLM input without graph context or Stage 1 reasons."""
+
+    prompt_payload = {
+        "analysis_id": normalize_text(payload.get("analysis_id")),
+        "query_type": normalize_text(payload.get("query_type")),
+        "query": payload.get("query") if isinstance(payload.get("query"), dict) else {},
+        "chunks": [],
+    }
+    for chunk in payload.get("chunks", []):
+        if not isinstance(chunk, dict):
+            continue
+        prompt_payload["chunks"].append(
+            {
+                "rank": chunk.get("rank"),
+                "name": chunk.get("name", ""),
+                "section_tag": chunk.get("section_tag", ""),
+                "raw_text": chunk.get("raw_text", ""),
+                "rerank_tag": chunk.get("rerank_tag", "unknown"),
+            }
+        )
+    return prompt_payload
 
 
 def normalize_evidence_response(response: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
@@ -278,14 +326,17 @@ def normalize_evidence_response(response: dict[str, Any], payload: dict[str, Any
         source = source_by_rank.get(rank)
         if source is None:
             continue
+        relation_type = normalize_relation_type(unit.get("relation_type"))
+        if relation_type in {"nominal_context_only", "unrelated"}:
+            continue
         normalized_units.append(
             {
                 "rank": rank,
-                "label": source.get("label", ""),
                 "name": source.get("name", ""),
+                "section_tag": source.get("section_tag", ""),
                 "raw_text": source.get("raw_text", ""),
                 "evidence_span": normalize_text(unit.get("evidence_span")),
-                "relation_type": normalize_relation_type(unit.get("relation_type")),
+                "relation_type": relation_type,
                 "support_capability": normalize_support_capability(unit.get("support_capability")),
                 "directionality": normalize_directionality(unit.get("directionality")),
                 "affected_objects": normalize_string_list(unit.get("affected_objects")),
@@ -299,7 +350,104 @@ def normalize_evidence_response(response: dict[str, Any], payload: dict[str, Any
         "query_type": normalize_text(response.get("query_type") or payload.get("query_type")),
         "stage": "extract",
         "evidence_units": sort_by_rank(normalized_units),
-        "chunk_aggregates": build_chunk_aggregates(source_chunks, normalized_units),
+        "chunk_aggregates": normalize_chunk_aggregates_response(
+            response.get("chunk_aggregates"),
+            source_chunks,
+            normalized_units,
+        ),
+    }
+
+
+def normalize_chunk_aggregates_response(
+    value: Any,
+    source_chunks: list[dict[str, Any]],
+    evidence_units: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    source_by_rank = {
+        normalize_int(chunk.get("rank")): chunk
+        for chunk in source_chunks
+        if isinstance(chunk, dict) and normalize_int(chunk.get("rank")) is not None
+    }
+    units_by_rank: dict[int, list[dict[str, Any]]] = {}
+    for unit in evidence_units:
+        rank = normalize_int(unit.get("rank"))
+        if rank is not None:
+            units_by_rank.setdefault(rank, []).append(unit)
+
+    aggregate_by_rank: dict[int, dict[str, Any]] = {}
+    if isinstance(value, list):
+        for aggregate in value:
+            if not isinstance(aggregate, dict):
+                continue
+            rank = normalize_int(aggregate.get("rank"))
+            source = source_by_rank.get(rank)
+            if rank is None or source is None:
+                continue
+            units = units_by_rank.get(rank, [])
+            aggregate_by_rank[rank] = enrich_chunk_aggregate(aggregate, source, units)
+
+    for rank, source in source_by_rank.items():
+        if rank is None or rank in aggregate_by_rank:
+            continue
+        units = units_by_rank.get(rank, [])
+        aggregate_by_rank[rank] = enrich_chunk_aggregate({}, source, units)
+
+    return [aggregate_by_rank[rank] for rank in sorted(aggregate_by_rank)]
+
+
+def enrich_chunk_aggregate(
+    aggregate: dict[str, Any],
+    source: dict[str, Any],
+    units: list[dict[str, Any]],
+) -> dict[str, Any]:
+    relations_from_units = unique_preserve_order(
+        [normalize_text(unit.get("relation_type")) for unit in units if normalize_text(unit.get("relation_type"))]
+    )
+    spans_from_units = unique_preserve_order(
+        [normalize_text(unit.get("evidence_span")) for unit in units if normalize_text(unit.get("evidence_span"))]
+    )
+    selected = bool(units)
+    if selected:
+        primary_relation = aggregate_primary_relation_local(relations_from_units)
+        relations = relations_from_units
+        evidence_spans = spans_from_units
+        support_capability = strongest_support_capability_local(
+            [normalize_text(unit.get("support_capability")) for unit in units]
+        )
+        selection_reason = normalize_text(aggregate.get("selection_reason")) or (
+            "Selected from exact evidence span(s): " + " | ".join(evidence_spans[:3])
+        )
+    else:
+        primary_relation = normalize_relation_type(aggregate.get("primary_relation"))
+        if primary_relation not in {"nominal_context_only", "unrelated"}:
+            primary_relation = "unrelated"
+        aggregate_relations = [
+            normalize_relation_type(relation)
+            for relation in aggregate.get("relations", [])
+        ] if isinstance(aggregate.get("relations"), list) else []
+        relations = [
+            relation
+            for relation in unique_preserve_order(aggregate_relations)
+            if relation in {"nominal_context_only", "unrelated"}
+        ]
+        evidence_spans = []
+        support_capability = "weak"
+        selection_reason = normalize_text(aggregate.get("selection_reason")) or (
+            "No valid failure-relevant evidence was extracted from this chunk."
+        )
+
+    return {
+        "rank": normalize_int(source.get("rank")),
+        "name": source.get("name", ""),
+        "section_tag": source.get("section_tag", ""),
+        "raw_text": source.get("raw_text", ""),
+        "rerank_tag": source.get("rerank_tag", "unknown"),
+        "selected": selected,
+        "primary_relation": primary_relation,
+        "relations": relations,
+        "evidence_spans": evidence_spans,
+        "support_capability": support_capability,
+        "selection_reason": selection_reason,
     }
 
 
@@ -365,6 +513,45 @@ def normalize_string_list(value: Any) -> list[str]:
     return items
 
 
+def aggregate_primary_relation_local(relations: list[str]) -> str:
+    priority = [
+        "control_or_mitigation",
+        "detection_or_reporting",
+        "causal_mechanism",
+        "condition_match",
+        "consequence_or_effect",
+        "design_specification",
+        "trigger_or_context",
+        "nominal_context_only",
+        "unrelated",
+    ]
+    relation_set = set(relations)
+    for relation in priority:
+        if relation in relation_set:
+            return relation
+    return "unrelated"
+
+
+def strongest_support_capability_local(values: Sequence[str]) -> str:
+    priority = ["weak", "moderate", "strong"]
+    best = "weak"
+    for value in values:
+        if value in priority and priority.index(value) > priority.index(best):
+            best = value
+    return best
+
+
+def unique_preserve_order(items: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered
+
+
 def placeholder_rerank_tag(text: str, rank: int) -> str:
     lowered = text.lower()
     support_terms = ("detect", "prevent", "limit", "reset", "causes", "results in", "shall")
@@ -391,14 +578,11 @@ def placeholder_evidence_units(source: dict[str, Any], text: str) -> list[dict[s
     units: list[dict[str, Any]] = []
     for sentence in sentences:
         relation = placeholder_relation(sentence)
-        if relation == "unrelated":
+        if relation in {"nominal_context_only", "unrelated"}:
             continue
         units.append(
             {
                 "rank": normalize_int(source.get("rank")),
-                "label": source.get("label", ""),
-                "name": source.get("name", ""),
-                "raw_text": text,
                 "evidence_span": sentence,
                 "relation_type": relation,
                 "support_capability": "moderate" if relation != "nominal_context_only" else "weak",
@@ -409,6 +593,47 @@ def placeholder_evidence_units(source: dict[str, Any], text: str) -> list[dict[s
             }
         )
     return units
+
+
+def placeholder_chunk_aggregates(
+    source_chunks: Sequence[dict[str, Any]],
+    evidence_units: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    units_by_rank: dict[int, list[dict[str, Any]]] = {}
+    for unit in evidence_units:
+        rank = normalize_int(unit.get("rank"))
+        if rank is not None:
+            units_by_rank.setdefault(rank, []).append(unit)
+
+    aggregates: list[dict[str, Any]] = []
+    for source in source_chunks:
+        rank = normalize_int(source.get("rank"))
+        units = units_by_rank.get(rank or -1, [])
+        relations = unique_preserve_order(
+            [normalize_text(unit.get("relation_type")) for unit in units if normalize_text(unit.get("relation_type"))]
+        )
+        spans = unique_preserve_order(
+            [normalize_text(unit.get("evidence_span")) for unit in units if normalize_text(unit.get("evidence_span"))]
+        )
+        aggregates.append(
+            {
+                "rank": rank,
+                "rerank_tag": source.get("rerank_tag", "unknown"),
+                "selected": bool(units),
+                "primary_relation": aggregate_primary_relation_local(relations),
+                "relations": relations,
+                "evidence_spans": spans,
+                "support_capability": strongest_support_capability_local(
+                    [normalize_text(unit.get("support_capability")) for unit in units]
+                ),
+                "selection_reason": (
+                    "Selected from exact evidence span(s): " + " | ".join(spans[:3])
+                    if units
+                    else "No valid failure-relevant evidence was extracted from this chunk."
+                ),
+            }
+        )
+    return aggregates
 
 
 def placeholder_relation(sentence: str) -> str:

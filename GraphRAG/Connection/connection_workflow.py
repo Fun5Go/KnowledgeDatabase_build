@@ -82,10 +82,7 @@ class ConnectionWorkflow:
         for batch in batched(payload.get("candidate_chunks", []), size):
             batch_payload = dict(payload)
             batch_payload["candidate_chunks"] = batch
-            batch_payload["connected_chunk_groups"] = filter_connected_chunk_groups(
-                payload.get("connected_chunk_groups", {}),
-                batch,
-            )
+            batch_payload.pop("connected_chunk_groups", None)
             result = self.rerank_agent.rerank(batch_payload)
             validation_errors.extend(validate_rerank_output(result, batch_payload))
             results.extend(result.get("reranked_chunks", []))
@@ -94,7 +91,7 @@ class ConnectionWorkflow:
             "analysis_id": payload.get("analysis_id", ""),
             "query_type": payload.get("query_type", ""),
             "stage": "rerank",
-            "reranked_chunks": sort_unique_by_rank(results),
+            "reranked_chunks": sort_reranked_chunks(results),
         }
         return self._with_validation(final, validation_errors)
 
@@ -185,7 +182,6 @@ def normalize_candidate_chunk(chunk: dict[str, Any], fallback_rank: int) -> dict
     rank = normalize_int(chunk.get("retrieval rank")) or normalize_int(chunk.get("rank")) or fallback_rank
     normalized = {
         "retrieval rank": rank,
-        "label": normalize_text(chunk.get("label")),
         "name": normalize_text(chunk.get("name")),
         "section_tag": normalize_text(chunk.get("section_tag")),
         "text": normalize_text(chunk.get("text") or chunk.get("raw_text")),
@@ -198,8 +194,8 @@ def normalize_candidate_chunk(chunk: dict[str, Any], fallback_rank: int) -> dict
 def normalize_reranked_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
     return {
         "rank": normalize_int(chunk.get("rank")),
-        "label": normalize_text(chunk.get("label")),
         "name": normalize_text(chunk.get("name")),
+        "section_tag": normalize_text(chunk.get("section_tag")),
         "raw_text": normalize_text(chunk.get("raw_text") or chunk.get("text")),
         "rerank_tag": normalize_text(chunk.get("rerank_tag") or "unknown"),
         "reason": normalize_text(chunk.get("reason")),
@@ -222,8 +218,8 @@ def build_source_chunks_for_extraction(payload: dict[str, Any]) -> list[dict[str
         chunks.append(
             {
                 "rank": normalize_int(candidate.get("retrieval rank")),
-                "label": candidate.get("label", ""),
                 "name": candidate.get("name", ""),
+                "section_tag": candidate.get("section_tag", ""),
                 "raw_text": candidate.get("text", ""),
                 "rerank_tag": "unknown",
                 "reason": "",
@@ -237,11 +233,17 @@ def build_extraction_payload(payload: dict[str, Any], chunks: list[dict[str, Any
         "analysis_id": payload.get("analysis_id", ""),
         "query_type": payload.get("query_type", ""),
         "query": payload.get("query", {}),
-        "chunks": chunks,
-        "connected_chunk_groups": filter_connected_chunk_groups_by_source(
-            payload.get("connected_chunk_groups", {}),
-            chunks,
-        ),
+        "chunks": [build_stage2_input_chunk(chunk) for chunk in chunks],
+    }
+
+
+def build_stage2_input_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "rank": normalize_int(chunk.get("rank")),
+        "name": normalize_text(chunk.get("name")),
+        "section_tag": normalize_text(chunk.get("section_tag")),
+        "raw_text": normalize_text(chunk.get("raw_text")),
+        "rerank_tag": normalize_text(chunk.get("rerank_tag") or "unknown"),
     }
 
 
@@ -307,6 +309,18 @@ def sort_unique_by_rank(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         by_rank[rank] = item
     return [by_rank[rank] for rank in sorted(by_rank)]
+
+
+def sort_reranked_chunks(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    tag_order = {"support": 0, "suspect": 1, "irrelevant": 2}
+    unique_items = sort_unique_by_rank(items)
+    return sorted(
+        unique_items,
+        key=lambda item: (
+            tag_order.get(normalize_text(item.get("rerank_tag")).lower(), 3),
+            normalize_int(item.get("rank")) or 0,
+        ),
+    )
 
 
 def sort_unique_evidence_units(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -48,10 +48,12 @@ def validate_rerank_output(result: dict, payload: dict) -> list[str]:
             continue
         if chunk.get("rerank_tag") not in ALLOWED_RERANK_TAGS:
             errors.append(f"{prefix}.rerank_tag is invalid: {chunk.get('rerank_tag')!r}.")
-        if chunk.get("label") != candidate.get("label"):
-            errors.append(f"{prefix}.label must copy candidate label exactly.")
+        # Stage 1 model output is lightweight, but normalized workflow output is
+        # enriched deterministically for backward compatibility.
         if chunk.get("name") != candidate.get("name"):
             errors.append(f"{prefix}.name must copy candidate name exactly.")
+        if chunk.get("section_tag", "") != candidate.get("section_tag", ""):
+            errors.append(f"{prefix}.section_tag must copy candidate section_tag exactly.")
         if chunk.get("raw_text") != candidate.get("text"):
             errors.append(f"{prefix}.raw_text must copy candidate text exactly.")
         if not normalize_text(chunk.get("reason")):
@@ -85,16 +87,21 @@ def validate_evidence_output(result: dict, source_chunks: list[dict]) -> list[st
             continue
         if unit.get("relation_type") not in ALLOWED_RELATION_TYPES:
             errors.append(f"{prefix}.relation_type is invalid: {unit.get('relation_type')!r}.")
+        if unit.get("relation_type") in {"nominal_context_only", "unrelated"}:
+            errors.append(
+                f"{prefix}.relation_type must not be used in evidence_units: "
+                f"{unit.get('relation_type')!r}."
+            )
         if unit.get("support_capability") not in ALLOWED_SUPPORT_CAPABILITIES:
             errors.append(
                 f"{prefix}.support_capability is invalid: {unit.get('support_capability')!r}."
             )
         if unit.get("directionality") not in ALLOWED_DIRECTIONALITIES:
             errors.append(f"{prefix}.directionality is invalid: {unit.get('directionality')!r}.")
-        if unit.get("label") != source.get("label"):
-            errors.append(f"{prefix}.label must copy source label exactly.")
         if unit.get("name") != source.get("name"):
             errors.append(f"{prefix}.name must copy source name exactly.")
+        if unit.get("section_tag", "") != source.get("section_tag", ""):
+            errors.append(f"{prefix}.section_tag must copy source section_tag exactly.")
         if unit.get("raw_text") != source.get("raw_text"):
             errors.append(f"{prefix}.raw_text must copy source raw_text exactly.")
         if not validate_evidence_span(source.get("raw_text", ""), unit.get("evidence_span", "")):
@@ -173,8 +180,8 @@ def build_chunk_aggregates(source_chunks: Sequence[dict[str, Any]], evidence_uni
         aggregates.append(
             {
                 "rank": rank,
-                "label": source.get("label", ""),
                 "name": source.get("name", ""),
+                "section_tag": source.get("section_tag", ""),
                 "raw_text": source.get("raw_text", ""),
                 "rerank_tag": source.get("rerank_tag", "unknown"),
                 "selected": selected,

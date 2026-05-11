@@ -44,14 +44,11 @@ SUPPORT_CAPABILITY_PRIORITY = ["weak", "moderate", "strong"]
 def build_rerank_output_schema() -> dict[str, Any]:
     return {
         "analysis_id": "string",
-        "query_type": "function_mode | cause",
+        "query_type": "function_mode | cause | effect",
         "stage": "rerank",
         "reranked_chunks": [
             {
                 "rank": "integer retrieval rank copied from candidate_chunks[].retrieval rank",
-                "label": "string copied exactly from candidate_chunks[].label",
-                "name": "string copied exactly from candidate_chunks[].name",
-                "raw_text": "string copied exactly from candidate_chunks[].text",
                 "rerank_tag": "support | suspect | irrelevant",
                 "reason": "concise grounded reason",
             }
@@ -62,16 +59,13 @@ def build_rerank_output_schema() -> dict[str, Any]:
 def build_evidence_output_schema() -> dict[str, Any]:
     return {
         "analysis_id": "string",
-        "query_type": "function_mode | cause",
+        "query_type": "function_mode | cause | effect",
         "stage": "extract",
         "evidence_units": [
             {
                 "rank": "integer retrieval rank copied from the source chunk",
-                "label": "string copied exactly from the source chunk",
-                "name": "string copied exactly from the source chunk",
-                "raw_text": "string copied exactly from the source chunk",
                 "evidence_span": "exact substring from raw_text",
-                "relation_type": "condition_match | causal_mechanism | trigger_or_context | control_or_mitigation | detection_or_reporting | design_specification | consequence_or_effect | nominal_context_only | unrelated",
+                "relation_type": "condition_match | causal_mechanism | trigger_or_context | control_or_mitigation | detection_or_reporting | design_specification | consequence_or_effect",
                 "support_capability": "weak | moderate | strong",
                 "directionality": "evidence_to_target | target_to_evidence | bidirectional | contextual | not_applicable",
                 "affected_objects": ["string"],
@@ -82,9 +76,6 @@ def build_evidence_output_schema() -> dict[str, Any]:
         "chunk_aggregates": [
             {
                 "rank": "integer retrieval rank copied from the source chunk",
-                "label": "string copied exactly from the source chunk",
-                "name": "string copied exactly from the source chunk",
-                "raw_text": "string copied exactly from the source chunk",
                 "rerank_tag": "support | suspect | irrelevant | unknown",
                 "selected": "boolean",
                 "primary_relation": "one allowed relation_type",
