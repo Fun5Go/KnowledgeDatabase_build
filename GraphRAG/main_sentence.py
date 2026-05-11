@@ -60,14 +60,20 @@ def query_doc_chunks_for_sentence(
         vector_index_name = spec["vector_index_name"]
         fulltext_index_name = spec["fulltext_index_name"]
         text_property = spec["text_property"]
+        title_property = spec.get("title_property", "")
+        id_property = spec.get("id_property", "")
 
         if retrieval_mode in {"dense", "hybrid"}:
             for query_text in dense_queries:
-                if label == "QDChunk":
-                    rows = dense_search_qd_chunks(
+                if label in {"QDChunk", "FATChunk"}:
+                    rows = dense_search_qualification_chunks(
                         retriever=retriever,
                         query_text=query_text,
+                        label=label,
                         vector_index_name=vector_index_name,
+                        title_property=title_property,
+                        text_property=text_property,
+                        id_property=id_property,
                         top_k=per_label_k,
                     )
                 else:
@@ -85,11 +91,15 @@ def query_doc_chunks_for_sentence(
 
         if retrieval_mode in {"sparse", "hybrid"}:
             for lucene_query in sparse_queries:
-                if label == "QDChunk":
-                    rows = sparse_search_qd_chunks(
+                if label in {"QDChunk", "FATChunk"}:
+                    rows = sparse_search_qualification_chunks(
                         retriever=retriever,
                         lucene_query=lucene_query,
+                        label=label,
                         fulltext_index_name=fulltext_index_name,
+                        title_property=title_property,
+                        text_property=text_property,
+                        id_property=id_property,
                         top_k=per_label_k,
                     )
                 else:
@@ -162,6 +172,16 @@ def build_search_specs(
                 "vector_index_name": "qd_embedding_idx",
                 "fulltext_index_name": "qd_objectives_idx",
                 "text_property": "objectives",
+                "title_property": "qd_title",
+                "id_property": "qd_id",
+            },
+            {
+                "label": "FATChunk",
+                "vector_index_name": "fat_embedding_idx",
+                "fulltext_index_name": "fat_objectives_idx",
+                "text_property": "objectives",
+                "title_property": "fat_title",
+                "id_property": "fat_id",
             }
         ]
 
@@ -176,27 +196,38 @@ def build_search_specs(
     ]
 
 
-def dense_search_qd_chunks(
+def dense_search_qualification_chunks(
     retriever: FMEASentenceRetrieverV2,
     query_text: str,
+    label: str,
     vector_index_name: str,
+    title_property: str,
+    text_property: str,
+    id_property: str,
     top_k: int = 10,
 ) -> List[Dict[str, Any]]:
     query_embedding = get_query_embedding(query_text)
+    title_property_expr = ChunkRetriever._safe_property_name(title_property)
+    text_property_expr = ChunkRetriever._safe_property_name(text_property)
+    id_property_expr = ChunkRetriever._safe_property_name(id_property)
 
     cypher = f"""
     CALL db.index.vector.queryNodes('{vector_index_name}', $top_k, $query_embedding)
     YIELD node, score
-    WHERE node:QDChunk
+    WHERE node:{label}
     RETURN
         elementId(node) AS node_id,
         labels(node) AS labels,
         coalesce(node.name, "") AS name,
         coalesce(node.section_tag, "") AS section_tag,
+        coalesce(node.{id_property_expr}, "") AS qualification_id,
         coalesce(node.qd_id, "") AS qd_id,
         coalesce(node.qd_title, "") AS qd_title,
-        coalesce(node.objectives, "") AS objectives,
-        trim(coalesce(node.qd_title, "") + " " + coalesce(node.objectives, "")) AS text,
+        coalesce(node.fat_id, "") AS fat_id,
+        coalesce(node.fat_title, "") AS fat_title,
+        coalesce(node.fat_title, "") AS fat_titile,
+        coalesce(node.{text_property_expr}, "") AS objectives,
+        trim(coalesce(node.{title_property_expr}, "") + " " + coalesce(node.{text_property_expr}, "")) AS text,
         score AS score,
         "dense" AS source
     ORDER BY score DESC
@@ -209,25 +240,37 @@ def dense_search_qd_chunks(
     )
 
 
-def sparse_search_qd_chunks(
+def sparse_search_qualification_chunks(
     retriever: FMEASentenceRetrieverV2,
     lucene_query: str,
+    label: str,
     fulltext_index_name: str,
+    title_property: str,
+    text_property: str,
+    id_property: str,
     top_k: int = 10,
 ) -> List[Dict[str, Any]]:
+    title_property_expr = ChunkRetriever._safe_property_name(title_property)
+    text_property_expr = ChunkRetriever._safe_property_name(text_property)
+    id_property_expr = ChunkRetriever._safe_property_name(id_property)
+
     cypher = f"""
     CALL db.index.fulltext.queryNodes('{fulltext_index_name}', $lucene_query)
     YIELD node, score
-    WHERE node:QDChunk
+    WHERE node:{label}
     RETURN
         elementId(node) AS node_id,
         labels(node) AS labels,
         coalesce(node.name, "") AS name,
         coalesce(node.section_tag, "") AS section_tag,
+        coalesce(node.{id_property_expr}, "") AS qualification_id,
         coalesce(node.qd_id, "") AS qd_id,
         coalesce(node.qd_title, "") AS qd_title,
-        coalesce(node.objectives, "") AS objectives,
-        trim(coalesce(node.qd_title, "") + " " + coalesce(node.objectives, "")) AS text,
+        coalesce(node.fat_id, "") AS fat_id,
+        coalesce(node.fat_title, "") AS fat_title,
+        coalesce(node.fat_title, "") AS fat_titile,
+        coalesce(node.{text_property_expr}, "") AS objectives,
+        trim(coalesce(node.{title_property_expr}, "") + " " + coalesce(node.{text_property_expr}, "")) AS text,
         score AS score,
         "sparse" AS source
     ORDER BY score DESC
@@ -408,6 +451,9 @@ def package_top_k_candidates(
                 "section_tag": item.get("section_tag", ""),
                 "qd_id": item.get("qd_id", ""),
                 "qd_title": item.get("qd_title", ""),
+                "fat_id": item.get("fat_id", ""),
+                "fat_title": item.get("fat_title", ""),
+                "fat_titile": item.get("fat_titile", item.get("fat_title", "")),
                 "objectives": item.get("objectives", ""),
                 "text": item.get("text", ""),
                 "score": item.get("final_score", item.get("rrf_score", 0.0)),
@@ -635,7 +681,7 @@ def filter_rows_by_labels(
     allowed_labels: List[str],
     label: str = "",
 ) -> List[Dict[str, Any]]:
-    if not allowed_labels or label == "QDChunk":
+    if not allowed_labels or label in {"QDChunk", "FATChunk"}:
         return rows
 
     allowed = set(allowed_labels)
@@ -673,6 +719,11 @@ def print_doc_chunk_results(result: Dict[str, Any]) -> None:
                 f"      qd_id={item.get('qd_id', '')} "
                 f"qd_title={item.get('qd_title', '')}"
             )
+        if item.get("fat_id") or item.get("fat_title") or item.get("fat_titile"):
+            print(
+                f"      fat_id={item.get('fat_id', '')} "
+                f"fat_title={item.get('fat_title', item.get('fat_titile', ''))}"
+            )
         if item.get("cross_encoder_score") is not None:
             print(f"      cross_encoder_score={item.get('cross_encoder_score', 0.0):.4f}")
         if item.get("section_tag_score") is not None:
@@ -707,7 +758,7 @@ def main():
         result = query_doc_chunks_for_sentence(
             retriever=retriever,
             query_spec=query_spec,
-            top_k=20,
+            top_k=25,
             per_label_k=40,
             retrieval_mode="dense",
             disciplines=None,
@@ -716,7 +767,7 @@ def main():
             use_section_tag_bonus=True,
             section_bonus_mode="hybrid",
             section_bonus_weight=0.00,
-            is_QD=True,
+            is_QD=False,
         )
         print_doc_chunk_results(result)
     finally:

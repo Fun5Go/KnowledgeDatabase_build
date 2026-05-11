@@ -74,6 +74,7 @@ class Neo4jIndexManager:
             "TSChunk": "ts_embedding_idx",
             "RationaleChunk": "rationale_embedding_idx",
             "QDChunk": "qd_embedding_idx",
+            "FATChunk": "fat_embedding_idx",
         }
 
         fulltext_indexes = {
@@ -87,4 +88,8 @@ class Neo4jIndexManager:
         self.create_fulltext_indexes_for_properties(
             {"QDChunk": "qd_objectives_idx"},
             text_properties=["qd_title", "objectives"],
+        )
+        self.create_fulltext_indexes_for_properties(
+            {"FATChunk": "fat_objectives_idx"},
+            text_properties=["fat_title", "objectives"],
         )
