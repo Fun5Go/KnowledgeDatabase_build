@@ -26,6 +26,7 @@ LANGSMITH_PROJECT_NAME = configure_langsmith(
     os.getenv("LANGSMITH_PROJECT", "GraphRAGConnection")
 )
 DEFAULT_OUTPUT_PATH = Path(__file__).resolve().parent / "connection_results.json"
+DEFAULT_RESULTS_DIR_NAME = "results"
 
 structure_input_motorcontrol = {
     "product_domain": "motor_drives",
@@ -547,6 +548,9 @@ def run_connection_pipeline(
     analysis_items = list(iter_structure_analysis_items())
     if query_number is not None:
         analysis_items = [get_query_item_by_number(query_number, analysis_items)]
+    auto_results_dir = output_path.parent / DEFAULT_RESULTS_DIR_NAME if stage == "auto" else None
+    if auto_results_dir is not None:
+        auto_results_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         for index, analysis_item in enumerate(analysis_items, start=1):
@@ -554,17 +558,26 @@ def run_connection_pipeline(
                 f"[INFO] Processing query {index}/{len(analysis_items)}: "
                 f"{analysis_item.get('analysis_id', '')}"
             )
-            results.append(
-                run_connection_for_item(
-                    retriever=retriever,
-                    workflow=workflow,
-                    analysis_item=analysis_item,
-                    stage=stage,
-                    batch_size=batch_size,
-                )
+            result = run_connection_for_item(
+                retriever=retriever,
+                workflow=workflow,
+                analysis_item=analysis_item,
+                stage=stage,
+                batch_size=batch_size,
             )
+            results.append(result)
+            if auto_results_dir is not None:
+                saved_paths = save_auto_stage_results([result], auto_results_dir)
+                print(
+                    "[INFO] Wrote auto stage result file(s): "
+                    + ", ".join(str(path) for path in saved_paths)
+                )
     finally:
         retriever.close()
+
+    if stage == "auto":
+        print(f"[INFO] Wrote auto stage result files to: {auto_results_dir}")
+        return results
 
     save_result(results, output_path)
     print(f"[INFO] Wrote {len(results)} Connection result(s) to: {output_path}")
@@ -637,6 +650,87 @@ def save_result(result: Any, output_path: Path) -> None:
         json.dumps(json_safe(result), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def save_auto_stage_results(results: list[dict[str, Any]], results_dir: Path) -> list[Path]:
+    """Save auto output as one rerank and one extract JSON file per query text."""
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[Path] = []
+    used_names: set[str] = set()
+
+    for result in results:
+        analysis_item = result.get("analysis_item") if isinstance(result, dict) else {}
+        if not isinstance(analysis_item, dict):
+            analysis_item = {}
+        query_text = build_query_text(analysis_item) or normalize_text(
+            analysis_item.get("analysis_id")
+        )
+        filename_text = slugify_filename_part(query_text or "query")
+
+        rerank_path = unique_output_path(results_dir, f"rerank_{filename_text}.json", used_names)
+        extract_path = unique_output_path(results_dir, f"extract_{filename_text}.json", used_names)
+        save_result(build_auto_stage_result(result, "rerank"), rerank_path)
+        save_result(build_auto_stage_result(result, "extract"), extract_path)
+        saved_paths.extend([rerank_path, extract_path])
+
+    return saved_paths
+
+
+def build_auto_stage_result(
+    result: dict[str, Any],
+    stage: Literal["rerank", "extract"],
+) -> dict[str, Any]:
+    connection = result.get("connection") if isinstance(result.get("connection"), dict) else {}
+    stage_connection: dict[str, Any] = {
+        "analysis_id": connection.get("analysis_id", ""),
+        "query_type": connection.get("query_type", ""),
+        "stage": stage,
+    }
+    if stage == "rerank":
+        stage_connection["reranked_chunks"] = connection.get("reranked_chunks", [])
+    else:
+        stage_connection["evidence_units"] = connection.get("evidence_units", [])
+        stage_connection["chunk_aggregates"] = connection.get("chunk_aggregates", [])
+        if "summary" in connection:
+            stage_connection["summary"] = connection.get("summary", {})
+    if "validation_errors" in connection:
+        stage_connection["validation_errors"] = connection.get("validation_errors", [])
+
+    return {
+        "analysis_item": result.get("analysis_item", {}),
+        "query_result": result.get("query_result", {}),
+        "connection_payload": result.get("connection_payload", {}),
+        "connection": stage_connection,
+    }
+
+
+def slugify_filename_part(value: str, max_length: int = 120) -> str:
+    slug_chars: list[str] = []
+    previous_was_separator = False
+    for char in normalize_text(value).lower():
+        if char.isalnum():
+            slug_chars.append(char)
+            previous_was_separator = False
+        elif not previous_was_separator:
+            slug_chars.append("_")
+            previous_was_separator = True
+    slug = "".join(slug_chars).strip("_")
+    if not slug:
+        return "query"
+    return slug[:max_length].rstrip("_") or "query"
+
+
+def unique_output_path(results_dir: Path, filename: str, used_names: set[str]) -> Path:
+    path = results_dir / filename
+    stem = path.stem
+    suffix = path.suffix
+    index = 2
+    while path.name in used_names:
+        path = results_dir / f"{stem}_{index}{suffix}"
+        index += 1
+    used_names.add(path.name)
+    return path
 
 
 def get_query_item_by_number(
