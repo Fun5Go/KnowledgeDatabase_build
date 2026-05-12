@@ -295,22 +295,22 @@ def graph_stats():
 
 if __name__ == "__main__":
 
-    # print("\n=== Semantic Search Mode ===")
-    # print(semantic_search(
-    #     "Mode",
-    #     "mode_embedding",
-    #     "Not enough torque",
-    #     top_k=20
-    # ))
-
     print("\n=== Semantic Search Mode ===")
-    semantic_search(
-        "Cause",
-        "cause_embedding",
-        "Trigger delay too long",
-        # discipline=["mechanics", "unknown"],
+    print(semantic_search(
+        "Mode",
+        "mode_embedding",
+        "increased susceptibility during short-circuit conditions",
         top_k=20
-    )
+    ))
+
+    # print("\n=== Semantic Search Mode ===")
+    # semantic_search(
+    #     "Cause",
+    #     "cause_embedding",
+    #     "power dissipation during FET switching events",
+    #     # discipline=["mechanics", "unknown"],
+    #     top_k=20
+    # )
 
     # print("\n=== Mode Reasoning ===")
     # print(mode_reasoning("Not enough torque"))

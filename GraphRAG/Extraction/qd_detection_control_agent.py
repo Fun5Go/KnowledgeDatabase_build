@@ -69,7 +69,7 @@ def build_output_schema() -> dict[str, Any]:
 
     return {
         "analysis_id": "string",
-        "query_type": "function_mode | cause",
+        "query_type": "function_mode | cause | effect",
         "selected_qd_chunks": [
             {
                 "rank": "integer retrieval rank copied from the selected candidate chunk",
@@ -114,6 +114,12 @@ def build_llm_query_payload(analysis_item: dict[str, Any]) -> dict[str, str]:
         return {
             "Failure cause": normalize_text(analysis_item.get("query_cause")),
             "Discipline": normalize_text(analysis_item.get("cause_discipline")),
+            "Failure element": normalize_text(analysis_item.get("failure_element")),
+        }
+    if query_type == "effect":
+        return {
+            "Function": normalize_text(analysis_item.get("function_text")),
+            "Failure effect": normalize_text(analysis_item.get("query_effect")),
             "Failure element": normalize_text(analysis_item.get("failure_element")),
         }
 

@@ -19,7 +19,7 @@ Important matching boundary:
 - Do not infer that validating a prevention feature is detection evidence for a cause unless the QD objective explicitly connects that feature to the cause or to an equivalent unsafe switching condition.
 
 Selection rules:
-1. Select at most three candidates: only the best QD detection controls.
+1. Select at one or multiple candidates: only the best QD detection controls.
 2. Select none if no candidate chunk is a real detection/control/verification match.
 3. Do not select a chunk merely because it matches the function, component, section title, product, or generic vocabulary.
 4. Prefer explicit verification, test objective, detection behavior, safety response, monitoring, timeout, alarm, shutdown, relay/thyristor control check, zero-crossing check, or parameter validation only when it is tied directly to the target.
