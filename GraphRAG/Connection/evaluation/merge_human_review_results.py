@@ -18,6 +18,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 CONNECTION_DIR = SCRIPT_DIR.parent
 RESULTS_DIR = CONNECTION_DIR / "results"
 OUTPUT_PATH = SCRIPT_DIR / "human_review_merged_results.json"
+PER_QUERY_DIR = SCRIPT_DIR / "human_review_by_query"
 
 HUMAN_REVIEW_KEYS = [
     "rerank_tag_correct",
@@ -87,6 +88,15 @@ def query_text_from_payload(payload: Any) -> str:
 
 def query_group_key(query_text: str) -> str:
     return re.sub(r"\s+", " ", query_text).strip().casefold()
+
+
+def filename_from_query(query_text: str, index: int) -> str:
+    name = query_text.strip().casefold()
+    name = re.sub(r"[^a-z0-9]+", "_", name)
+    name = re.sub(r"_+", "_", name).strip("_")
+    if not name:
+        name = f"query_{index:03d}"
+    return f"{index:03d}_{name[:120]}.json"
 
 
 def as_list(value: Any) -> list[Any]:
@@ -220,6 +230,7 @@ def review_chunk(rerank_chunk: dict[str, Any] | None, aggregate_chunk: dict[str,
     aggregate = aggregate_from_chunk(aggregate_chunk)
 
     return {
+        "rank": first_present(source, ["rank", "retrieval_rank", "retrieval rank"]),
         "raw_text": wrap_raw_text(raw_text),
         "rerank_tag": first_present(source, ["rerank_tag"]),
         "reason": first_present(source, ["reason"]),
@@ -308,12 +319,26 @@ def build_review_payload() -> dict[str, Any]:
     }
 
 
+def write_per_query_files(review_payload: dict[str, Any]) -> None:
+    PER_QUERY_DIR.mkdir(parents=True, exist_ok=True)
+    for index, query in enumerate(review_payload["queries"], start=1):
+        query_payload = {
+            "human_review_keys": HUMAN_REVIEW_KEYS,
+            "query_text": query["query_text"],
+            "chunks": query["chunks"],
+        }
+        write_json(PER_QUERY_DIR / filename_from_query(query["query_text"], index), query_payload)
+
+
 def main() -> None:
     if not RESULTS_DIR.exists():
         raise FileNotFoundError(f"Results directory does not exist: {RESULTS_DIR}")
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    write_json(OUTPUT_PATH, build_review_payload())
+    review_payload = build_review_payload()
+    write_json(OUTPUT_PATH, review_payload)
+    write_per_query_files(review_payload)
     print(f"Wrote {OUTPUT_PATH}")
+    print(f"Wrote per-query files to {PER_QUERY_DIR}")
 
 
 if __name__ == "__main__":
