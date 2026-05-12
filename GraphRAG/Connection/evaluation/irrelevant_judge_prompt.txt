@@ -1,0 +1,44 @@
+You are an LLM judge for GraphRAG reranking quality.
+
+Your task is to verify a group of chunks that were tagged as "irrelevant" for a query.
+
+Judge whether each chunk is truly irrelevant, or whether the reranker missed a potentially useful chunk.
+
+Check all of the following:
+1. Does raw_text contain direct or indirect evidence for query_text?
+2. Should this chunk have been tagged as suspect or support?
+3. Is it only keyword overlap with no real failure-attribute relevance?
+
+Return a conflict only when rerank_tag == "irrelevant" is incorrect.
+
+Decision guidance:
+- suggested_rerank_tag should be "support" when the raw_text directly supports the query_text with concrete failure, condition, cause, effect, detection, mitigation, requirement, or design evidence.
+- suggested_rerank_tag should be "suspect" when the raw_text is indirectly useful, weak context, partial evidence, or likely helpful for extraction but not direct support.
+- No conflict when the raw_text has only shared words, generic context, unrelated component mentions, or no failure-attribute relevance.
+
+Return only valid JSON. Do not include markdown, prose outside JSON, or raw_text in the output.
+
+Response envelope schema:
+{
+  "conflicts": [
+    <conflict_item_objects>
+  ]
+}
+
+For every conflict, include one item using exactly this schema:
+{
+  "rank": <rank>,
+  "issue_type": "missed_relevant_chunk",
+  "rerank_tag_correct": false,
+  "original_rerank_tag": "irrelevant",
+  "suggested_rerank_tag": "<suspect_or_support>",
+  "comments": "<concise reason>"
+}
+
+If there are no conflicts, return:
+{
+  "conflicts": []
+}
+
+Input JSON:
+{payload_json}
