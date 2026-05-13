@@ -48,6 +48,51 @@ def normalize_tag(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def normalize_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def query_fields_from_payload(payload: dict[str, Any], query_text: str) -> dict[str, str]:
+    """Build structured query fields for judge prompts.
+
+    Human-review files may only contain query_text, so fall back to the
+    GraphRAG query naming convention: "<function> with <mode>" or
+    "<function> with effect <effect>".
+    """
+    function_text = normalize_text(payload.get("function_text"))
+    query_mode = normalize_text(payload.get("query_mode"))
+    effect_text = normalize_text(payload.get("effect_text"))
+    query_type = normalize_text(payload.get("query_type")).lower()
+
+    if not query_type:
+        lowered = query_text.lower()
+        if " with effect " in lowered:
+            query_type = "effect"
+        elif " with " in lowered:
+            query_type = "function_mode"
+        else:
+            query_type = "unknown"
+
+    if (not function_text or not query_mode) and query_type == "function_mode" and " with " in query_text:
+        function_text, query_mode = [part.strip() for part in query_text.split(" with ", 1)]
+
+    if (not function_text or not effect_text) and query_type == "effect" and " with effect " in query_text.lower():
+        marker_index = query_text.lower().find(" with effect ")
+        function_text = function_text or query_text[:marker_index].strip()
+        effect_text = effect_text or query_text[marker_index + len(" with effect ") :].strip()
+
+    target_text = query_mode if query_type == "function_mode" else effect_text if query_type == "effect" else query_text
+
+    return {
+        "query_type": query_type,
+        "query_text": query_text,
+        "function_text": function_text,
+        "query_mode": query_mode,
+        "effect_text": effect_text,
+        "target_text": target_text,
+    }
+
+
 def chunk_rank(chunk: dict[str, Any]) -> Any:
     return chunk.get("rank")
 
@@ -64,6 +109,14 @@ def judge_error_item(chunks: list[dict[str, Any]], agent_name: str, error: Excep
     }
 
 
+def issue_type_counts(conflicts: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for conflict in conflicts:
+        issue_type = normalize_text(conflict.get("issue_type")) or "unknown"
+        counts[issue_type] = counts.get(issue_type, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 @traceable(
     run_type="chain",
     name="verification_judge_file",
@@ -77,11 +130,23 @@ def judge_file(
 ) -> dict[str, Any]:
     payload = load_json(input_path)
     query_text = str(payload.get("query_text") or "").strip()
+    query_fields = query_fields_from_payload(payload, query_text) if isinstance(payload, dict) else {
+        "query_type": "unknown",
+        "query_text": query_text,
+        "function_text": "",
+        "query_mode": "",
+        "effect_text": "",
+        "target_text": query_text,
+    }
+    source_summary = payload.get("summary")
+    if not isinstance(source_summary, dict):
+        source_summary = {}
     chunks = payload.get("chunks") or []
     if not isinstance(chunks, list):
         chunks = []
 
     conflicts: list[dict[str, Any]] = []
+    judge_errors: list[dict[str, Any]] = []
     valid_chunks = [chunk for chunk in chunks if isinstance(chunk, dict)]
     support_suspect_chunks = [
         chunk for chunk in valid_chunks if normalize_tag(chunk.get("rerank_tag")) in SUPPORT_SUSPECT_TAGS
@@ -92,26 +157,44 @@ def judge_file(
 
     if support_suspect_chunks:
         try:
-            conflicts.extend(support_suspect_agent.judge_chunks(query_text, support_suspect_chunks))
+            conflicts.extend(
+                support_suspect_agent.judge_chunks(
+                    query_text,
+                    support_suspect_chunks,
+                    query_fields=query_fields,
+                )
+            )
         except Exception as exc:
-            conflicts.append(judge_error_item(support_suspect_chunks, "support_suspect", exc))
+            judge_errors.append(judge_error_item(support_suspect_chunks, "support_suspect", exc))
 
     if irrelevant_chunks:
         try:
-            conflicts.extend(irrelevant_agent.judge_chunks(query_text, irrelevant_chunks))
+            conflicts.extend(
+                irrelevant_agent.judge_chunks(
+                    query_text,
+                    irrelevant_chunks,
+                    query_fields=query_fields,
+                )
+            )
         except Exception as exc:
-            conflicts.append(judge_error_item(irrelevant_chunks, "irrelevant", exc))
+            judge_errors.append(judge_error_item(irrelevant_chunks, "irrelevant", exc))
+
+    output_summary = {
+        **source_summary,
+        "total_chunks": len(valid_chunks),
+        "support_suspect_checked": len(support_suspect_chunks),
+        "irrelevant_checked": len(irrelevant_chunks),
+        "conflict_count": len(conflicts),
+        "issue_type_counts": issue_type_counts(conflicts),
+        "judge_error_count": len(judge_errors),
+    }
 
     return {
         "source_file": input_path.name,
         "query_text": query_text,
-        "summary": {
-            "total_chunks": len(valid_chunks),
-            "support_suspect_checked": len(support_suspect_chunks),
-            "irrelevant_checked": len(irrelevant_chunks),
-            "conflict_count": len(conflicts),
-        },
+        "summary": output_summary,
         "conflicts": conflicts,
+        "judge_errors": judge_errors,
     }
 
 

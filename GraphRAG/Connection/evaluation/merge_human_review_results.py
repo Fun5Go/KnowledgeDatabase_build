@@ -36,6 +36,15 @@ AGGREGATE_KEYS = [
     "selection_reason",
 ]
 
+SUMMARY_KEYS = {
+    "num_candidates",
+    "num_support",
+    "num_suspect",
+    "num_irrelevant",
+    "num_evidence_units",
+    "num_selected_chunks",
+}
+
 
 def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
@@ -71,6 +80,18 @@ def find_first_key(obj: Any, keys: list[str]) -> Any:
             if found is not None:
                 return found
     return None
+
+
+def extract_summary(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        connection = payload.get("connection")
+        if isinstance(connection, dict) and isinstance(connection.get("summary"), dict):
+            return connection["summary"]
+
+    summary = find_first_key(payload, ["summary"])
+    if isinstance(summary, dict) and SUMMARY_KEYS.intersection(summary):
+        return summary
+    return {}
 
 
 def query_text_from_payload(payload: Any) -> str:
@@ -289,6 +310,7 @@ def collect_results() -> dict[str, dict[str, Any]]:
             key,
             {
                 "query_text": query_text,
+                "summary": {},
                 "rerank_chunks": [],
                 "aggregate_chunks": [],
             },
@@ -298,6 +320,9 @@ def collect_results() -> dict[str, dict[str, Any]]:
             group["rerank_chunks"].extend(extract_rerank_chunks(payload))
         if "extract" in lowered_name:
             group["aggregate_chunks"].extend(extract_aggregate_chunks(payload))
+            summary = extract_summary(payload)
+            if summary:
+                group["summary"] = summary
 
     return grouped
 
@@ -309,6 +334,7 @@ def build_review_payload() -> dict[str, Any]:
         queries.append(
             {
                 "query_text": group["query_text"],
+                "summary": group["summary"],
                 "chunks": merge_query_chunks(group["rerank_chunks"], group["aggregate_chunks"]),
             }
         )
@@ -325,6 +351,7 @@ def write_per_query_files(review_payload: dict[str, Any]) -> None:
         query_payload = {
             "human_review_keys": HUMAN_REVIEW_KEYS,
             "query_text": query["query_text"],
+            "summary": query["summary"],
             "chunks": query["chunks"],
         }
         write_json(PER_QUERY_DIR / filename_from_query(query["query_text"], index), query_payload)

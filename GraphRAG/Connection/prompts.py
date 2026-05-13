@@ -55,7 +55,7 @@ Inspect each provided support or suspect chunk at sentence or evidence-unit leve
 
 Grounding and copy rules:
 - Use only the query fields and provided chunks.
-- Do not use graph-level connected chunk context in Stage 2 unless it is explicitly present; it must never be used as evidence.
+- connected_chunk_groups may be used only as context.
 - Pay attention to each chunk section_tag when present. Use it as context for interpreting the chunk, but do not use section_tag text as evidence_span.
 - evidence_span must be an exact substring from the same chunk raw_text.
 - Do not summarize, rewrite, normalize, or correct evidence_span.
@@ -63,14 +63,8 @@ Grounding and copy rules:
 - Every part joined by " ... " must be an exact substring from the same raw_text.
 - Do not extract evidence_span from name, Reason text, graph relationships, or other chunks.
 - If a sentence has no meaningful relation to the query failure text, do not create an evidence unit for it.
-- Extract only valid and valuable evidence units for the query failure text.
-- Do not create evidence_units for generic context, ordinary nominal behavior, or unrelated text.
-- Do not create evidence_units with relation_type nominal_context_only or unrelated.
-- Use nominal_context_only or unrelated only in chunk_aggregates when no valid evidence unit is extracted for that chunk.
 - Do not use external engineering knowledge.
 - Do not classify from generic word overlap alone.
-- Output rank as the only chunk identifier in evidence_units and chunk_aggregates.
-- Do not output name, section_tag, raw_text, text, or reason.
 
 Allowed relation_type values:
 1. condition_match
@@ -124,11 +118,10 @@ Anti-bias instruction:
 The patterns above are abstract examples, not domain keywords. Classify by semantic role relative to the query failure text.
 
 Chunk aggregation:
-- Output exactly one chunk_aggregates item for every input chunk.
+- Aggregate evidence units back to chunk_aggregates.
 - selected is true only when the chunk has at least one evidence unit whose relation_type is not nominal_context_only or unrelated.
 - primary_relation priority for aggregation only:
 control_or_mitigation > detection_or_reporting > causal_mechanism > condition_match > consequence_or_effect > design_specification > trigger_or_context > nominal_context_only > unrelated
-- If no valid evidence unit is extracted for a chunk, set selected=false, evidence_spans=[], support_capability=weak, and briefly explain why no valid failure-relevant evidence was extracted.
 
 Return only valid JSON matching this schema:
 {output_schema_json}
@@ -136,3 +129,4 @@ Return only valid JSON matching this schema:
 Input payload:
 {payload_json}
 """
+

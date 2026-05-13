@@ -66,16 +66,26 @@ def compact_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def group_payload(query_text: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+def group_payload(
+    query_text: str,
+    chunks: list[dict[str, Any]],
+    query_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "query_text": query_text,
+        "query": query_fields or {"query_type": "unknown", "query_text": query_text},
         "chunks": [compact_chunk(chunk) for chunk in chunks],
     }
 
 
-def chunk_payload(query_text: str, chunk: dict[str, Any]) -> dict[str, Any]:
+def chunk_payload(
+    query_text: str,
+    chunk: dict[str, Any],
+    query_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "query_text": query_text,
+        "query": query_fields or {"query_type": "unknown", "query_text": query_text},
         "chunks": [compact_chunk(chunk)],
     }
 
@@ -151,11 +161,21 @@ class IrrelevantJudgeAgent:
             json_mode=json_mode,
         )
 
-    def judge_chunk(self, query_text: str, chunk: dict[str, Any]) -> dict[str, Any] | None:
-        conflicts = self.judge_chunks(query_text, [chunk])
+    def judge_chunk(
+        self,
+        query_text: str,
+        chunk: dict[str, Any],
+        query_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        conflicts = self.judge_chunks(query_text, [chunk], query_fields=query_fields)
         return conflicts[0] if conflicts else None
 
-    def judge_chunks(self, query_text: str, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def judge_chunks(
+        self,
+        query_text: str,
+        chunks: list[dict[str, Any]],
+        query_fields: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         chunks = [
             chunk
             for chunk in chunks
@@ -164,7 +184,7 @@ class IrrelevantJudgeAgent:
         if not chunks:
             return []
 
-        payload = group_payload(query_text, chunks)
+        payload = group_payload(query_text, chunks, query_fields=query_fields)
         chunks_by_rank: dict[Any, dict[str, Any]] = {}
         for chunk in chunks:
             chunks_by_rank[chunk.get("rank")] = chunk
@@ -183,12 +203,17 @@ class IrrelevantJudgeAgent:
 
         raise RuntimeError(f"Irrelevant judge failed after {self.max_retries} attempts: {last_error}")
 
-    def judge_chunk_legacy(self, query_text: str, chunk: dict[str, Any]) -> dict[str, Any] | None:
+    def judge_chunk_legacy(
+        self,
+        query_text: str,
+        chunk: dict[str, Any],
+        query_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         tag = str(chunk.get("rerank_tag") or "").strip().lower()
         if tag != "irrelevant":
             return None
 
-        payload = chunk_payload(query_text, chunk)
+        payload = chunk_payload(query_text, chunk, query_fields=query_fields)
         chunks_by_rank = {chunk.get("rank"): chunk, str(chunk.get("rank")): chunk}
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):

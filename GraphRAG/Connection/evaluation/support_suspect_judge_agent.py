@@ -85,16 +85,26 @@ def compact_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def group_payload(query_text: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+def group_payload(
+    query_text: str,
+    chunks: list[dict[str, Any]],
+    query_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "query_text": query_text,
+        "query": query_fields or {"query_type": "unknown", "query_text": query_text},
         "chunks": [compact_chunk(chunk) for chunk in chunks],
     }
 
 
-def chunk_payload(query_text: str, chunk: dict[str, Any]) -> dict[str, Any]:
+def chunk_payload(
+    query_text: str,
+    chunk: dict[str, Any],
+    query_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "query_text": query_text,
+        "query": query_fields or {"query_type": "unknown", "query_text": query_text},
         "chunks": [compact_chunk(chunk)],
     }
 
@@ -123,7 +133,33 @@ def original_selected(chunk: dict[str, Any]) -> bool:
     return normalize_bool(aggregate.get("selected"))
 
 
-def issue_type_from_flags(selected_correct: bool, relationship_correct: bool) -> str:
+def original_primary_relation(chunk: dict[str, Any]) -> str | None:
+    aggregate = chunk.get("chunk_aggregate")
+    if not isinstance(aggregate, dict):
+        return None
+    primary = aggregate.get("primary_relation")
+    if primary is None:
+        return None
+    return str(primary).strip() or None
+
+
+def original_relations(chunk: dict[str, Any]) -> list[str]:
+    aggregate = chunk.get("chunk_aggregate")
+    if not isinstance(aggregate, dict):
+        return []
+    relations = aggregate.get("relations")
+    if not isinstance(relations, list):
+        relations = [] if relations in (None, "") else [relations]
+    return [str(relation).strip() for relation in relations if str(relation).strip()]
+
+
+def issue_type_from_flags(
+    selected_correct: bool,
+    relationship_correct: bool,
+    suggested_selected: bool,
+) -> str:
+    if not selected_correct and suggested_selected is False:
+        return "selected_error"
     if not selected_correct and not relationship_correct:
         return "selected_and_relationship_error"
     if not selected_correct:
@@ -131,12 +167,21 @@ def issue_type_from_flags(selected_correct: bool, relationship_correct: bool) ->
     return "relationship_error"
 
 
-def normalize_conflict_item(item: dict[str, Any], chunk: dict[str, Any]) -> dict[str, Any]:
+def relation_set(relations: list[str]) -> set[str]:
+    return {relation.strip().lower() for relation in relations if relation.strip()}
+
+
+def normalize_conflict_item(item: dict[str, Any], chunk: dict[str, Any]) -> dict[str, Any] | None:
     """Keep only the requested conflict fields and anchor rank/tag to the source chunk."""
     selected_correct = normalize_bool(item.get("selected_correct"))
     relationship_correct = normalize_bool(item.get("relationship_correct"))
     source_selected = original_selected(chunk)
     suggested_selected = normalize_bool(item.get("suggested_selected"), default=source_selected)
+
+    # If selected=false is correct, relation fields are irrelevant to the KG
+    # connection result and should not create a conflict.
+    if source_selected is False and selected_correct is True:
+        return None
 
     # Keep the judge schema internally consistent even when the model emits
     # contradictory booleans and suggestions.
@@ -145,7 +190,7 @@ def normalize_conflict_item(item: dict[str, Any], chunk: dict[str, Any]) -> dict
     elif suggested_selected == source_selected:
         suggested_selected = not source_selected
 
-    issue_type = issue_type_from_flags(selected_correct, relationship_correct)
+    issue_type = issue_type_from_flags(selected_correct, relationship_correct, suggested_selected)
 
     primary = item.get("suggested_primary_relation")
     if primary is not None:
@@ -154,16 +199,30 @@ def normalize_conflict_item(item: dict[str, Any], chunk: dict[str, Any]) -> dict
     relations = item.get("suggested_relations")
     if not isinstance(relations, list):
         relations = [] if relations in (None, "") else [relations]
+    suggested_relations = [str(relation).strip() for relation in relations if str(relation).strip()]
+
+    # Primary relation is informational here. A primary-only disagreement is not
+    # a conflict when the relation set itself is unchanged.
+    if (
+        source_selected is True
+        and selected_correct is True
+        and relationship_correct is False
+        and relation_set(suggested_relations) == relation_set(original_relations(chunk))
+    ):
+        return None
 
     return {
         "rank": chunk.get("rank"),
         "issue_type": issue_type,
         "rerank_tag": chunk.get("rerank_tag"),
+        "original_selected": source_selected,
+        "original_primary_relation": original_primary_relation(chunk),
+        "original_relations": original_relations(chunk),
         "selected_correct": selected_correct,
         "relationship_correct": relationship_correct,
         "suggested_selected": suggested_selected,
         "suggested_primary_relation": primary,
-        "suggested_relations": [str(relation).strip() for relation in relations if str(relation).strip()],
+        "suggested_relations": suggested_relations,
         "comments": str(item.get("comments") or "").strip(),
     }
 
@@ -182,6 +241,8 @@ def validate_response(response: dict[str, Any], chunks_by_rank: dict[Any, dict[s
         if chunk is None:
             raise ValueError(f"Conflict references unknown rank: {rank}")
         normalized = normalize_conflict_item(item, chunk)
+        if normalized is None:
+            continue
         if normalized["issue_type"] not in ISSUE_TYPES:
             raise ValueError("Invalid support/suspect issue_type.")
         normalized_conflicts.append(normalized)
@@ -210,11 +271,21 @@ class SupportSuspectJudgeAgent:
             json_mode=json_mode,
         )
 
-    def judge_chunk(self, query_text: str, chunk: dict[str, Any]) -> dict[str, Any] | None:
-        conflicts = self.judge_chunks(query_text, [chunk])
+    def judge_chunk(
+        self,
+        query_text: str,
+        chunk: dict[str, Any],
+        query_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        conflicts = self.judge_chunks(query_text, [chunk], query_fields=query_fields)
         return conflicts[0] if conflicts else None
 
-    def judge_chunks(self, query_text: str, chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def judge_chunks(
+        self,
+        query_text: str,
+        chunks: list[dict[str, Any]],
+        query_fields: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
         chunks = [
             chunk
             for chunk in chunks
@@ -223,7 +294,7 @@ class SupportSuspectJudgeAgent:
         if not chunks:
             return []
 
-        payload = group_payload(query_text, chunks)
+        payload = group_payload(query_text, chunks, query_fields=query_fields)
         chunks_by_rank: dict[Any, dict[str, Any]] = {}
         for chunk in chunks:
             chunks_by_rank[chunk.get("rank")] = chunk
@@ -242,12 +313,17 @@ class SupportSuspectJudgeAgent:
 
         raise RuntimeError(f"Support/suspect judge failed after {self.max_retries} attempts: {last_error}")
 
-    def judge_chunk_legacy(self, query_text: str, chunk: dict[str, Any]) -> dict[str, Any] | None:
+    def judge_chunk_legacy(
+        self,
+        query_text: str,
+        chunk: dict[str, Any],
+        query_fields: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         tag = str(chunk.get("rerank_tag") or "").strip().lower()
         if tag not in SUPPORT_SUSPECT_TAGS:
             return None
 
-        payload = chunk_payload(query_text, chunk)
+        payload = chunk_payload(query_text, chunk, query_fields=query_fields)
         chunks_by_rank = {chunk.get("rank"): chunk, str(chunk.get("rank")): chunk}
         last_error: Exception | None = None
         for attempt in range(1, self.max_retries + 1):

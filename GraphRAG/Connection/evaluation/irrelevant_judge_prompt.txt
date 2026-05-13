@@ -4,6 +4,13 @@ Your task is to verify a group of chunks that were tagged as "irrelevant" for a 
 
 Judge whether each chunk is truly irrelevant, or whether the reranker missed a potentially useful chunk.
 
+Query interpretation:
+- For query_type=function_mode, query_mode is the target condition. function_text is context only.
+- For query_type=effect, effect_text is the target condition. function_text is context only.
+- For query_type=cause or unknown, query_text is the target condition.
+- A chunk about only the function's nominal capability is not enough.
+- Do not require exact wording of the target condition if the raw_text gives concrete evidence for a clear technical equivalent.
+
 Check all of the following:
 1. Does raw_text contain direct or indirect evidence for query_text?
 2. Should this chunk have been tagged as suspect or support?
