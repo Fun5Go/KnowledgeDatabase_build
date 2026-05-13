@@ -62,7 +62,7 @@ Grounding and copy rules:
 - Pay attention to each chunk section_tag when present. Use it as context for interpreting the chunk, but do not use section_tag text as evidence_span.
 - The primary target is only the failure attribute: Failure mode, Failure cause and Failure effect
 - Function, Discipline, component names, and section_tag are context only. 
-- You may inspect and consider broad candidate spans, including nearby technical context including function and failure attribute.
+- May inspect and consider broad candidate spans, including nearby technical context.
 - evidence_span must be an exact substring from the same chunk raw_text.
 - Do not summarize, rewrite, normalize, or correct evidence_span.
 - If two short spans from the same raw_text are needed, join them with " ... ".
@@ -77,32 +77,26 @@ Grounding and copy rules:
 Allowed relation_type values:
 1. condition_match
 Use when the evidence_span directly mentions the target condition, a near-equivalent condition, or an explicitly named abnormal condition matching the query failure text.
-Abstract patterns: "<target condition> occurs"; "<abnormal state> is detected"; "<parameter> exceeds/falls below <limit>".
+
 
 2. causal_mechanism
 Use when the evidence_span explains a mechanism, dependency, constraint, abnormal state, technical factor, or condition that may cause, expose, aggravate, or explain the query failure text.
-Abstract patterns: "<technical factor> causes <abnormal behavior>"; "<condition> may lead to <failure behavior>"; "<dependency> is required; otherwise <failure occurs>".
 
 3. trigger_or_context
 Use when the evidence_span describes the operating phase, sequence, state, configuration, transition, interface, or scenario in which the target condition may occur, but does not itself explain the cause or describe a control.
-Abstract patterns: "During <operating phase>..."; "When <state transition> occurs..."; "In <mode/configuration>...".
 
 4. control_or_mitigation
 Use when the evidence_span describes a concrete action, mechanism, design feature, protection, prevention, limitation, shutdown, reset, isolation, fallback, compensation, filtering, recovery, or mitigation that controls the query failure text or its consequence.
-Abstract patterns: "<control mechanism> prevents <condition>"; "<protection function> limits <abnormal behavior>"; "<fallback behavior> is used when <condition> occurs".
 
 5. detection_or_reporting
 Use when the evidence_span describes detection, monitoring, measurement, diagnosis, error reporting, alarm generation, logging, status indication, or notification related to the query failure text.
-Abstract patterns: "<system/module> detects <condition>"; "<signal/parameter> is monitored"; "<error/status/alarm> is reported when <condition> occurs".
 
 6. design_specification
 Use when the evidence_span states nominal required behavior, design rule, parameter, threshold, timing, rating, tolerance, configuration, interface, architecture, dependency, sequence, or operating limit related to the query failure text.
-Abstract patterns: "<component> shall support <range/limit>"; "<function> shall execute within <timing>"; "<interface> shall provide <signal>".
 Do not use design_specification for abnormal-condition responses; use control_or_mitigation or detection_or_reporting instead.
 
 7. consequence_or_effect
 Use when the evidence_span describes a consequence, impact, degraded behavior, damage, unavailable function, incorrect output, unsafe behavior, or downstream effect related to the query failure text.
-Abstract patterns: "<condition> results in <effect>"; "<failure> causes <function> to be unavailable"; "<affected object> is impacted by <failure>".
 
 8. nominal_context_only
 Use when the evidence_span only provides general system context, component description, interface description, or ordinary nominal behavior without useful failure evidence.
@@ -110,6 +104,22 @@ Use when the evidence_span only provides general system context, component descr
 9. unrelated
 Use when the evidence_span has no meaningful technical relation to the query failure text.
 
+Semantic similarity boundary:
+Semantic similarity is allowed, but it must be text-grounded.
+
+A span may be treated as a near-equivalent only when it preserves the same failure-relevant object, abnormal attribute, scenario, and directionality as the query failure attribute.
+
+Do not require exact wording. However, do not introduce a failure mechanism, physical quantity, affected object, or causal chain that is not present in the raw_text or query fields.
+
+A span is not a valid near-equivalent if it only describes:
+- a different abnormal phenomenon,
+- a different affected object,
+- a different physical quantity,
+- a different cause,
+- a different operating scenario,
+- or a control for a different hazard.
+
+When semantic similarity is partial but not equivalent, the span may be classified only as weak contextual, design, control, or mitigation evidence if it explicitly shares the failure-relevant scenario and control target. It must not be classified as condition_match or strong causal_mechanism.
 
 Directionality:
 - evidence_to_target: evidence explains, causes, controls, detects, affects, or supports the target condition.
