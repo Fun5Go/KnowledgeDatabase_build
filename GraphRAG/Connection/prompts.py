@@ -14,10 +14,13 @@ Grounding rules:
 - Use only the query fields and provided candidate_chunks.
 - Do not use graph-level connected chunk context in Stage 1; it is not part of this input.
 - Pay attention to candidate section_tag when present. It may indicate requirement type, document area, operating context, or other useful interpretation context.
+- The primary target is only the failure attribute: Failure mode for function_mode, Failure cause for cause, and Failure effect for effect.
+- Function, Discipline, component names, and section_tag are context only. They can help interpret text, but they are not sufficient evidence by themselves.
 - Evidence must come from the candidate chunk's own text.
-- If a chunk name contains "Reason:", that text is context only; do not treat it as evidence.
 - Do not use external engineering knowledge.
 - Do not select a chunk only because it shares generic engineering words with the query.
+- Do not select a chunk only because it describes the queried function, component, subsystem, or nominal operation.
+- Select a chunk only when raw_text contains the target failure attribute, a near-equivalent abnormal condition, or a concrete text-grounded precursor, mechanism, control, detection, or consequence for that failure attribute.
 - Generic overlap is not enough.
 
 Rerank tags:
@@ -26,14 +29,14 @@ Rerank tags:
 - irrelevant: raw_text does not contain meaningful technical evidence for the target condition.
 
 High-recall behavior:
-- If uncertain between suspect and irrelevant, choose suspect when there is plausible technical relevance.
+- If uncertain between suspect and irrelevant, choose suspect only when raw_text has a concrete technical bridge to the failure attribute.
 - If uncertain between support and suspect, choose suspect unless the evidence is explicit.
 - Keep irrelevant for generic overlap, unrelated subsystems, and nominal text without a useful technical bridge.
 
-For function_mode, the Function field is context only.
-A chunk must contain evidence about the Failure mode or a technically linked precursor to it.
-Chunks describing only the function's nominal capability are irrelevant.
-Do not choose the function specification in high level like how to control the motor.
+For function_mode, the Function field is context only. A chunk must contain evidence about the Failure mode or a technically linked precursor/control/detection/effect for that Failure mode.
+For cause, Discipline is context only. A chunk must contain evidence about the Failure cause or a concrete mechanism/condition tied to that cause.
+For effect, Function is context only. A chunk must contain evidence about the Failure effect or a concrete consequence equivalent to that effect.
+Chunks describing only nominal capability, architecture, interfaces, or high-level function specification are irrelevant.
 
 Copy rules:
 - rank must copy candidate "retrieval rank".
@@ -52,19 +55,24 @@ EVIDENCE_RELATION_EXTRACTION_PROMPT = """You are a strict evidence-span extracti
 
 Task:
 Inspect each provided support or suspect chunk at sentence or evidence-unit level. Extract exact text spans from raw_text and classify each span by its semantic relation to the query failure text.
+Evidence span discovery may be high recall, but relation classification and chunk selection must be strict.
 
 Grounding and copy rules:
 - Use only the query fields and provided chunks.
-- connected_chunk_groups may be used only as context.
 - Pay attention to each chunk section_tag when present. Use it as context for interpreting the chunk, but do not use section_tag text as evidence_span.
+- The primary target is only the failure attribute: Failure mode, Failure cause and Failure effect
+- Function, Discipline, component names, and section_tag are context only. 
+- You may inspect and consider broad candidate spans, including nearby technical context including function and failure attribute.
 - evidence_span must be an exact substring from the same chunk raw_text.
 - Do not summarize, rewrite, normalize, or correct evidence_span.
 - If two short spans from the same raw_text are needed, join them with " ... ".
 - Every part joined by " ... " must be an exact substring from the same raw_text.
-- Do not extract evidence_span from name, Reason text, graph relationships, or other chunks.
-- If a sentence has no meaningful relation to the query failure text, do not create an evidence unit for it.
+- If a sentence has no meaningful relation to the failure attribute text, do not create an evidence_unit for it.
 - Do not use external engineering knowledge.
 - Do not classify from generic word overlap alone.
+- Do not create evidence_units for spans that only describe nominal function, architecture, interface, parameter ranges, or operating sequence unless the span also ties to the failure attribute.
+- Output rank as the only chunk identifier in evidence_units and chunk_aggregates.
+- Do not output name, section_tag, raw_text, text, reason, or graph relationship fields.
 
 Allowed relation_type values:
 1. condition_match
@@ -102,6 +110,7 @@ Use when the evidence_span only provides general system context, component descr
 9. unrelated
 Use when the evidence_span has no meaningful technical relation to the query failure text.
 
+
 Directionality:
 - evidence_to_target: evidence explains, causes, controls, detects, affects, or supports the target condition.
 - target_to_evidence: target condition causes, triggers, or leads to the behavior described in the evidence.
@@ -119,7 +128,9 @@ The patterns above are abstract examples, not domain keywords. Classify by seman
 
 Chunk aggregation:
 - Aggregate evidence units back to chunk_aggregates.
-- selected is true only when the chunk has at least one evidence unit whose relation_type is not nominal_context_only or unrelated.
+- Output exactly one chunk_aggregates item for every input chunk.
+- selected is true only when the chunk has at least one evidence unit whose relation_type is one of relation types 1-7 and is concretely tied to the failure attribute text.
+- If a chunk has no failure-attribute evidence units, set selected=false, evidence_spans=[], support_capability=weak, and primary_relation=nominal_context_only or unrelated according to the strict relationship rule.
 - primary_relation priority for aggregation only:
 control_or_mitigation > detection_or_reporting > causal_mechanism > condition_match > consequence_or_effect > design_specification > trigger_or_context > nominal_context_only > unrelated
 
@@ -130,3 +141,18 @@ Input payload:
 {payload_json}
 """
 
+LOOSE_EVIDENCE_RELATION_EXTRACTION_PROMPT = EVIDENCE_RELATION_EXTRACTION_PROMPT
+# .replace(
+#     "You are a strict evidence-span extraction and relation-classification agent",
+#     "You are a evidence-span extraction and relation-classification agent",
+# )
+# .replace(
+#     "If a sentence has no meaningful relation to the query failure text, do not create an evidence unit for it.",
+#     "If a sentence has a plausible text-grounded technical relation to the query failure text, create an evidence unit even when the relation is indirect or partial. Do not create evidence units for purely generic overlap.",
+# ).replace(
+#     "Do not classify from generic word overlap alone.",
+#     "Do not classify from generic word overlap alone, but prefer weak or moderate support when the raw_text gives a reasonable technical bridge to the target condition.",
+# ).replace(
+#     "- weak: indirect but still useful text-grounded technical support.",
+#     "- weak: indirect, partial, contextual, or precursor evidence that is still text-grounded and technically useful.",
+# )

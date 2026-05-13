@@ -105,6 +105,16 @@ def test_rerank_prompt_omits_connected_chunk_groups() -> None:
     assert '"candidate_chunks"' in prompt
 
 
+def test_rerank_prompt_omits_constructed_name_reason() -> None:
+    payload = build_payload()
+    payload["candidate_chunks"][0]["name"] = "CH_SUPPORT\nReason: Retrieval rationale should not be sent."
+
+    prompt = build_rerank_prompt(payload)
+
+    assert "Retrieval rationale should not be sent" not in prompt
+    assert '"name": "CH_SUPPORT"' in prompt
+
+
 def test_lightweight_rerank_output_is_enriched_from_candidates() -> None:
     response = {
         "analysis_id": "connection-example-1",
@@ -179,6 +189,28 @@ def test_evidence_prompt_omits_connected_groups_and_stage1_reason() -> None:
     assert '"connected_chunk_groups"' not in prompt
     assert "Stage 1 reason should not be sent" not in prompt
     assert '"raw_text"' in prompt
+
+
+def test_evidence_prompt_omits_constructed_name_reason() -> None:
+    payload = {
+        "analysis_id": "connection-example-1",
+        "query_type": "function_mode",
+        "query": {"Failure mode": "incorrect artifact state"},
+        "chunks": [
+            {
+                "rank": 1,
+                "name": "CH_SUPPORT\nReason: Retrieval rationale should not be sent.",
+                "section_tag": "diagnostic response",
+                "raw_text": "The monitor reports an invalid artifact state.",
+                "rerank_tag": "support",
+            }
+        ],
+    }
+
+    prompt = build_evidence_prompt(payload)
+
+    assert "Retrieval rationale should not be sent" not in prompt
+    assert '"name": "CH_SUPPORT"' in prompt
 
 
 def test_lightweight_evidence_output_is_enriched_from_source_chunks() -> None:
@@ -330,9 +362,11 @@ if __name__ == "__main__":
     test_auto_workflow_support_suspect_irrelevant_and_multiple_units()
     test_rerank_stage_only()
     test_rerank_prompt_omits_connected_chunk_groups()
+    test_rerank_prompt_omits_constructed_name_reason()
     test_lightweight_rerank_output_is_enriched_from_candidates()
     test_extract_stage_from_existing_reranked_chunks()
     test_evidence_prompt_omits_connected_groups_and_stage1_reason()
+    test_evidence_prompt_omits_constructed_name_reason()
     test_lightweight_evidence_output_is_enriched_from_source_chunks()
     test_validation_fails_when_evidence_span_is_not_exact_substring()
     test_validation_fails_for_nominal_or_unrelated_evidence_units()

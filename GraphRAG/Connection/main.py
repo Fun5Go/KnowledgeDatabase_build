@@ -14,11 +14,15 @@ from dotenv import load_dotenv
 from DocLLM.LLMs.llm_init import configure_langsmith
 
 try:
-    from .connection_agents import json_safe
+    from .connection_agents import EvidenceRelationExtractionAgent, json_safe
     from .connection_workflow import ConnectionWorkflow
+    from .prompts import LOOSE_EVIDENCE_RELATION_EXTRACTION_PROMPT
+    from .validators import build_summary
 except ImportError:  # pragma: no cover - supports direct script execution
-    from connection_agents import json_safe
+    from connection_agents import EvidenceRelationExtractionAgent, json_safe
     from connection_workflow import ConnectionWorkflow
+    from prompts import LOOSE_EVIDENCE_RELATION_EXTRACTION_PROMPT
+    from validators import build_summary
 
 
 load_dotenv()
@@ -324,28 +328,13 @@ def normalize_candidate_chunk(
 ) -> dict[str, Any]:
     chunk = {
         "retrieval rank": normalize_int(item.get("retrieval_rank")) or retrieval_rank,
-        "name": build_candidate_name_with_reason(item, max_text_length),
+        "name": normalize_text(item.get("name")),
         "section_tag": normalize_text(item.get("section_tag")),
         "text": trim_text(item.get("text"), max_text_length),
     }
     if connected_group_id is not None:
         chunk["connected_group_id"] = connected_group_id
     return chunk
-
-
-def build_candidate_name_with_reason(item: dict[str, Any], max_text_length: int) -> str:
-    name = normalize_text(item.get("name"))
-    rationale_texts = [
-        normalize_text(text)
-        for text in item.get("rationale_texts", [])
-        if normalize_text(text)
-    ]
-    if not rationale_texts:
-        return name
-    reason_text = trim_text(" | ".join(rationale_texts), max(160, max_text_length // 3))
-    if not name:
-        return f"Reason: {reason_text}"
-    return f"{name}\nReason: {reason_text}"
 
 
 def order_evidence_by_connected_groups(evidence: Any, connected_groups: Any) -> list[dict[str, Any]]:
@@ -605,6 +594,89 @@ def run_connection_payload_file(
     return result
 
 
+def run_loose_extraction_for_rerank_dir(
+    input_dir: Path,
+    output_dir: Path | None = None,
+    batch_size: int | None = None,
+    use_placeholder_llm: bool | None = None,
+    glob_pattern: str = "rerank_*.json",
+) -> list[Path]:
+    """Run loose extraction for every saved rerank result JSON in a directory."""
+
+    print(f"[INFO] LangSmith project: {LANGSMITH_PROJECT_NAME}")
+    if not input_dir.exists():
+        raise FileNotFoundError(f"Rerank results directory not found: {input_dir}")
+    if not input_dir.is_dir():
+        raise NotADirectoryError(f"--extract-rerank-dir must be a directory: {input_dir}")
+
+    output_dir = output_dir or input_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_paths = sorted(input_dir.glob(glob_pattern))
+    if not input_paths:
+        raise FileNotFoundError(f"No rerank result JSON files matched {glob_pattern!r} in {input_dir}")
+
+    extraction_agent = EvidenceRelationExtractionAgent(
+        use_placeholder=use_placeholder_llm if use_placeholder_llm is not None else False,
+        prompt_template=LOOSE_EVIDENCE_RELATION_EXTRACTION_PROMPT,
+    )
+    workflow = ConnectionWorkflow(
+        extraction_agent=extraction_agent,
+        use_placeholder=use_placeholder_llm,
+    )
+
+    saved_paths: list[Path] = []
+    for index, input_path in enumerate(input_paths, start=1):
+        print(f"[INFO] Loose extracting {index}/{len(input_paths)}: {input_path}")
+        loaded = load_payload(input_path)
+        payloads = build_payloads_from_loaded_input(loaded, stage="extract")
+        extracted_results: list[dict[str, Any]] = []
+        for payload in payloads:
+            extract_connection = workflow.run(payload, stage="extract", batch_size=batch_size)
+            extracted_results.append(
+                build_loose_extract_pipeline_result(
+                    loaded=loaded,
+                    payload=payload,
+                    extract_connection=extract_connection,
+                )
+            )
+
+        result: Any = extracted_results[0] if len(extracted_results) == 1 else extracted_results
+        output_path = output_dir / loose_extract_filename_for_rerank(input_path)
+        save_result(result, output_path)
+        saved_paths.append(output_path)
+        print(f"[INFO] Wrote loose extraction result to: {output_path}")
+
+    return saved_paths
+
+
+def loose_extract_filename_for_rerank(input_path: Path) -> str:
+    stem = input_path.stem
+    if stem.startswith("rerank_"):
+        stem = stem[len("rerank_") :]
+    return f"loose_extract_{stem}{input_path.suffix}"
+
+
+def build_loose_extract_pipeline_result(
+    loaded: Any,
+    payload: dict[str, Any],
+    extract_connection: dict[str, Any],
+) -> dict[str, Any]:
+    original = loaded if isinstance(loaded, dict) else {}
+    connection = dict(extract_connection)
+    connection["summary"] = build_summary(
+        reranked_chunks=payload.get("reranked_chunks", []),
+        evidence_units=connection.get("evidence_units", []),
+        chunk_aggregates=connection.get("chunk_aggregates", []),
+        candidate_chunks=payload.get("candidate_chunks", []),
+    )
+    return {
+        "analysis_item": original.get("analysis_item", {}),
+        "query_result": original.get("query_result", {}),
+        "connection_payload": payload,
+        "connection": connection,
+    }
+
+
 def load_payload(input_path: Path) -> Any:
     if not input_path.exists():
         raise FileNotFoundError(f"Input payload not found: {input_path}")
@@ -809,6 +881,23 @@ def parse_args() -> argparse.Namespace:
         help="Print available structure query numbers and exit.",
     )
     parser.add_argument(
+        "--extract-rerank-dir",
+        type=Path,
+        default=None,
+        help="Batch-run loose extraction for rerank_*.json files in this directory.",
+    )
+    parser.add_argument(
+        "--extract-output-dir",
+        type=Path,
+        default=None,
+        help="Optional output directory for --extract-rerank-dir results. Defaults to the input directory.",
+    )
+    parser.add_argument(
+        "--rerank-glob",
+        default="rerank_*.json",
+        help="Glob used with --extract-rerank-dir. Defaults to rerank_*.json.",
+    )
+    parser.add_argument(
         "--stage",
         choices=["rerank", "extract", "auto"],
         default="auto",
@@ -838,6 +927,20 @@ def main() -> None:
     args = parse_args()
     if args.list_queries:
         print(json.dumps(list_query_items(), indent=2, ensure_ascii=False))
+        return
+
+    if args.extract_rerank_dir is not None:
+        saved_paths = run_loose_extraction_for_rerank_dir(
+            input_dir=args.extract_rerank_dir,
+            output_dir=args.extract_output_dir,
+            batch_size=args.batch_size,
+            use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,
+            glob_pattern=args.rerank_glob,
+        )
+        print(
+            "[INFO] Wrote loose extraction result file(s): "
+            + ", ".join(str(path) for path in saved_paths)
+        )
         return
 
     output_path = args.output or output_path_with_query_number(

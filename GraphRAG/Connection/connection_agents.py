@@ -273,7 +273,7 @@ def build_rerank_prompt_payload(payload: dict[str, Any]) -> dict[str, Any]:
             continue
         prompt_candidate = {
             "retrieval rank": candidate.get("retrieval rank"),
-            "name": candidate.get("name", ""),
+            "name": strip_constructed_reason_from_name(candidate.get("name", "")),
             "section_tag": candidate.get("section_tag", ""),
             "text": candidate.get("text", ""),
         }
@@ -298,13 +298,23 @@ def build_evidence_prompt_payload(payload: dict[str, Any]) -> dict[str, Any]:
         prompt_payload["chunks"].append(
             {
                 "rank": chunk.get("rank"),
-                "name": chunk.get("name", ""),
+                "name": strip_constructed_reason_from_name(chunk.get("name", "")),
                 "section_tag": chunk.get("section_tag", ""),
                 "raw_text": chunk.get("raw_text", ""),
                 "rerank_tag": chunk.get("rerank_tag", "unknown"),
             }
         )
     return prompt_payload
+
+
+def strip_constructed_reason_from_name(value: Any) -> str:
+    name = normalize_text(value)
+    marker = "\nReason:"
+    if marker in name:
+        return name.split(marker, 1)[0].strip()
+    if name.startswith("Reason:"):
+        return ""
+    return name
 
 
 def normalize_evidence_response(response: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
