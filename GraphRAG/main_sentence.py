@@ -748,7 +748,7 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-    Overvoltage due to motor disconnect
+    false turn-on / turn-off
     """
 
     retriever = FMEASentenceRetrieverV2()
@@ -758,8 +758,8 @@ def main():
         result = query_doc_chunks_for_sentence(
             retriever=retriever,
             query_spec=query_spec,
-            top_k=25,
-            per_label_k=40,
+            top_k=30,
+            per_label_k=60,
             retrieval_mode="dense",
             disciplines=None,
             use_cross_encoder_rerank=False,

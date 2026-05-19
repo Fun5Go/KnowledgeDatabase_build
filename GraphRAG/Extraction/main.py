@@ -34,6 +34,7 @@ LANGSMITH_PROJECT_NAME = configure_langsmith(
 )
 
 DEFAULT_OUTPUT_PATH = Path(__file__).resolve().parent / "chunk_selection_results.json"
+DEFAULT_ONEPROCESS_OUTPUT_DIR = Path(__file__).resolve().parent / "select_2"
 
 structure_input_motorcontrol = {
     "product_domain": "motor_drives",
@@ -355,6 +356,7 @@ def run_chunk_selection_pipeline(
     output_path: Path = DEFAULT_OUTPUT_PATH,
     use_placeholder_llm: bool | None = None,
     query_number: int | None = None,
+    oneprocess_output_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Loop structure items, retrieve candidate chunks, and call the LLM agent."""
 
@@ -372,6 +374,9 @@ def run_chunk_selection_pipeline(
     analysis_items = list(iter_structure_analysis_items())
     if query_number is not None:
         analysis_items = [get_query_item_by_number(query_number, analysis_items)]
+    used_oneprocess_names: set[str] = set()
+    if oneprocess_output_dir is not None:
+        oneprocess_output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         for index, analysis_item in enumerate(analysis_items, start=1):
@@ -379,13 +384,19 @@ def run_chunk_selection_pipeline(
                 f"[INFO] Processing query {index}/{len(analysis_items)}: "
                 f"{analysis_item.get('analysis_id', '')}"
             )
-            results.append(
-                run_chunk_selection_for_item(
-                    retriever=retriever,
-                    agent=agent,
-                    analysis_item=analysis_item,
-                )
+            result = run_chunk_selection_for_item(
+                retriever=retriever,
+                agent=agent,
+                analysis_item=analysis_item,
             )
+            results.append(result)
+            if oneprocess_output_dir is not None:
+                saved_path = save_oneprocess_result(
+                    result,
+                    oneprocess_output_dir,
+                    used_names=used_oneprocess_names,
+                )
+                print(f"[INFO] Wrote oneprocess result file: {saved_path}")
     finally:
         retriever.close()
 
@@ -429,6 +440,60 @@ def save_results(results: list[dict[str, Any]], output_path: Path) -> None:
         json.dumps(json_safe(results), indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+
+def save_oneprocess_result(
+    result: dict[str, Any],
+    output_dir: Path = DEFAULT_ONEPROCESS_OUTPUT_DIR,
+    used_names: set[str] | None = None,
+) -> Path:
+    """Save one structure-query result as oneprocess_<query text>.json."""
+
+    analysis_item = result.get("analysis_item") if isinstance(result, dict) else {}
+    if not isinstance(analysis_item, dict):
+        analysis_item = {}
+    filename_text = slugify_filename_part(
+        build_query_text(analysis_item) or normalize_text(analysis_item.get("analysis_id")) or "query"
+    )
+    output_path = unique_output_path(
+        output_dir,
+        f"oneprocess_{filename_text}.json",
+        used_names if used_names is not None else set(),
+    )
+    save_results([result], output_path)
+    return output_path
+
+
+def slugify_filename_part(value: str, max_length: int = 120) -> str:
+    """Convert query text into a Windows-friendly filename part."""
+
+    slug_chars: list[str] = []
+    previous_was_separator = False
+    for char in normalize_text(value).lower():
+        if char.isalnum():
+            slug_chars.append(char)
+            previous_was_separator = False
+        elif not previous_was_separator:
+            slug_chars.append("_")
+            previous_was_separator = True
+    slug = "".join(slug_chars).strip("_")
+    if not slug:
+        return "query"
+    return slug[:max_length].rstrip("_") or "query"
+
+
+def unique_output_path(output_dir: Path, filename: str, used_names: set[str]) -> Path:
+    """Avoid duplicate filenames within one automatic run."""
+
+    path = output_dir / filename
+    stem = path.stem
+    suffix = path.suffix
+    index = 2
+    while path.name in used_names:
+        path = output_dir / f"{stem}_{index}{suffix}"
+        index += 1
+    used_names.add(path.name)
+    return path
 
 
 def output_path_with_query_number(output_path: Path, query_number: int | None) -> Path:
@@ -476,6 +541,17 @@ def parse_args() -> argparse.Namespace:
         help="Path for the JSON output file.",
     )
     parser.add_argument(
+        "--save-oneprocess",
+        action="store_true",
+        help="Also save one JSON file per structure query as oneprocess_<query text>.json.",
+    )
+    parser.add_argument(
+        "--oneprocess-output-dir",
+        type=Path,
+        default=DEFAULT_ONEPROCESS_OUTPUT_DIR,
+        help="Directory for --save-oneprocess files. Defaults to GraphRAG/Extraction/select_2.",
+    )
+    parser.add_argument(
         "--placeholder-llm",
         action="store_true",
         help="Use the local placeholder selector instead of calling an LLM.",
@@ -500,6 +576,7 @@ def main() -> None:
         output_path=output_path,
         use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,
         query_number=args.query_number,
+        oneprocess_output_dir=args.oneprocess_output_dir if args.save_oneprocess else None,
     )
 
 
