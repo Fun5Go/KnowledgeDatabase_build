@@ -249,7 +249,7 @@ class FMEARecallKGBuilderV2:
         )
         return file_name
 
-    def merge_element(self, session, content: Dict[str, Any], rpn: Dict[str, Any]) -> Optional[str]:
+    def merge_element(self, session, content: Dict[str, Any]) -> Optional[str]:
         text = safe_text(content.get("system_element") or content.get("process_step"))
         if not text:
             return None
@@ -260,12 +260,11 @@ class FMEARecallKGBuilderV2:
             MERGE (e:Element {semantic_id:$id})
             SET e.text = $text,
                 e.name = $text,
-                e.severity = $severity,
+                e.severity = null,
                 e.embedding = $embedding
             """,
             id=node_id,
             text=text,
-            severity=safe_number(rpn.get("severity")),
             embedding=embed(f"Element: {text}"),
         )
         return node_id
@@ -537,7 +536,7 @@ class FMEARecallKGBuilderV2:
                 if product_pnid is not None and file_name:
                     self.link_product_document(session, product_pnid, file_name)
 
-                element_id = self.merge_element(session, content, rpn)
+                element_id = self.merge_element(session, content)
                 if not element_id:
                     skipped["element"] += 1
                 elif file_name:
@@ -568,6 +567,7 @@ class FMEARecallKGBuilderV2:
                     "effect",
                     effect_text,
                     count=effect_counts.get(text_key(effect_text), 0) if effect_text else None,
+                    extra={"severity": safe_number(rpn.get("severity"))},
                 )
                 if not effect_id:
                     skipped["effect"] += 1

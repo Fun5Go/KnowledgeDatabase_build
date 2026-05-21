@@ -232,7 +232,7 @@ def iter_structure_analysis_items() -> Iterable[dict[str, Any]]:
 
 
 def build_function_mode_query_text(function_text: str, mode_text: str) -> str:
-    return f"{function_text} with {mode_text}"
+    return f"{mode_text} in {function_text}  "
 
 
 def build_cause_query_text(cause_text: str, discipline: str) -> str:
@@ -240,7 +240,7 @@ def build_cause_query_text(cause_text: str, discipline: str) -> str:
 
 
 def build_effect_query_text(function_text: str, effect_text: str) -> str:
-    return f"{function_text} with effect {effect_text}"
+    return effect_text
 
 
 def build_query_text(analysis_item: dict[str, Any]) -> str:
@@ -455,12 +455,12 @@ def normalize_connected_chunk_groups(
 def run_retrieval_for_analysis_item(
     retriever: Any,
     analysis_item: dict[str, Any],
-    top_k: int = 30,
-    per_label_k: int = 60,
+    top_k: int = 60,
+    per_label_k: int = 80,
     retrieval_mode: str = "dense",
     use_cross_encoder_rerank: bool = False,
     cross_encoder_top_n: int = 30,
-    use_section_tag_bonus: bool = True,
+    use_section_tag_bonus: bool = False,
     section_bonus_mode: str = "hybrid",
     section_bonus_weight: float = 0.000,
 ) -> dict[str, Any]:
@@ -520,6 +520,7 @@ def run_connection_for_item(
 
 def run_connection_pipeline(
     output_path: Path = DEFAULT_OUTPUT_PATH,
+    output_dir: Path | None = None,
     stage: Literal["rerank", "extract", "auto"] = "auto",
     batch_size: int | None = None,
     use_placeholder_llm: bool | None = None,
@@ -540,6 +541,10 @@ def run_connection_pipeline(
     auto_results_dir = output_path.parent / DEFAULT_RESULTS_DIR_NAME if stage == "auto" else None
     if auto_results_dir is not None:
         auto_results_dir.mkdir(parents=True, exist_ok=True)
+    stage_output_dir = output_dir if stage in {"rerank", "extract"} else None
+    stage_output_names: set[str] = set()
+    if stage_output_dir is not None:
+        stage_output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         for index, analysis_item in enumerate(analysis_items, start=1):
@@ -561,11 +566,25 @@ def run_connection_pipeline(
                     "[INFO] Wrote auto stage result file(s): "
                     + ", ".join(str(path) for path in saved_paths)
                 )
+            if stage_output_dir is not None:
+                saved_path = save_single_stage_result(
+                    result,
+                    stage_output_dir,
+                    stage,
+                    stage_output_names,
+                )
+                print(f"[INFO] Wrote {stage} stage result file: {saved_path}")
     finally:
         retriever.close()
 
     if stage == "auto":
         print(f"[INFO] Wrote auto stage result files to: {auto_results_dir}")
+        return results
+
+    if output_dir is not None:
+        print(
+            f"[INFO] Wrote {len(results)} {stage} stage result file(s) to: {output_dir}"
+        )
         return results
 
     save_result(results, output_path)
@@ -749,6 +768,48 @@ def save_auto_stage_results(results: list[dict[str, Any]], results_dir: Path) ->
     return saved_paths
 
 
+def save_stage_results(
+    results: list[dict[str, Any]],
+    results_dir: Path,
+    stage: Literal["rerank", "extract"],
+) -> list[Path]:
+    """Save one stage output JSON file per query text."""
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+    saved_paths: list[Path] = []
+    used_names: set[str] = set()
+
+    for result in results:
+        output_path = save_single_stage_result(result, results_dir, stage, used_names)
+        saved_paths.append(output_path)
+
+    return saved_paths
+
+
+def save_single_stage_result(
+    result: dict[str, Any],
+    results_dir: Path,
+    stage: Literal["rerank", "extract"],
+    used_names: set[str],
+) -> Path:
+    """Save one stage output JSON file for one query text."""
+
+    analysis_item = result.get("analysis_item") if isinstance(result, dict) else {}
+    if not isinstance(analysis_item, dict):
+        analysis_item = {}
+    query_text = build_query_text(analysis_item) or normalize_text(
+        analysis_item.get("analysis_id")
+    )
+    filename_text = slugify_filename_part(query_text or "query")
+    output_path = unique_output_path(
+        results_dir,
+        f"{stage}_{filename_text}.json",
+        used_names,
+    )
+    save_result(result, output_path)
+    return output_path
+
+
 def build_auto_stage_result(
     result: dict[str, Any],
     stage: Literal["rerank", "extract"],
@@ -906,7 +967,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=None,
+        default=30,
         help="Override Connection workflow batch size.",
     )
     parser.add_argument(
@@ -914,6 +975,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Path for the JSON output file.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory for one JSON output file per structure query.",
     )
     parser.add_argument(
         "--placeholder-llm",
@@ -960,6 +1027,7 @@ def main() -> None:
 
     run_connection_pipeline(
         output_path=output_path,
+        output_dir=args.output_dir,
         stage=args.stage,
         batch_size=args.batch_size,
         use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,

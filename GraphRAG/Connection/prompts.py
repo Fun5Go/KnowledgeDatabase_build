@@ -28,10 +28,6 @@ Rerank tags:
 - suspect: raw_text contains possible implicit, indirect, contextual, or partial relevance.
 - irrelevant: raw_text does not contain meaningful technical evidence for the target condition.
 
-High-recall behavior:
-- If uncertain between suspect and irrelevant, choose suspect only when raw_text has a concrete technical bridge to the failure attribute.
-- If uncertain between support and suspect, choose suspect unless the evidence is explicit.
-- Keep irrelevant for generic overlap, unrelated subsystems, and nominal text without a useful technical bridge.
 
 For function_mode, the Function field is context only. A chunk must contain evidence about the Failure mode or a technically linked precursor/control/detection/effect for that Failure mode.
 For cause, Discipline is context only. A chunk must contain evidence about the Failure cause or a concrete mechanism/condition tied to that cause.

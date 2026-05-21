@@ -434,8 +434,16 @@ class ChunkSelectionAgent:
         self,
         query_result: dict[str, Any],
         analysis_item: dict[str, Any] | None = None,
+        batch_size: int | None = None,
     ) -> dict[str, Any]:
         """Select chunks from a GraphRAG query result."""
+
+        if batch_size is not None:
+            return self.select_chunks_in_batches(
+                query_result=query_result,
+                analysis_item=analysis_item,
+                batch_size=batch_size,
+            )
 
         payload = build_agent_payload(query_result=query_result, analysis_item=analysis_item)
         if self.use_placeholder:
@@ -444,6 +452,44 @@ class ChunkSelectionAgent:
         prompt = build_prompt(payload, self.prompt_template_text)
         content = self._invoke_model(prompt)
         return normalize_selection_response(extract_json(content), payload)
+
+    def select_chunks_in_batches(
+        self,
+        query_result: dict[str, Any],
+        analysis_item: dict[str, Any] | None,
+        batch_size: int,
+    ) -> dict[str, Any]:
+        """Select chunks by splitting candidate chunks across multiple prompts."""
+
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive.")
+
+        payload = build_agent_payload(
+            query_result=query_result,
+            analysis_item=analysis_item,
+            max_prompt_input_tokens=0,
+        )
+        batch_payloads = build_batched_agent_payloads(payload, batch_size)
+        selections: list[dict[str, Any]] = []
+        for batch_payload in batch_payloads:
+            limited_payload = enforce_prompt_input_token_limit(
+                batch_payload,
+                MAX_PROMPT_INPUT_TOKENS,
+            )
+            if self.use_placeholder:
+                selections.append(self._placeholder_response(limited_payload))
+                continue
+
+            prompt = build_prompt(limited_payload, self.prompt_template_text)
+            content = self._invoke_model(prompt)
+            selections.append(normalize_selection_response(extract_json(content), limited_payload))
+
+        return merge_batched_selection_responses(
+            selections,
+            payload,
+            batch_size=batch_size,
+            batch_count=len(batch_payloads),
+        )
 
     @traceable(
         run_type="llm",
@@ -546,6 +592,80 @@ def normalize_selection_response(response: dict[str, Any], payload: dict[str, An
         "top_chunks": normalized_chunks,
         "affected_objects": normalize_top_level_terms(response.get("affected_objects"), selected_texts),
         "causal_subjects": normalize_top_level_terms(response.get("causal_subjects"), selected_texts),
+    }
+
+
+def build_batched_agent_payloads(
+    payload: dict[str, Any],
+    batch_size: int,
+) -> list[dict[str, Any]]:
+    """Split one full agent payload into prompt-sized candidate batches."""
+
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+
+    candidates = [
+        candidate
+        for candidate in payload.get("candidate_chunks", [])
+        if isinstance(candidate, dict)
+    ]
+    if not candidates:
+        return [dict(payload)]
+
+    batch_payloads: list[dict[str, Any]] = []
+    batch_count = (len(candidates) + batch_size - 1) // batch_size
+    for index, start in enumerate(range(0, len(candidates), batch_size), start=1):
+        batch_candidates = candidates[start : start + batch_size]
+        batch_payload = dict(payload)
+        batch_payload["candidate_chunks"] = batch_candidates
+        batch_payload["connected_chunk_groups"] = filter_connected_chunk_groups(
+            payload.get("connected_chunk_groups", {}),
+            batch_candidates,
+        )
+        batch_payload["candidate_batch"] = {
+            "index": index,
+            "count": batch_count,
+            "start_rank": batch_candidates[0].get("retrieval rank", start + 1),
+            "end_rank": batch_candidates[-1].get("retrieval rank", start + len(batch_candidates)),
+        }
+        batch_payloads.append(batch_payload)
+    return batch_payloads
+
+
+def merge_batched_selection_responses(
+    selections: list[dict[str, Any]],
+    payload: dict[str, Any],
+    batch_size: int,
+    batch_count: int,
+) -> dict[str, Any]:
+    """Merge per-prompt selections into the normal selection response shape."""
+
+    chunks_by_rank: dict[int, dict[str, Any]] = {}
+    affected_objects: list[str] = []
+    causal_subjects: list[str] = []
+    for selection in selections:
+        for chunk in selection.get("top_chunks", []):
+            if not isinstance(chunk, dict):
+                continue
+            rank = normalize_int(chunk.get("rank"))
+            if rank is None or rank in chunks_by_rank:
+                continue
+            chunks_by_rank[rank] = chunk
+        affected_objects.extend(
+            term for term in selection.get("affected_objects", []) if isinstance(term, str)
+        )
+        causal_subjects.extend(
+            term for term in selection.get("causal_subjects", []) if isinstance(term, str)
+        )
+
+    return {
+        "analysis_id": normalize_text(payload.get("analysis_id")),
+        "query_type": normalize_text(payload.get("query_type")),
+        "top_chunks": [chunks_by_rank[rank] for rank in sorted(chunks_by_rank)],
+        "affected_objects": unique_preserve_order(affected_objects),
+        "causal_subjects": unique_preserve_order(causal_subjects),
+        "batch_size": batch_size,
+        "batch_count": batch_count,
     }
 
 

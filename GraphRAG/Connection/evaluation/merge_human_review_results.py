@@ -16,9 +16,9 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CONNECTION_DIR = SCRIPT_DIR.parent
-RESULTS_DIR = CONNECTION_DIR / "results"
+RESULTS_DIR = CONNECTION_DIR / "extract_top60_integrated_nohighrecall_batch30"
 OUTPUT_PATH = SCRIPT_DIR / "human_review_merged_results.json"
-PER_QUERY_DIR = SCRIPT_DIR / "human_review_by_query"
+PER_QUERY_DIR = SCRIPT_DIR / "human_review_by_query_top60_integrated"
 
 HUMAN_REVIEW_KEYS = [
     "rerank_tag_correct",
@@ -194,6 +194,15 @@ def chunk_key(chunk: dict[str, Any]) -> tuple[str, str]:
     return ("rank", str(rank))
 
 
+def chunk_name_from_sources(*chunks: dict[str, Any] | None) -> Any:
+    for chunk in chunks:
+        if isinstance(chunk, dict):
+            name = first_present(chunk, ["name", "chunk_id", "node_id"])
+            if name is not None:
+                return name
+    return None
+
+
 def wrap_raw_text(text: str, width: int = 100) -> list[str]:
     lines: list[str] = []
     for paragraph in str(text or "").splitlines():
@@ -252,6 +261,7 @@ def review_chunk(rerank_chunk: dict[str, Any] | None, aggregate_chunk: dict[str,
 
     return {
         "rank": first_present(source, ["rank", "retrieval_rank", "retrieval rank"]),
+        "name": chunk_name_from_sources(rerank_chunk, aggregate_chunk),
         "raw_text": wrap_raw_text(raw_text),
         "rerank_tag": first_present(source, ["rerank_tag"]),
         "reason": first_present(source, ["reason"]),

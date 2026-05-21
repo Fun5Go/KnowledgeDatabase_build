@@ -385,12 +385,18 @@ def run_qd_detection_control_for_item(
     retriever: Any,
     agent: QDDetectionControlAgent,
     analysis_item: dict[str, Any],
+    top_k: int = 20,
+    per_label_k: int = 30,
+    retrieval_mode: str = "hybrid",
 ) -> dict[str, Any]:
     """Run QD-only retrieval and select up to three detection-control chunks."""
 
     query_result = run_qd_retrieval_for_analysis_item(
         retriever=retriever,
         analysis_item=analysis_item,
+        top_k=top_k,
+        per_label_k=per_label_k,
+        retrieval_mode=retrieval_mode,
     )
     selection = agent.select_detection_control(
         query_result=query_result,
@@ -414,6 +420,9 @@ def run_qd_detection_control_pipeline(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     use_placeholder_llm: bool | None = None,
     query_number: int | None = None,
+    top_k: int = 20,
+    per_label_k: int = 30,
+    retrieval_mode: str = "hybrid",
 ) -> list[dict[str, Any]]:
     """Loop all mode/cause/effect items and save each QD result separately."""
 
@@ -443,6 +452,9 @@ def run_qd_detection_control_pipeline(
                 retriever=retriever,
                 agent=agent,
                 analysis_item=analysis_item,
+                top_k=top_k,
+                per_label_k=per_label_k,
+                retrieval_mode=retrieval_mode,
             )
             item_output_path = output_path_for_analysis_item(
                 output_dir=output_dir,
@@ -492,6 +504,24 @@ def parse_args() -> argparse.Namespace:
         help="Directory for per-query qd_connection_<text>.json output files.",
     )
     parser.add_argument(
+        "--top-k",
+        type=int,
+        default=20,
+        help="Final number of retrieved QD/FAT candidates passed to the selector.",
+    )
+    parser.add_argument(
+        "--per-label-k",
+        type=int,
+        default=30,
+        help="Number of candidates to retrieve per QD/FAT label before final ranking.",
+    )
+    parser.add_argument(
+        "--retrieval-mode",
+        choices=["dense", "sparse", "hybrid"],
+        default="hybrid",
+        help="QD/FAT retrieval mode.",
+    )
+    parser.add_argument(
         "--placeholder-llm",
         action="store_true",
         help="Use the local placeholder selector instead of calling an LLM.",
@@ -512,6 +542,9 @@ def main() -> None:
         output_dir=args.output_dir,
         use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,
         query_number=args.query_number,
+        top_k=args.top_k,
+        per_label_k=args.per_label_k,
+        retrieval_mode=args.retrieval_mode,
     )
 
 

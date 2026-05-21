@@ -54,6 +54,37 @@ def query_doc_chunks_for_sentence(
     dense_queries = build_dense_queries(query_spec)
     sparse_queries = build_sparse_queries(retriever, query_spec)
 
+    if retrieval_mode == "dense":
+        return query_doc_chunks_for_sentence_by_dense_score(
+            retriever=retriever,
+            query_spec=query_spec,
+            top_k=top_k,
+            per_label_k=per_label_k,
+            disciplines=disciplines,
+            use_cross_encoder_rerank=use_cross_encoder_rerank,
+            cross_encoder_scorer=cross_encoder_scorer,
+            cross_encoder_top_n=cross_encoder_top_n,
+            use_section_tag_bonus=use_section_tag_bonus,
+            section_bonus_mode=section_bonus_mode,
+            section_bonus_weight=section_bonus_weight,
+            is_QD=is_QD,
+        )
+    if retrieval_mode == "sparse":
+        return query_doc_chunks_for_sentence_by_sparse_score(
+            retriever=retriever,
+            query_spec=query_spec,
+            top_k=top_k,
+            per_label_k=per_label_k,
+            disciplines=disciplines,
+            use_cross_encoder_rerank=use_cross_encoder_rerank,
+            cross_encoder_scorer=cross_encoder_scorer,
+            cross_encoder_top_n=cross_encoder_top_n,
+            use_section_tag_bonus=use_section_tag_bonus,
+            section_bonus_mode=section_bonus_mode,
+            section_bonus_weight=section_bonus_weight,
+            is_QD=is_QD,
+        )
+
     result_sets: List[List[Dict[str, Any]]] = []
     for spec in build_search_specs(retriever, is_QD=is_QD):
         label = spec["label"]
@@ -159,6 +190,266 @@ def query_doc_chunks_for_sentence(
             evidence_relationships,
         ),
     }
+
+
+def query_doc_chunks_for_sentence_by_dense_score(
+    retriever: FMEASentenceRetrieverV2,
+    query_spec: Dict[str, Any],
+    top_k: int = 8,
+    per_label_k: int = 20,
+    disciplines: Any = None,
+    use_cross_encoder_rerank: bool = False,
+    cross_encoder_scorer: Optional[CrossEncoderScorer] = None,
+    cross_encoder_top_n: int = 20,
+    use_section_tag_bonus: bool = True,
+    section_bonus_mode: str = "hybrid",
+    section_bonus_weight: float = 0.05,
+    is_QD: bool = False,
+) -> Dict[str, Any]:
+    """Dense retrieval that compares FS/TS/Rationale chunks by raw retrieval score.
+
+    The older dense path retrieves per label and then uses RRF, which makes the
+    top item from each label receive the same base score. This interface still
+    queries the label-specific indexes, but merges all returned chunks by their
+    dense similarity score before taking the final top_k.
+    """
+
+    section_bonus_mode = retriever._normalize_retrieval_mode(section_bonus_mode)
+    allowed_labels = normalize_discipline_labels(disciplines)
+    dense_queries = build_dense_queries(query_spec)
+
+    candidates_by_node_id: Dict[str, Dict[str, Any]] = {}
+    for spec in build_search_specs(retriever, is_QD=is_QD):
+        label = spec["label"]
+        vector_index_name = spec["vector_index_name"]
+        text_property = spec["text_property"]
+        title_property = spec.get("title_property", "")
+        id_property = spec.get("id_property", "")
+
+        for query_text in dense_queries:
+            if label in {"QDChunk", "FATChunk"}:
+                rows = dense_search_qualification_chunks(
+                    retriever=retriever,
+                    query_text=query_text,
+                    label=label,
+                    vector_index_name=vector_index_name,
+                    title_property=title_property,
+                    text_property=text_property,
+                    id_property=id_property,
+                    top_k=per_label_k,
+                )
+            else:
+                rows = retriever.dense_search_chunks(
+                    query_text=query_text,
+                    label=label,
+                    vector_index_name=vector_index_name,
+                    top_k=per_label_k,
+                    text_property=text_property,
+                )
+            rows = filter_rows_by_labels(rows, allowed_labels, label=label)
+            for rank, row in enumerate(rows, start=1):
+                row["label"] = label
+                row["retrieval_source"] = "dense_score"
+                row["retrieval_query"] = query_text
+                row["retrieval_rank_within_label"] = rank
+                keep_best_dense_candidate(candidates_by_node_id, row)
+
+    ranked = sort_dense_score_candidates(list(candidates_by_node_id.values()))
+    if use_cross_encoder_rerank:
+        if cross_encoder_scorer is None:
+            cross_encoder_scorer = retriever.build_local_cross_encoder()
+        ranked = cross_encoder_rerank_sentence_candidates(
+            query_spec=query_spec,
+            candidates=ranked,
+            cross_encoder_scorer=cross_encoder_scorer,
+            top_n=cross_encoder_top_n,
+        )
+        ranked = ranked[:cross_encoder_top_n]
+
+    if use_section_tag_bonus:
+        ranked = apply_section_tag_bonus(
+            retriever=retriever,
+            query_spec=query_spec,
+            candidates=ranked,
+            bonus_mode=section_bonus_mode,
+            bonus_weight=section_bonus_weight,
+        )
+
+    evidence = package_top_k_candidates(retriever, ranked[:top_k])
+    evidence_relationships = fetch_retrieved_chunk_relationships(retriever, evidence)
+    evidence = attach_retrieved_rationales_to_evidence(evidence, evidence_relationships)
+
+    return {
+        "query_spec": query_spec,
+        "dense_queries": dense_queries,
+        "sparse_queries": [],
+        "retrieval_scoring": "dense_score",
+        "rerank_modes": {
+            "cross_encoder": use_cross_encoder_rerank,
+            "cross_encoder_top_n": cross_encoder_top_n if use_cross_encoder_rerank else 0,
+            "section_tag_bonus": use_section_tag_bonus,
+            "section_bonus_mode": section_bonus_mode if use_section_tag_bonus else "",
+            "section_bonus_weight": section_bonus_weight if use_section_tag_bonus else 0.0,
+            "QD": is_QD,
+        },
+        "evidence": evidence,
+        "evidence_relationships": evidence_relationships,
+        "connected_evidence_groups": build_connected_evidence_groups(
+            evidence,
+            evidence_relationships,
+        ),
+    }
+
+
+def query_doc_chunks_for_sentence_by_sparse_score(
+    retriever: FMEASentenceRetrieverV2,
+    query_spec: Dict[str, Any],
+    top_k: int = 8,
+    per_label_k: int = 20,
+    disciplines: Any = None,
+    use_cross_encoder_rerank: bool = False,
+    cross_encoder_scorer: Optional[CrossEncoderScorer] = None,
+    cross_encoder_top_n: int = 20,
+    use_section_tag_bonus: bool = True,
+    section_bonus_mode: str = "hybrid",
+    section_bonus_weight: float = 0.05,
+    is_QD: bool = False,
+) -> Dict[str, Any]:
+    """Sparse retrieval that compares FS/TS/Rationale chunks by raw sparse score."""
+
+    section_bonus_mode = retriever._normalize_retrieval_mode(section_bonus_mode)
+    allowed_labels = normalize_discipline_labels(disciplines)
+    sparse_queries = build_sparse_queries(retriever, query_spec)
+
+    candidates_by_node_id: Dict[str, Dict[str, Any]] = {}
+    for spec in build_search_specs(retriever, is_QD=is_QD):
+        label = spec["label"]
+        fulltext_index_name = spec["fulltext_index_name"]
+        text_property = spec["text_property"]
+        title_property = spec.get("title_property", "")
+        id_property = spec.get("id_property", "")
+
+        for lucene_query in sparse_queries:
+            if label in {"QDChunk", "FATChunk"}:
+                rows = sparse_search_qualification_chunks(
+                    retriever=retriever,
+                    lucene_query=lucene_query,
+                    label=label,
+                    fulltext_index_name=fulltext_index_name,
+                    title_property=title_property,
+                    text_property=text_property,
+                    id_property=id_property,
+                    top_k=per_label_k,
+                )
+            else:
+                rows = retriever.sparse_search_chunks(
+                    lucene_query=lucene_query,
+                    label=label,
+                    fulltext_index_name=fulltext_index_name,
+                    top_k=per_label_k,
+                    text_property=text_property,
+                )
+            rows = filter_rows_by_labels(rows, allowed_labels, label=label)
+            for rank, row in enumerate(rows, start=1):
+                row["label"] = label
+                row["retrieval_source"] = "sparse_score"
+                row["retrieval_query"] = lucene_query
+                row["retrieval_rank_within_label"] = rank
+                keep_best_score_candidate(candidates_by_node_id, row, score_name="sparse_score")
+
+    ranked = sort_score_candidates(list(candidates_by_node_id.values()))
+    if use_cross_encoder_rerank:
+        if cross_encoder_scorer is None:
+            cross_encoder_scorer = retriever.build_local_cross_encoder()
+        ranked = cross_encoder_rerank_sentence_candidates(
+            query_spec=query_spec,
+            candidates=ranked,
+            cross_encoder_scorer=cross_encoder_scorer,
+            top_n=cross_encoder_top_n,
+        )
+        ranked = ranked[:cross_encoder_top_n]
+
+    if use_section_tag_bonus:
+        ranked = apply_section_tag_bonus(
+            retriever=retriever,
+            query_spec=query_spec,
+            candidates=ranked,
+            bonus_mode=section_bonus_mode,
+            bonus_weight=section_bonus_weight,
+        )
+
+    evidence = package_top_k_candidates(retriever, ranked[:top_k])
+    evidence_relationships = fetch_retrieved_chunk_relationships(retriever, evidence)
+    evidence = attach_retrieved_rationales_to_evidence(evidence, evidence_relationships)
+
+    return {
+        "query_spec": query_spec,
+        "dense_queries": [],
+        "sparse_queries": sparse_queries,
+        "retrieval_scoring": "sparse_score",
+        "rerank_modes": {
+            "cross_encoder": use_cross_encoder_rerank,
+            "cross_encoder_top_n": cross_encoder_top_n if use_cross_encoder_rerank else 0,
+            "section_tag_bonus": use_section_tag_bonus,
+            "section_bonus_mode": section_bonus_mode if use_section_tag_bonus else "",
+            "section_bonus_weight": section_bonus_weight if use_section_tag_bonus else 0.0,
+            "QD": is_QD,
+        },
+        "evidence": evidence,
+        "evidence_relationships": evidence_relationships,
+        "connected_evidence_groups": build_connected_evidence_groups(
+            evidence,
+            evidence_relationships,
+        ),
+    }
+
+
+def keep_best_dense_candidate(
+    candidates_by_node_id: Dict[str, Dict[str, Any]],
+    row: Dict[str, Any],
+) -> None:
+    keep_best_score_candidate(candidates_by_node_id, row, score_name="dense_score")
+
+
+def keep_best_score_candidate(
+    candidates_by_node_id: Dict[str, Dict[str, Any]],
+    row: Dict[str, Any],
+    score_name: str,
+) -> None:
+    node_id = str(row.get("node_id", ""))
+    if not node_id:
+        return
+
+    score = float(row.get("score", 0.0))
+    existing = candidates_by_node_id.get(node_id)
+    if existing is not None and float(existing.get("score", 0.0)) >= score:
+        return
+
+    candidate = dict(row)
+    candidate["score_breakdown"] = {
+        score_name: score,
+        "retrieval_source": score_name,
+        "retrieval_query": row.get("retrieval_query", ""),
+        "retrieval_rank_within_label": row.get("retrieval_rank_within_label"),
+    }
+    candidate["base_score"] = score
+    candidate["final_score"] = score
+    candidates_by_node_id[node_id] = candidate
+
+
+def sort_dense_score_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sort_score_candidates(candidates)
+
+
+def sort_score_candidates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return sorted(
+        candidates,
+        key=lambda item: (
+            float(item.get("final_score", item.get("score", 0.0))),
+            -int(item.get("retrieval_rank_within_label") or 0),
+        ),
+        reverse=True,
+    )
 
 
 def build_search_specs(
@@ -748,7 +1039,7 @@ def dedupe_preserve_order(values: List[str]) -> List[str]:
 
 def main():
     requirement_sentence = """
-    false turn-on / turn-off
+    (Starting) Motor current too high for chosen components
     """
 
     retriever = FMEASentenceRetrieverV2()
@@ -758,16 +1049,16 @@ def main():
         result = query_doc_chunks_for_sentence(
             retriever=retriever,
             query_spec=query_spec,
-            top_k=30,
-            per_label_k=60,
+            top_k=20,
+            per_label_k=80,
             retrieval_mode="dense",
             disciplines=None,
             use_cross_encoder_rerank=False,
             cross_encoder_top_n=50,
-            use_section_tag_bonus=True,
+            use_section_tag_bonus=False,
             section_bonus_mode="hybrid",
             section_bonus_weight=0.00,
-            is_QD=False,
+            is_QD=True,
         )
         print_doc_chunk_results(result)
     finally:

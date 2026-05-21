@@ -199,7 +199,7 @@ def build_structure_query_items(structure_input: dict[str, Any]) -> list[dict[st
 def build_function_mode_query_text(function_text: str, mode_text: str) -> str:
     """Format the retrieval query for Function text + failure mode text."""
 
-    return f"{function_text} with {mode_text}"
+    return f"{mode_text} in {function_text}"
 
 
 def build_cause_query_text(cause_text: str, discipline: str) -> str:
@@ -278,12 +278,12 @@ def redact_runtime_trace_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 def run_retrieval_for_analysis_item(
     retriever: Any,
     analysis_item: dict[str, Any],
-    top_k: int = 30,
-    per_label_k: int = 60,
-    retrieval_mode: str = "hybrid",
+    top_k: int = 60,
+    per_label_k: int = 100,
+    retrieval_mode: str = "dense",
     use_cross_encoder_rerank: bool = False,
     cross_encoder_top_n: int = 30,
-    use_section_tag_bonus: bool = True,
+    use_section_tag_bonus: bool = False,
     section_bonus_mode: str = "hybrid",
     section_bonus_weight: float = 0.005,
 ) -> dict[str, Any]:
@@ -328,6 +328,7 @@ def run_chunk_selection_for_item(
     retriever: Any,
     agent: ChunkSelectionAgent,
     analysis_item: dict[str, Any],
+    batch_size: int = 30,
 ) -> dict[str, Any]:
     """Run retrieval and LLM chunk selection for one structure query item."""
 
@@ -338,6 +339,7 @@ def run_chunk_selection_for_item(
     selection = agent.select_chunks(
         query_result=query_result,
         analysis_item=analysis_item,
+        batch_size=batch_size,
     )
     return {
         "analysis_item": analysis_item,
@@ -357,6 +359,7 @@ def run_chunk_selection_pipeline(
     use_placeholder_llm: bool | None = None,
     query_number: int | None = None,
     oneprocess_output_dir: Path | None = None,
+    batch_size: int = 30,
 ) -> list[dict[str, Any]]:
     """Loop structure items, retrieve candidate chunks, and call the LLM agent."""
 
@@ -388,6 +391,7 @@ def run_chunk_selection_pipeline(
                 retriever=retriever,
                 agent=agent,
                 analysis_item=analysis_item,
+                batch_size=batch_size,
             )
             results.append(result)
             if oneprocess_output_dir is not None:
@@ -556,6 +560,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use the local placeholder selector instead of calling an LLM.",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=30,
+        help="Candidate chunks per LLM prompt. Defaults to 30, so top_k=60 runs as two prompts.",
+    )
     return parser.parse_args()
 
 
@@ -577,6 +587,7 @@ def main() -> None:
         use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,
         query_number=args.query_number,
         oneprocess_output_dir=args.oneprocess_output_dir if args.save_oneprocess else None,
+        batch_size=args.batch_size,
     )
 
 

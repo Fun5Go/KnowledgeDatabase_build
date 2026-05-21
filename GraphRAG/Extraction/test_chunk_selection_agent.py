@@ -7,7 +7,9 @@ if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from GraphRAG.Extraction.chunk_selection_agent import (
+    ChunkSelectionAgent,
     build_agent_payload,
+    build_batched_agent_payloads,
     normalize_selection_response,
 )
 
@@ -319,6 +321,58 @@ def test_reason_evidence_label_is_normalized_to_cause() -> None:
     assert normalized["top_chunks"][0]["evidence_label"] == "cause"
 
 
+def test_batched_agent_payloads_split_candidate_chunks() -> None:
+    payload = {
+        "analysis_id": "analysis-1",
+        "query_type": "cause",
+        "candidate_chunks": [
+            {
+                "retrieval rank": rank,
+                "label": "ESW",
+                "name": f"CH_{rank}",
+                "text": f"Candidate text {rank}.",
+            }
+            for rank in range(1, 61)
+        ],
+        "connected_chunk_groups": {},
+    }
+
+    batches = build_batched_agent_payloads(payload, batch_size=30)
+
+    assert len(batches) == 2
+    assert [len(batch["candidate_chunks"]) for batch in batches] == [30, 30]
+    assert batches[0]["candidate_batch"]["start_rank"] == 1
+    assert batches[1]["candidate_batch"]["start_rank"] == 31
+
+
+def test_placeholder_agent_merges_batched_selection_by_rank() -> None:
+    query_result = {
+        "evidence": [
+            {
+                "retrieval_rank": rank,
+                "node_id": f"n{rank}",
+                "label": "ESW",
+                "name": f"CH_{rank}",
+                "section_tag": "",
+                "text": f"Candidate text {rank}.",
+            }
+            for rank in range(1, 61)
+        ],
+        "connected_evidence_groups": [],
+    }
+    agent = ChunkSelectionAgent(use_placeholder=True)
+
+    selection = agent.select_chunks(
+        query_result=query_result,
+        analysis_item={"analysis_id": "analysis-1", "query_type": "cause", "query_cause": "cause"},
+        batch_size=30,
+    )
+
+    assert selection["batch_count"] == 2
+    assert selection["batch_size"] == 30
+    assert [chunk["rank"] for chunk in selection["top_chunks"]] == list(range(1, 61))
+
+
 if __name__ == "__main__":
     test_normalize_selection_response_supports_all_evidence_labels()
     test_evidence_span_must_be_copied_from_raw_text()
@@ -328,3 +382,5 @@ if __name__ == "__main__":
     test_agent_payload_keeps_connected_chunks_together()
     test_agent_payload_adds_retrieved_rationale_to_chunk_name()
     test_reason_evidence_label_is_normalized_to_cause()
+    test_batched_agent_payloads_split_candidate_chunks()
+    test_placeholder_agent_merges_batched_selection_by_rank()
