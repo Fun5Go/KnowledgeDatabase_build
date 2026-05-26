@@ -1,0 +1,280 @@
+# query_pipeline.py
+from KnowledgeBase.JSON8D_KB.kb_structure import FailureKB, CauseKB, SentenceKB
+from pathlib import Path
+
+def print_sentence_hits(sentence_hits):
+    if not sentence_hits or not sentence_hits["documents"]:
+        print("\n→ SENTENCE SIMILARITY CHECK: no hits")
+        return
+
+    print("\n→ SENTENCE SIMILARITY CHECK (INSURANCE)")
+    for doc, meta, dist in zip(
+        sentence_hits["documents"][0],
+        sentence_hits["metadatas"][0],
+        sentence_hits["distances"][0],
+    ):
+        sim = 1 - dist
+        print(
+            f"- sim={sim:.3f} | role={meta.get('sentence_role')} | "
+            f"section={meta.get('source_section')} | {doc}"
+        )
+
+def retrieve_failures(
+    *,
+    failure_kb: FailureKB,
+    failure_mode: str | None,
+    failure_element: str | None,
+    failure_effect: str | None,
+    k: int = 3,
+):
+    return failure_kb.search(
+        failure_mode=failure_mode,
+        failure_element=failure_element,
+        failure_effect=failure_effect,
+        k=k,
+    )
+
+
+def retrieve_causes(
+    *,
+    cause_kb: CauseKB,
+    cause_query: str,
+    failure_id: str,
+    k: int = 5,
+):
+    return cause_kb.search_under_failure(
+        query=cause_query,
+        failure_id=failure_id,
+        k=k,
+    )
+
+def failure_to_cause_pipeline(
+    *,
+    failure_mode: str | None,
+    failure_element: str | None,
+    failure_effect: str | None,
+    cause_query: str,
+    failure_kb: FailureKB,
+    cause_kb: CauseKB,
+    sentence_kb: SentenceKB,
+    k_failure=3,
+    k_cause=5,
+):
+    results = []
+
+    # -----------------------------
+    # 1) Failure (WHAT broke)
+    # -----------------------------
+    failure_ids = retrieve_failures(
+        failure_kb=failure_kb,
+        failure_mode=failure_mode,
+        failure_element=failure_element,
+        failure_effect=failure_effect,
+        k=k_failure,
+    )
+
+    for fid in failure_ids:
+        failure = failure_kb.store.get(fid)
+        if not failure:
+            continue
+
+        sentence_hits = sentence_kb.search(
+            query=cause_query,
+            failure_id=fid,
+            roles=["cause_sentence", "other"],
+            k=5,
+        )
+
+        # -----------------------------
+        # 2) Cause (WHY it broke)
+        # -----------------------------
+        cause_ids = retrieve_causes(
+            cause_kb=cause_kb,
+            cause_query=cause_query,
+            failure_id=fid,
+            k=k_cause,
+        )
+
+        causes = []
+        for cid in cause_ids:
+            cause = cause_kb.store.get(cid)
+            if not cause:
+                continue
+
+            evidence = sentence_kb.get_by_ids(
+                cause.get("supporting_sentence_ids", [])
+            )
+
+            causes.append({
+                "cause": cause,
+                "evidence": [s.text for s in evidence],
+            })
+
+        if causes:
+            results.append({
+                "failure": failure,
+                "causes": causes,
+            })
+
+    return results
+
+def detail_print_results(results: list[dict]):
+
+    print("\n================ RESULTS ================")
+
+    if not results:
+        print("[WARN] No results. (Maybe you haven't ingested any JSON yet?)")
+        return
+
+    for i, r in enumerate(results, start=1):
+        f = r.get("failure", {})
+        causes = r.get("causes", [])
+
+        print("\n" + "=" * 80)
+        print(f"[{i}] FAILURE")
+        print(f"ID      : {f.get('failure_id', '')}")
+        print(f"Mode    : {f.get('failure_mode', '')}")
+        print(f"Element : {f.get('failure_element', '')}")
+        print(f"Effect  : {f.get('failure_effect', '')}")
+        print(f"Status  : {f.get('status', '')}")
+
+        for j, cblock in enumerate(causes, start=1):
+            c = cblock.get("cause", {})
+            evidence = cblock.get("evidence", [])
+
+            print("\n→ ROOT CAUSE", f"(#{j})")
+            print(f"ID         : {c.get('cause_id', '')}")
+            print(f"Cause      : {c.get('root_cause', '')}")
+            print(f"Level      : {c.get('cause_level', '')}")
+            print(f"Discipline : {c.get('discipline', '')}")
+            print(f"Confidence : {c.get('confidence', '')}")
+
+            print("\n→ SUPPORTING EVIDENCE")
+            for s in evidence:
+                print(f"- {s}")
+
+
+def resolve_paths():
+    base = Path(__file__).resolve().parent
+    kb_data = base / "kb_data_motor_drives"
+    sentence_dir = kb_data / "sentence_kb"
+    failure_dir = kb_data / "failure_kb"
+    cause_dir = kb_data / "cause_kb"
+
+    # Check and create directories if not exist
+    for p in [sentence_dir, failure_dir, cause_dir]:
+        p.mkdir(parents=True, exist_ok=True)
+
+    return sentence_dir, failure_dir, cause_dir
+
+def query_by_failure_id_metadata_only(
+    *,
+    failure_id: str,
+    failure_kb: FailureKB,
+    cause_kb: CauseKB,
+    sentence_kb: SentenceKB,
+):
+    result = {
+        "failure": None,
+        "causes": [],
+        "sentences": [],
+    }
+
+    # -----------------------------
+    # 1) Failure
+    # -----------------------------
+    failure = failure_kb.store.get(failure_id)
+    if not failure:
+        return result
+
+    result["failure"] = failure
+
+    # -----------------------------
+    # 2) Causes (filter store)
+    # -----------------------------
+    causes = []
+
+    for cid, c in cause_kb.store.items():
+        if c.get("failure_id") == failure_id:
+            causes.append(c)
+
+    result["causes"] = causes
+
+    # -----------------------------
+    # 3) Sentences (metadata search)
+    # -----------------------------
+    hits = sentence_kb.collection.get(
+        where={"failure_id": failure_id},
+        include=["documents", "metadatas"],
+    )
+
+    for _id, text, meta in zip(
+        hits["ids"], hits["documents"], hits["metadatas"]
+    ):
+        result["sentences"].append({
+            "sentence_id": _id,
+            "text": text,
+            "metadata": meta,
+        })
+
+    return result
+
+
+def main():
+    sentence_dir, failure_dir, cause_dir = resolve_paths()
+
+    sentence_kb = SentenceKB(sentence_dir)
+    failure_kb = FailureKB(failure_dir)
+    cause_kb = CauseKB(cause_dir)
+
+    failure_mode = "intermittent boot failure"
+    cause_query = "LPDDR4 chip soldering defect"
+
+    recs = sentence_kb.list_by_failure(
+    failure_id="8D6001175615R01_F",
+    roles=["failure_sentence", "cause_sentence"]
+)
+    print(recs)
+
+    
+    # results = failure_to_cause_pipeline(
+    #     failure_mode=failure_mode,
+    #     failure_element="",
+    #     failure_effect="",
+    #     cause_query=cause_query,
+    #     failure_kb=failure_kb,
+    #     cause_kb=cause_kb,
+    #     sentence_kb=sentence_kb,
+    #     k_failure=3,
+    #     k_cause=3,
+    # )
+    # detail_print_results(results)
+
+    # if results:
+    #     fid = results[0]["failure"]["failure_id"]
+    #     hits = sentence_kb.search(
+    #         query=cause_query,
+    #         failure_id=fid,
+    #         roles=[],
+    #         k=5,
+    #     )
+    #     print_sentence_hits(hits)
+    # failure_id = "8D6298170245R02_F1"
+    # case_result = query_by_failure_id_metadata_only(
+    #         failure_id = failure_id,
+    #         failure_kb=failure_kb,
+    #         cause_kb=cause_kb,
+    #         sentence_kb=sentence_kb,
+    #     )
+    # print(case_result)
+
+
+    # for r in results:
+    #     f = r["failure"]
+    #     print("\nFAILURE:", f["failure_id"], f["failure_mode"])
+
+    #     for c in r["causes"]:
+    #         print("  CAUSE:", c["cause"]["root_cause"])
+
+if __name__ == "__main__":
+    main()

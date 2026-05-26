@@ -14,7 +14,7 @@ from Data_processing.Information_extraction_8D.Evaluation.evaluation_tool import
 from datetime import datetime
 import unicodedata
 
-from JSON_FMEA_KB.query_fmea import eightD_fmea_search
+from KnowledgeBase.JSON_FMEA_KB.query_fmea import eightD_fmea_search
 from pathlib import Path
 import json
 
