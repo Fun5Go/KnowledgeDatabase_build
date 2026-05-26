@@ -1,5 +1,5 @@
 import json
-from Information_extraction_8D.main.eight_D_agent import build_8d_case_from_json
+from Data_processing.Information_extraction_8D.main.eight_D_agent import build_8d_case_from_json
 import os
 
 SENTENCE_OUTPUT_DIR = r"C:\Users\FW\Desktop\FMEA_AI\Project_Phase\DATA\JSON\8D_test\sentence_selected"

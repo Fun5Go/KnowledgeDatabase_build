@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import re
 import spacy
 from rapidfuzz import fuzz
-from Information_extraction_8D.Schemas.eightD_sentence_schema import SelectedSentence
+from Data_processing.Information_extraction_8D.Schemas.eightD_sentence_schema import SelectedSentence
 
 # ----------------------------
 # Text helpers

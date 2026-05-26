@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from enum import Enum
 from typing import Any, Dict, Optional, Literal
-from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
+from Data_processing.Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
 
 
 class MaintenaceTag(BaseModel):

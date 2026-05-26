@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from Key_words_list import MOTOR_DRIVE_KEYWORDS, PROCESS_KEYWORDS, PRODUCT_HINTS, NEW_KEYS, OLD_KEYS, ALL_TEXT_KEYS, FAILURE_KEYS
+from Data_processing.Failure_classification.FMEA.Key_words_list import MOTOR_DRIVE_KEYWORDS, PROCESS_KEYWORDS, PRODUCT_HINTS, NEW_KEYS, OLD_KEYS, ALL_TEXT_KEYS, FAILURE_KEYS
 import re
 
 def build_keyword_patterns(keywords):

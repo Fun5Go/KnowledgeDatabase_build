@@ -1,7 +1,7 @@
 import os
 import json
 import copy
-from Information_extraction_8D.main.eight_D_agent import build_8d_case_from_json
+from Data_processing.Information_extraction_8D.main.eight_D_agent import build_8d_case_from_json
 from typing import List
 
 # ===== directories =====

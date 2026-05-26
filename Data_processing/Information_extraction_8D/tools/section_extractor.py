@@ -1,16 +1,16 @@
 from langchain.tools import tool
-from Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt, D4_prompt
-from Information_extraction_8D.tools.doc_parser import safe_json
+from Data_processing.Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt, D4_prompt
+from Data_processing.Information_extraction_8D.tools.doc_parser import safe_json
 
-from Information_extraction_8D.Prompts.eightD_prompt_integrate import Prompt
-from Information_extraction_8D.Prompts.eightD_prompt_iteration import iter_prompt_1
-from Information_extraction_8D.Prompts.eightD_prompt_iteration2 import iter_prompt_2
-from Information_extraction_8D.main.llm import get_llm_backend
+from Data_processing.Information_extraction_8D.Prompts.eightD_prompt_integrate import Prompt
+from Data_processing.Information_extraction_8D.Prompts.eightD_prompt_iteration import iter_prompt_1
+from Data_processing.Information_extraction_8D.Prompts.eightD_prompt_iteration2 import iter_prompt_2
+from Data_processing.Information_extraction_8D.main.llm import get_llm_backend
 from docx import Document
 from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import Iteration1Output
+from Data_processing.Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import Iteration1Output
 from langsmith import get_current_run_tree, traceable
 import os
 

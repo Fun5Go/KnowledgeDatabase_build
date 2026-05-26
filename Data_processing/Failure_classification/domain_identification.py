@@ -1,5 +1,5 @@
 import os, re
-from LLM_TOOLs import parse_8d_doc, domain_type_identification_LLMcall
+from Data_processing.Failure_classification.LLM_TOOLs import parse_8d_doc, domain_type_identification_LLMcall
 from langchain.agents import create_agent
 import copy
 from typing import List, Dict, Any, Optional, Union

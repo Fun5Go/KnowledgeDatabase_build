@@ -2,8 +2,8 @@ import json
 import argparse
 from typing import List
 from pathlib import Path
-from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
-from Information_extraction_8D.Evaluation.evaluation_tool import evaluate_iter1, summarize_eval
+from Data_processing.Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
+from Data_processing.Information_extraction_8D.Evaluation.evaluation_tool import evaluate_iter1, summarize_eval
 
 BASE_DIR = Path(__file__).resolve().parent
 

@@ -8,7 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]  # Information_extraction_8D
 sys.path.insert(0, str(ROOT))
 
-from Schemas.eightD_sentence_schema_V2 import SelectedSentence
+from Data_processing.Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import SelectedSentence
 
 
 # =========================================================

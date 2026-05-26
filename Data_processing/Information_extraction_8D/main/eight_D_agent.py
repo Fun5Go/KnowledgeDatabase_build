@@ -1,16 +1,16 @@
 
 from langchain.agents import create_agent
-from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4,parse_8d_doc, extract_failure_d234,extract_iteration_1,extract_iteration_2
-from Information_extraction_8D.tools.doc_parser import extract_product
+from Data_processing.Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4,parse_8d_doc, extract_failure_d234,extract_iteration_1,extract_iteration_2
+from Data_processing.Information_extraction_8D.tools.doc_parser import extract_product
 # from tools.doc_parser import parse_8d_doc
 # from Agents.main.llm import llm
-from Information_extraction_8D.Schemas.eigthD_schema_json_v3 import DocumentInfo,MaintenaceTag, EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureChain
+from Data_processing.Information_extraction_8D.Schemas.eigthD_schema_json_v3 import DocumentInfo,MaintenaceTag, EightDCase, EightDSections, D2Section, D4Section,D3Section, D5Section,D6Section,FailureChain
 import os, re
-from Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import Iteration1Output
+from Data_processing.Information_extraction_8D.Schemas.eightD_sentence_schema_V2 import Iteration1Output
 import copy
 from typing import List, Dict, Any
 from langsmith import traceable, get_current_run_tree
-from Information_extraction_8D.Evaluation.evaluation_tool import check_faithfulness
+from Data_processing.Information_extraction_8D.Evaluation.evaluation_tool import check_faithfulness
 from datetime import datetime
 import unicodedata
 

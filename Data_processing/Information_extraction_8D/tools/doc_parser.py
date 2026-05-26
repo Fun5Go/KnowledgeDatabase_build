@@ -2,7 +2,7 @@
 
 from docx import Document
 import re
-from Information_extraction_8D.Schemas.eightD_schema_json import EightDCase
+from Data_processing.Information_extraction_8D.Schemas.eightD_schema_json import EightDCase
 import json
 from pydantic import ValidationError
 

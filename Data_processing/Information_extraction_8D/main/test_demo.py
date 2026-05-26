@@ -1,11 +1,11 @@
 import json
 import re
-from Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt
-from Information_extraction_8D.tools.doc_parser import extract_product
-from Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234,extract_iteration_1,extract_iteration_2
-from Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
+from Data_processing.Information_extraction_8D.Prompts.eightD_extract_prompt import D2_prompt
+from Data_processing.Information_extraction_8D.tools.doc_parser import extract_product
+from Data_processing.Information_extraction_8D.tools.section_extractor import extract_d2, extract_d4, parse_8d_doc,extract_failure_d234,extract_iteration_1,extract_iteration_2
+from Data_processing.Information_extraction_8D.Schemas.eightD_sentence_schema import Iteration1Output
 from typing import List, Dict, Any
-from Information_extraction_8D.tools.text_normalization import extract_valuable_sentences  
+from Data_processing.Information_extraction_8D.tools.text_normalization import extract_valuable_sentences  
 # ==========Test LLM (Pass)==========
 # resp = llm.invoke("Say hello, just one short sentence.")
 # print(resp.content)

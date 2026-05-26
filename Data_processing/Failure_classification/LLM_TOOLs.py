@@ -3,9 +3,9 @@ from docx import Document
 from typing import Optional, List, Literal
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
-from llm import get_llm_backend
-from prompt_identify_classify import domain_type_prompt
-from product_schema import DomainTypeIdentificationOutput
+from Data_processing.Failure_classification.llm import get_llm_backend
+from Data_processing.Failure_classification.prompt_identify_classify import domain_type_prompt
+from Data_processing.Failure_classification.product_schema import DomainTypeIdentificationOutput
 
 
 @tool
