@@ -34,7 +34,7 @@ LANGSMITH_PROJECT_NAME = configure_langsmith(
 )
 
 DEFAULT_OUTPUT_PATH = Path(__file__).resolve().parent / "chunk_selection_results.json"
-DEFAULT_ONEPROCESS_OUTPUT_DIR = Path(__file__).resolve().parent / "select_2"
+DEFAULT_ONEPROCESS_OUTPUT_DIR = Path(__file__).resolve().parent / "top60"
 
 structure_input_motorcontrol = {
     "product_domain": "motor_drives",

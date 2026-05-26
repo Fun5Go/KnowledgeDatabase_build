@@ -5,7 +5,7 @@ Positive samples are chunks with ``selected_correct == true``.
 Confusion-count rules:
 - TP: selected_correct true and rerank_tag is support or suspect.
 - TN: selected_correct null and rerank_tag is irrelevant.
-- FP: always 0 by definition for this review setup.
+- FP: selected_correct null and rerank_tag is support or suspect.
 - FN: selected_correct true and rerank_tag is irrelevant.
 
 Chunks outside these rules are skipped, because they are either unreviewed
@@ -170,6 +170,8 @@ def evaluate_file(path: Path) -> QueryMetrics | None:
         elif selected_correct is None and tag == NEGATIVE_TAG:
             metrics.tn += 1
             metrics.true_negative_names.append(name)
+        elif selected_correct is None and tag in POSITIVE_TAGS:
+            metrics.fp += 1
         elif selected_correct is True and tag == NEGATIVE_TAG:
             metrics.fn += 1
             metrics.false_negative_names.append(name)
@@ -204,7 +206,7 @@ def total_scores(results: list[QueryMetrics]) -> dict[str, Any]:
     totals = {
         "tp": sum(result.tp for result in results),
         "tn": sum(result.tn for result in results),
-        "fp": 0,
+        "fp": sum(result.fp for result in results),
         "fn": sum(result.fn for result in results),
         "skipped": sum(result.skipped for result in results),
     }
@@ -238,7 +240,7 @@ def evaluate_review_dir(review_dir: Path) -> dict[str, Any]:
         "confusion_rules": {
             "tp": "selected_correct == true and rerank_tag in {'support', 'suspect'}",
             "tn": "selected_correct is null and rerank_tag == 'irrelevant'",
-            "fp": "0 by definition",
+            "fp": "selected_correct is null and rerank_tag in {'support', 'suspect'}",
             "fn": "selected_correct == true and rerank_tag == 'irrelevant'",
             "skipped": "all other chunks",
         },

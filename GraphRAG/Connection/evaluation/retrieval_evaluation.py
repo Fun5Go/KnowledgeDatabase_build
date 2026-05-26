@@ -159,8 +159,16 @@ def mean(values: list[float]) -> float:
     return statistics.fmean(values) if values else 0.0
 
 
-def aggregate_results(per_query: list[dict[str, Any]], k_values: list[int]) -> dict[str, Any]:
-    total_relevant = sum(int(item["total_relevant"]) for item in per_query)
+def aggregate_results(
+    per_query: list[dict[str, Any]],
+    k_values: list[int],
+    missing_relevant_count: int = 0,
+) -> dict[str, Any]:
+    if missing_relevant_count < 0:
+        raise ValueError("missing_relevant_count must be non-negative.")
+
+    retrieved_relevant = sum(int(item["total_relevant"]) for item in per_query)
+    total_relevant = retrieved_relevant + missing_relevant_count
     all_relevant_ranks = [
         int(chunk["rank"])
         for item in per_query
@@ -185,6 +193,8 @@ def aggregate_results(per_query: list[dict[str, Any]], k_values: list[int]) -> d
 
     return {
         "evaluated_query_count": len(per_query),
+        "retrieved_relevant": retrieved_relevant,
+        "missing_relevant_count": missing_relevant_count,
         "total_relevant": total_relevant,
         "relevant_average_rank": mean([float(rank) for rank in all_relevant_ranks]),
         "relevant_median_rank": statistics.median(all_relevant_ranks) if all_relevant_ranks else None,
@@ -237,6 +247,7 @@ def evaluate_review_dir(
     review_dir: Path,
     k_values: list[int],
     reviewed_mode: str,
+    missing_relevant_count: int = 0,
 ) -> dict[str, Any]:
     if not review_dir.exists():
         raise FileNotFoundError(f"Review directory not found: {review_dir}")
@@ -250,9 +261,10 @@ def evaluate_review_dir(
         "review_dir": str(review_dir),
         "reviewed_mode": reviewed_mode,
         "relevant_definition": "chunk.selected_correct == true",
+        "missing_relevant_definition": "Known relevant chunks absent from Top-60 retrieval output; added to micro coverage denominator.",
         "noise_definition": "Top-K chunks where selected_correct is not true",
         "k_values": k_values,
-        "summary": aggregate_results(per_query, k_values),
+        "summary": aggregate_results(per_query, k_values, missing_relevant_count),
         "per_query": per_query,
     }
 
@@ -260,14 +272,17 @@ def evaluate_review_dir(
 def print_summary(results: dict[str, Any]) -> None:
     summary = results["summary"]
     print(f"[INFO] Evaluated reviewed queries: {summary['evaluated_query_count']}")
-    print(f"[INFO] Total relevant chunks: {summary['total_relevant']}")
+    print(f"[INFO] Retrieved relevant chunks: {summary['retrieved_relevant']}")
+    print(f"[INFO] Missing known relevant chunks: {summary['missing_relevant_count']}")
+    print(f"[INFO] Total relevant chunks for micro coverage: {summary['total_relevant']}")
     print(f"[INFO] Relevant average rank: {summary['relevant_average_rank']:.2f}")
     print(f"[INFO] Relevant median rank: {summary['relevant_median_rank']}")
     print("")
-    print("K\tMicroCoverage\tMacroCoverage\tMicroNoise\tMacroNoise")
+    print("K\tRelevantCount\tMicroCoverage\tMacroCoverage\tMicroNoise\tMacroNoise")
     for k, metrics in summary["by_k"].items():
         print(
             f"{k}\t"
+            f"{metrics['relevant_count']}\t"
             f"{metrics['micro_coverage']:.4f}\t"
             f"{metrics['macro_coverage']:.4f}\t"
             f"{metrics['micro_noise_ratio']:.4f}\t"
@@ -284,6 +299,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--csv-output", type=Path, default=DEFAULT_CSV_OUTPUT)
     parser.add_argument("--k-values", default="15,30,45,50,60")
     parser.add_argument(
+        "--missing-relevant-count",
+        type=int,
+        default=3,
+        help="Known relevant chunks that are absent from Top-60 retrieval results; added to the micro coverage denominator.",
+    )
+    parser.add_argument(
         "--reviewed-mode",
         choices=("any_true", "any_label"),
         default="any_true",
@@ -295,7 +316,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     k_values = parse_k_values(args.k_values)
-    results = evaluate_review_dir(args.review_dir, k_values, args.reviewed_mode)
+    results = evaluate_review_dir(
+        args.review_dir,
+        k_values,
+        args.reviewed_mode,
+        args.missing_relevant_count,
+    )
     write_json(args.json_output, results)
     write_csv(args.csv_output, results["per_query"], k_values)
     print_summary(results)

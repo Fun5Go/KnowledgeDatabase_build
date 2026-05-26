@@ -1049,7 +1049,7 @@ def main():
         result = query_doc_chunks_for_sentence(
             retriever=retriever,
             query_spec=query_spec,
-            top_k=20,
+            top_k=80,
             per_label_k=80,
             retrieval_mode="dense",
             disciplines=None,
@@ -1058,7 +1058,7 @@ def main():
             use_section_tag_bonus=False,
             section_bonus_mode="hybrid",
             section_bonus_weight=0.00,
-            is_QD=True,
+            is_QD=False,
         )
         print_doc_chunk_results(result)
     finally:

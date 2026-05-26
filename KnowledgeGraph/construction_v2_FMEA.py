@@ -161,6 +161,10 @@ class FMEARecallKGBuilderV2:
             CREATE CONSTRAINT prevention_semantic_id_v2 IF NOT EXISTS
             FOR (n:Prevention) REQUIRE n.semantic_id IS UNIQUE
             """,
+            """
+            CREATE CONSTRAINT failure_id_v2 IF NOT EXISTS
+            FOR (n:Failure) REQUIRE n.failure_id IS UNIQUE
+            """,
         ]
 
         with self.driver.session(database=self.database) as session:
@@ -334,6 +338,54 @@ class FMEARecallKGBuilderV2:
             extra={"occurrence": safe_number(rpn.get("occurrence"))},
         )
 
+    def merge_failure(
+        self,
+        session,
+        item: Dict[str, Any],
+        file_name: Optional[str],
+    ) -> str:
+        metadata = item.get("metadata") or {}
+        content = item.get("content") or {}
+        rpn = item.get("RPN") or {}
+
+        file_part = safe_text(file_name) or safe_text(item.get("file_name")) or "unknown_file"
+        row_index = item.get("row_index")
+        if row_index is None or safe_text(row_index) == "":
+            row_index = item.get("index")
+        if row_index is None or safe_text(row_index) == "":
+            row_index = stable_id(json.dumps(item, sort_keys=True, default=str))
+
+        failure_id = f"{file_part}__R{row_index}"
+
+        session.run(
+            """
+            MERGE (f:Failure {failure_id:$failure_id})
+            SET f.name = $failure_id,
+                f.file_name = $file_name,
+                f.row_index = $row_index,
+                f.source_type = $source_type,
+                f.fmea_type = $fmea_type,
+                f.productPnID = $productPnID,
+                f.system_name = $system_name,
+                f.severity = $severity,
+                f.occurrence = $occurrence,
+                f.detection = $detection,
+                f.rpn = $rpn
+            """,
+            failure_id=failure_id,
+            file_name=safe_text(file_name),
+            row_index=row_index,
+            source_type=safe_text(item.get("source_type")),
+            fmea_type=safe_text(metadata.get("fmea_type", item.get("fmea_type"))),
+            productPnID=get_product_pnid(metadata),
+            system_name=safe_text(content.get("system_name")),
+            severity=safe_number(rpn.get("severity")),
+            occurrence=safe_number(rpn.get("occurrence")),
+            detection=safe_number(rpn.get("detection")),
+            rpn=safe_number(rpn.get("rpn", rpn.get("RPN"))),
+        )
+        return failure_id
+
     # ----------------------------------------
     # RELATION MERGE
     # ----------------------------------------
@@ -377,6 +429,19 @@ class FMEARecallKGBuilderV2:
             effect_id=effect_id,
         )
 
+    def link_document_failure(self, session, file_name: str, failure_id: str):
+        if not file_name or not failure_id:
+            return
+        session.run(
+            """
+            MATCH (d:Document {file_name:$file_name})
+            MATCH (f:Failure {failure_id:$failure_id})
+            MERGE (d)-[:HAS_Failure]->(f)
+            """,
+            file_name=file_name,
+            failure_id=failure_id,
+        )
+
     def create_core_edges(
         self,
         session,
@@ -402,7 +467,7 @@ class FMEARecallKGBuilderV2:
                 """
                 MATCH (f:Function {semantic_id:$function_id})
                 MATCH (m:Mode {semantic_id:$mode_id})
-                MERGE (f)-[:HAS_Mode]->(m)
+                MERGE (f)-[:HAS_MODE]->(m)
                 """,
                 function_id=function_id,
                 mode_id=mode_id,
@@ -483,10 +548,50 @@ class FMEARecallKGBuilderV2:
                 """
                 MATCH (p:Prevention {semantic_id:$prevention_id})
                 MATCH (c:Cause {semantic_id:$cause_id})
-                MERGE (p)-[:Controls]->(c)
+                MERGE (p)-[:CONTROLS]->(c)
                 """,
                 prevention_id=prevention_id,
                 cause_id=cause_id,
+            )
+
+    def create_failure_edges(
+        self,
+        session,
+        failure_id: Optional[str],
+        element_id: Optional[str],
+        function_id: Optional[str],
+        mode_id: Optional[str],
+        cause_id: Optional[str],
+        effect_id: Optional[str],
+        detection_id: Optional[str],
+        prevention_id: Optional[str],
+        action_id: Optional[str],
+    ):
+        if not failure_id:
+            return
+
+        targets = [
+            ("Element", element_id, "HAS_ELEMENT"),
+            ("Function", function_id, "HAS_FUNCTION"),
+            ("Mode", mode_id, "HAS_MODE"),
+            ("Cause", cause_id, "HAS_CAUSE"),
+            ("Effect", effect_id, "HAS_EFFECT"),
+            ("Detection", detection_id, "HAS_CONTROLS"),
+            ("Prevention", prevention_id, "HAS_CONTROLS"),
+            ("Action", action_id, "HAS_ACTION"),
+        ]
+
+        for label, node_id, rel in targets:
+            if not node_id:
+                continue
+            session.run(
+                f"""
+                MATCH (f:Failure {{failure_id:$failure_id}})
+                MATCH (n:{label} {{semantic_id:$node_id}})
+                MERGE (f)-[:{rel}]->(n)
+                """,
+                failure_id=failure_id,
+                node_id=node_id,
             )
 
     # ----------------------------------------
@@ -535,6 +640,14 @@ class FMEARecallKGBuilderV2:
 
                 if product_pnid is not None and file_name:
                     self.link_product_document(session, product_pnid, file_name)
+
+                failure_id = self.merge_failure(
+                    session=session,
+                    item=item,
+                    file_name=file_name,
+                )
+                if file_name:
+                    self.link_document_failure(session, file_name, failure_id)
 
                 element_id = self.merge_element(session, content)
                 if not element_id:
@@ -614,6 +727,19 @@ class FMEARecallKGBuilderV2:
                     detection_id=detection_id,
                     prevention_id=prevention_id,
                     cause_id=cause_id,
+                )
+
+                self.create_failure_edges(
+                    session=session,
+                    failure_id=failure_id,
+                    element_id=element_id,
+                    function_id=function_id,
+                    mode_id=mode_id,
+                    cause_id=cause_id,
+                    effect_id=effect_id,
+                    detection_id=detection_id,
+                    prevention_id=prevention_id,
+                    action_id=action_id,
                 )
 
         print("Build finished.")

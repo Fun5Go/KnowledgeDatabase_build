@@ -269,6 +269,8 @@ def build_connection_payload(
     query_result: dict[str, Any],
     analysis_item: dict[str, Any],
     max_chunk_text_length: int = 1800,
+    rerank_input_start: int | None = None,
+    rerank_input_end: int | None = None,
 ) -> dict[str, Any]:
     """Structure retrieval output into the Connection workflow input payload.
 
@@ -283,24 +285,57 @@ def build_connection_payload(
     group_id_by_node_id = build_connected_group_id_by_node_id(
         query_result.get("connected_evidence_groups", [])
     )
+    candidate_chunks = [
+        normalize_candidate_chunk(
+            item,
+            index,
+            max_chunk_text_length,
+            connected_group_id=group_id_by_node_id.get(normalize_text(item.get("node_id"))),
+        )
+        for index, item in enumerate(evidence, start=1)
+    ]
+    candidate_chunks = filter_candidate_chunks_by_retrieval_rank(
+        candidate_chunks,
+        start=rerank_input_start,
+        end=rerank_input_end,
+    )
+
     return {
         "analysis_id": normalize_text(analysis_item.get("analysis_id")),
         "query_type": normalize_text(analysis_item.get("query_type")),
         "query": build_llm_query_payload(analysis_item),
-        "candidate_chunks": [
-            normalize_candidate_chunk(
-                item,
-                index,
-                max_chunk_text_length,
-                connected_group_id=group_id_by_node_id.get(normalize_text(item.get("node_id"))),
-            )
-            for index, item in enumerate(evidence, start=1)
-        ],
+        "candidate_chunks": candidate_chunks,
         "connected_chunk_groups": normalize_connected_chunk_groups(
             query_result.get("connected_evidence_groups", []),
             evidence,
+            candidate_chunks,
         ),
     }
+
+
+def filter_candidate_chunks_by_retrieval_rank(
+    candidate_chunks: list[dict[str, Any]],
+    start: int | None = None,
+    end: int | None = None,
+) -> list[dict[str, Any]]:
+    if start is None and end is None:
+        return candidate_chunks
+    start = start or 1
+    return [
+        chunk
+        for chunk in candidate_chunks
+        if rank_is_in_range(normalize_int(chunk.get("retrieval rank")), start, end)
+    ]
+
+
+def rank_is_in_range(rank: int | None, start: int, end: int | None) -> bool:
+    if rank is None:
+        return False
+    if rank < start:
+        return False
+    if end is not None and rank > end:
+        return False
+    return True
 
 
 def build_llm_query_payload(analysis_item: dict[str, Any]) -> dict[str, str]:
@@ -404,9 +439,17 @@ def build_connected_group_id_by_node_id(connected_groups: Any) -> dict[str, int]
 def normalize_connected_chunk_groups(
     connected_groups: Any,
     evidence: list[dict[str, Any]],
+    candidate_chunks: list[dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     if not isinstance(connected_groups, list):
         return {}
+    allowed_ranks = None
+    if candidate_chunks is not None:
+        allowed_ranks = {
+            normalize_int(chunk.get("retrieval rank"))
+            for chunk in candidate_chunks
+            if normalize_int(chunk.get("retrieval rank")) is not None
+        }
     chunk_by_node_id = {
         normalize_text(item.get("node_id")): {
             "rank": normalize_int(item.get("retrieval_rank")) or index,
@@ -423,6 +466,11 @@ def normalize_connected_chunk_groups(
             normalize_text(node_id)
             for node_id in group.get("node_ids", [])
             if normalize_text(node_id) in chunk_by_node_id
+            and (
+                allowed_ranks is None
+                or normalize_int(chunk_by_node_id[normalize_text(node_id)].get("rank"))
+                in allowed_ranks
+            )
         ]
         if len(node_ids) < 2:
             continue
@@ -433,6 +481,11 @@ def normalize_connected_chunk_groups(
             source_id = normalize_text(relationship.get("source_id"))
             target_id = normalize_text(relationship.get("target_id"))
             if source_id not in chunk_by_node_id or target_id not in chunk_by_node_id:
+                continue
+            if allowed_ranks is not None and (
+                normalize_int(chunk_by_node_id[source_id].get("rank")) not in allowed_ranks
+                or normalize_int(chunk_by_node_id[target_id].get("rank")) not in allowed_ranks
+            ):
                 continue
             relationships.append(
                 {
@@ -455,7 +508,7 @@ def normalize_connected_chunk_groups(
 def run_retrieval_for_analysis_item(
     retriever: Any,
     analysis_item: dict[str, Any],
-    top_k: int = 60,
+    top_k: int = 90,
     per_label_k: int = 80,
     retrieval_mode: str = "dense",
     use_cross_encoder_rerank: bool = False,
@@ -500,14 +553,20 @@ def run_connection_for_item(
     analysis_item: dict[str, Any],
     stage: Literal["rerank", "extract", "auto"] = "auto",
     batch_size: int | None = None,
+    retrieval_top_k: int = 60,
+    rerank_input_start: int | None = None,
+    rerank_input_end: int | None = None,
 ) -> dict[str, Any]:
     query_result = run_retrieval_for_analysis_item(
         retriever=retriever,
         analysis_item=analysis_item,
+        top_k=retrieval_top_k,
     )
     payload = build_connection_payload(
         query_result=query_result,
         analysis_item=analysis_item,
+        rerank_input_start=rerank_input_start,
+        rerank_input_end=rerank_input_end,
     )
     result = workflow.run(payload, stage=stage, batch_size=batch_size)
     return {
@@ -525,10 +584,17 @@ def run_connection_pipeline(
     batch_size: int | None = None,
     use_placeholder_llm: bool | None = None,
     query_number: int | None = None,
+    retrieval_top_k: int = 60,
+    rerank_input_start: int | None = None,
+    rerank_input_end: int | None = None,
 ) -> list[dict[str, Any]]:
     """Loop structure items, retrieve chunks, build payloads, and run Connection."""
 
     print(f"[INFO] LangSmith project: {LANGSMITH_PROJECT_NAME}")
+    print(f"[INFO] Retrieval top_k: {retrieval_top_k}")
+    if rerank_input_start is not None or rerank_input_end is not None:
+        range_label = f"{rerank_input_start or 1}:{rerank_input_end or retrieval_top_k}"
+        print(f"[INFO] Connection rerank input retrieval-rank range: {range_label}")
     workflow = ConnectionWorkflow(use_placeholder=use_placeholder_llm)
 
     from GraphRAG.fmea_retrieverV2 import FMEASentenceRetrieverV2
@@ -558,6 +624,9 @@ def run_connection_pipeline(
                 analysis_item=analysis_item,
                 stage=stage,
                 batch_size=batch_size,
+                retrieval_top_k=retrieval_top_k,
+                rerank_input_start=rerank_input_start,
+                rerank_input_end=rerank_input_end,
             )
             results.append(result)
             if auto_results_dir is not None:
@@ -922,6 +991,34 @@ def trim_text(text: Any, max_length: int) -> str:
     return normalized[: max_length - 3].rstrip() + "..."
 
 
+def parse_rank_range(value: str) -> tuple[int | None, int | None]:
+    text = normalize_text(value)
+    separator = ":" if ":" in text else "-"
+    if separator not in text:
+        raise argparse.ArgumentTypeError(
+            "rank range must use START:END, e.g. 61:80."
+        )
+    start_text, end_text = [part.strip() for part in text.split(separator, 1)]
+    try:
+        start = int(start_text) if start_text else None
+        end = int(end_text) if end_text else None
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "rank range bounds must be integers, e.g. 61:80."
+        ) from exc
+    validate_rank_range(start, end)
+    return start, end
+
+
+def validate_rank_range(start: int | None, end: int | None) -> None:
+    if start is not None and start < 1:
+        raise argparse.ArgumentTypeError("rank range start must be >= 1.")
+    if end is not None and end < 1:
+        raise argparse.ArgumentTypeError("rank range end must be >= 1.")
+    if start is not None and end is not None and start > end:
+        raise argparse.ArgumentTypeError("rank range start must be <= end.")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run GraphRAG Connection workflow.")
     parser.add_argument(
@@ -987,11 +1084,39 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use local placeholder agents instead of calling an LLM.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--retrieval-top-k",
+        type=int,
+        default=60,
+        help="Number of retrieval results to fetch before Connection rerank. Defaults to 60.",
+    )
+    parser.add_argument(
+        "--rerank-input-range",
+        type=parse_rank_range,
+        default=None,
+        metavar="START:END",
+        help=(
+            "Optional 1-based inclusive retrieval-rank range to send to Connection "
+            "rerank/extract, e.g. 61:80 for the last 20 of top-80."
+        ),
+    )
+    args = parser.parse_args()
+    if args.retrieval_top_k < 1:
+        parser.error("--retrieval-top-k must be >= 1.")
+    if args.rerank_input_range is not None:
+        range_start, range_end = args.rerank_input_range
+        if range_start is not None and range_start > args.retrieval_top_k:
+            parser.error("--rerank-input-range start cannot exceed --retrieval-top-k.")
+        if range_end is not None and range_end > args.retrieval_top_k:
+            parser.error("--rerank-input-range end cannot exceed --retrieval-top-k.")
+    return args
 
 
 def main() -> None:
     args = parse_args()
+    rerank_input_start, rerank_input_end = (
+        args.rerank_input_range if args.rerank_input_range is not None else (None, None)
+    )
     if args.list_queries:
         print(json.dumps(list_query_items(), indent=2, ensure_ascii=False))
         return
@@ -1032,6 +1157,9 @@ def main() -> None:
         batch_size=args.batch_size,
         use_placeholder_llm=args.placeholder_llm if args.placeholder_llm else None,
         query_number=args.query_number,
+        retrieval_top_k=args.retrieval_top_k,
+        rerank_input_start=rerank_input_start,
+        rerank_input_end=rerank_input_end,
     )
 
 

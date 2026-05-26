@@ -3,6 +3,7 @@
 import os
 import re
 import json
+from datetime import datetime
 from typing import List, Dict, Optional, Any, Tuple
 from collections import defaultdict
 
@@ -33,6 +34,7 @@ NEO4J_DATABASE = "neo4j"
 BATCH_SIZE = 100
 
 HEADER_CROP = 40
+DOCUMENT_DATE_HEADER_CROP = 220
 Y_TOLERANCE = 3.0
 LEFT_QD_BOUNDARY = 220.0
 
@@ -158,6 +160,48 @@ def save_json(data, output_path: str):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def normalize_date_text(text: str) -> str:
+    text = safe_text(text).replace("/", "-").replace(".", "-")
+    for fmt in DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return safe_text(text)
+
+
+def extract_date_from_text(text: str) -> str:
+    text = safe_text(text)
+    if not text:
+        return ""
+
+    for pattern in DATE_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return normalize_date_text(match.group(1))
+    return ""
+
+
+def extract_document_date(file_path: str, max_pages: int = 5) -> str:
+    if not file_path.lower().endswith(".pdf"):
+        return ""
+
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            pages_to_check = min(max_pages, len(pdf.pages))
+            for page_idx in range(pages_to_check):
+                page = pdf.pages[page_idx]
+                header = page.crop((0, 0, page.width, DOCUMENT_DATE_HEADER_CROP))
+                header_text = header.extract_text() or ""
+                date_text = extract_date_from_text(header_text)
+                if date_text:
+                    return date_text
+    except Exception as exc:
+        print(f"[WARN] Could not extract document date from PDF header: {file_path}: {exc}")
+
+    return ""
+
+
 def make_parsed_json_path(file_path: str, discipline: Optional[str] = None, doc_type: Optional[str] = None) -> str:
     base_dir = os.path.dirname(PARSED_JSON_PATH) or "."
     file_stem = os.path.splitext(os.path.basename(file_path))[0]
@@ -215,6 +259,27 @@ TOC_ENTRY_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\.{2,}\s*(\d+)\s*$")
 SECTION_HEADING_PATTERN = re.compile(r"^\s*(\d+(?:\.\d+)*)\s+(.+?)\s*$")
 
 SECTION_LABELS = {"Objectives", "Preconditions"}
+DATE_PATTERNS = [
+    re.compile(r"\b(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b"),
+    re.compile(r"\b(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\b"),
+    re.compile(
+        r"\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*\s+\d{4})\b",
+        re.IGNORECASE,
+    ),
+]
+DATE_FORMATS = [
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%Y.%m.%d",
+    "%d-%m-%Y",
+    "%d/%m/%Y",
+    "%d.%m.%Y",
+    "%d-%m-%y",
+    "%d/%m/%y",
+    "%d.%m.%y",
+    "%d %b %Y",
+    "%d %B %Y",
+]
 
 
 # =========================================================
@@ -1467,6 +1532,11 @@ class QualificationKGBuilder:
             REQUIRE n.semantic_id IS UNIQUE
             """,
             """
+            CREATE CONSTRAINT qualification_document_file_name_unique IF NOT EXISTS
+            FOR (n:Document)
+            REQUIRE n.file_name IS UNIQUE
+            """,
+            """
             CREATE CONSTRAINT qdchunk_name_unique IF NOT EXISTS
             FOR (n:QDChunk)
             REQUIRE n.name IS UNIQUE
@@ -1502,18 +1572,23 @@ class QualificationKGBuilder:
         primary_label = get_document_primary_label(doc_type)
         secondary_label = get_document_secondary_label(discipline, doc_type=doc_type)
         secondary_label_set = f"SET d:{secondary_label}" if secondary_label else ""
+        document_date = extract_document_date(file_path)
 
         props = {
             "semantic_id": document_id,
             "file_name": file_name,
+            "name": file_name,
             "source": file_path,
             "discipline": discipline,
         }
+        if document_date:
+            props["date"] = document_date
         if doc_type != "QD":
             props["doc_type"] = doc_type
 
         query = f"""
         MERGE (d:{primary_label} {{semantic_id: $document_id}})
+        SET d:Document
         {secondary_label_set}
         SET d = $props
         """
