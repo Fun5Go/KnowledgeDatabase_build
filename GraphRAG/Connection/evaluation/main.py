@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from DocLLM.LLMs.llm_init import configure_langsmith
+from GraphRAG.llm_init import configure_langsmith
 
 try:
     from langsmith import traceable

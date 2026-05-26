@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from DocLLM.LLMs.llm_init import configure_langsmith, get_llm_backend
+from GraphRAG.llm_init import configure_langsmith, get_llm_backend
 
 try:
     from langsmith import traceable

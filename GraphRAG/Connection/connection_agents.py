@@ -5,7 +5,7 @@ import os
 import re
 from typing import Any, Sequence
 
-from DocLLM.LLMs.llm_init import get_llm_backend
+from GraphRAG.llm_init import get_llm_backend
 
 try:
     from .prompts import CONNECTION_RERANK_PROMPT, EVIDENCE_RELATION_EXTRACTION_PROMPT
