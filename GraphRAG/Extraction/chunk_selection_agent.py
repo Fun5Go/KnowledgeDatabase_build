@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Sequence
 
-from DocLLM.LLMs.llm_init import configure_langsmith, get_llm_backend
+from llm_init import configure_langsmith, get_llm_backend
 
 try:
     from langsmith import traceable

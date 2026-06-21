@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from dotenv import load_dotenv
-from DocLLM.LLMs.llm_init import configure_langsmith
+from llm_init import configure_langsmith
 
 if __package__ in {None, ""}:  # pragma: no cover - direct script execution
     sys.path.append(str(Path(__file__).resolve().parents[2]))

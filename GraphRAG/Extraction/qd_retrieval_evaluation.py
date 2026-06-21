@@ -209,7 +209,7 @@ def evaluate_result_file(
             "relevant_count": relevant_count,
             "retrieved_count": retrieved_count,
             "noise_count": noise_count,
-            "coverage": relevant_count / len(relevant_names) if relevant_names else None,
+            "coverage": relevant_count / len(relevant_names) if relevant_names else 0.0,
             "noise_ratio": noise_count / retrieved_count if retrieved_count else 0.0,
             "matched_relevant_names": matched,
             "missed_relevant_names": [
@@ -235,7 +235,8 @@ def mean(values: list[float]) -> float:
 
 
 def aggregate_results(per_query: list[dict[str, Any]], k_values: list[int]) -> dict[str, Any]:
-    coverage_queries = [item for item in per_query if int(item["total_relevant"]) > 0]
+    coverage_queries = per_query
+    zero_relevant_query_count = sum(1 for item in per_query if int(item["total_relevant"]) == 0)
     total_relevant = sum(int(item["total_relevant"]) for item in per_query)
     all_ranks = [
         int(rank)
@@ -268,7 +269,7 @@ def aggregate_results(per_query: list[dict[str, Any]], k_values: list[int]) -> d
     return {
         "reviewed_query_count": len(per_query),
         "coverage_query_count": len(coverage_queries),
-        "zero_relevant_query_count": len(per_query) - len(coverage_queries),
+        "zero_relevant_query_count": zero_relevant_query_count,
         "total_relevant": total_relevant,
         "retrieved_relevant_count": len(all_ranks),
         "relevant_average_rank": mean([float(rank) for rank in all_ranks]),
